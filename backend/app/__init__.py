@@ -13,7 +13,8 @@ from app.logfile.routes.routes import logfile_bp
 from app.modules.routes.routes import module_bp
 from app.product.routes.routes import product_bp
 from app.skillrun.routes.routes import skill_bp
-from app.auth.middleware import install_authentication
+from app.skillrun.tickets import verify_download_ticket
+from app.auth.middleware import install_authentication, register_ticket_verifier
 from app.auth.account_requests import build_account_request_service
 from app.auth.routes import auth_bp
 from app.auth.sessions import SessionService
@@ -64,6 +65,8 @@ def create_app(config_overrides=None, redis_client=None):
     app.register_blueprint(git_bp, url_prefix="/git")
     app.register_blueprint(skill_bp, url_prefix="/skill")
     app.register_blueprint(dashboard_bp, url_prefix="/dashboard")
+    # 交付物下载票据：让 /skill/task/<task_id> 里的 download_url 能直接在浏览器打开。
+    register_ticket_verifier("/skill/task/", verify_download_ticket)
     install_operation_audit(app)
     install_authentication(app, session_service)
 

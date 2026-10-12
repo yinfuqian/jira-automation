@@ -253,6 +253,10 @@ class Config:
     SKILL_API_TOKEN_PATHS = _env_or("SKILL_API_TOKEN_PATHS", "/skill")
     SKILL_API_USERNAME = _env_or("SKILL_API_USERNAME", "external-api")
     SKILL_URL_ALLOWED_HOSTS = _env_or("SKILL_URL_ALLOWED_HOSTS", DEFAULT_SKILL_URL_ALLOWED_HOSTS)
+    # 交付物下载票据：浏览器直接打开 download_url 时无法附加请求头，改用短时效 HMAC 签名票据。
+    # 签名密钥缺省回退 SKILL_API_TOKEN；生产环境建议单独配置随机值，便于轮换票据而不影响接口调用。
+    SKILL_ARTIFACT_TICKET_SECRET = os.getenv("SKILL_ARTIFACT_TICKET_SECRET", "")
+    SKILL_ARTIFACT_TICKET_TTL = int(_env_or("SKILL_ARTIFACT_TICKET_TTL", "1800"))
     # 技能访问 Jira 用到的地址与令牌：作为唯一权威来源注入技能子进程（见 skillrun/env_lock.py），
     # 技能脚本不得改用令牌文件或命令行入参。令牌留空时任务直接失败，避免静默回落到令牌文件。
     # Jira 站点地址不给内置默认值（猜错站点会把评论写到别的环境），必须由 .env 显式提供。

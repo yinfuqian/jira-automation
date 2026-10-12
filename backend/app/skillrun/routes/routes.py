@@ -2,14 +2,16 @@
 from __future__ import annotations
 
 import logging
+import os
+from functools import partial
 from urllib.parse import urlparse
 
 from celery.result import AsyncResult
-from flask import Blueprint, current_app, g, jsonify, request
+from flask import Blueprint, current_app, g, jsonify, request, send_file
 
 from extensions import celery
 
-from .. import env_lock, store
+from .. import artifacts, env_lock, store, tickets
 from ..models.model import SkillRunRecord
 from ..registry import SkillError, list_skills, resolve_skill
 from ..tasks import run_skill_task
@@ -147,17 +149,44 @@ def submit_skill_run():
 
 @skill_bp.get("/task/<task_id>")
 def get_skill_run(task_id: str):
-    """查询技能任务的状态、进度与最终结论。"""
+    """查询技能任务的状态、进度、最终结论与可下载的交付物清单。"""
     record = store.find_record(task_id)
     if record is None:
         return jsonify({"error": "任务不存在", "task_id": task_id}), 404
 
     payload = record.to_dict()
+    # 交付物清单随任务详情一起返回：调用方据此拿到文件名，再去 /artifacts/<文件名> 下载。
+    # 下载地址带短时效签名票据，浏览器可以直接打开，不需要在地址栏之外再补请求头。
+    # 任务还在跑或工作目录已被清理时这里是空列表，不报错。
+    payload["artifacts"] = artifacts.list_artifacts_with_urls(
+        record.task_id,
+        record.workspace_dir,
+        ticket_signer=partial(tickets.sign_download_url, current_app),
+    )
     async_result = AsyncResult(task_id, app=celery)
     payload["celery_state"] = async_result.state
     if isinstance(async_result.info, dict) and async_result.state == "PROGRESS":
         payload["live_progress"] = async_result.info
     return jsonify(payload)
+
+
+@skill_bp.get("/task/<task_id>/artifacts/<path:filename>")
+def download_skill_artifact(task_id: str, filename: str):
+    """下载技能任务工作目录里的交付物文件（只读，不写工作区）。"""
+    record = store.find_record(task_id)
+    if record is None:
+        return jsonify({"error": "任务不存在", "task_id": task_id}), 404
+
+    try:
+        path = artifacts.resolve_artifact(record.workspace_dir, filename)
+    except artifacts.ArtifactError as exc:
+        # 文件名不合法属入参问题（400），其余按"文件不存在"处理（404）。
+        status = 400 if exc.reason == "invalid-name" else 404
+        logging.info("技能交付物下载被拒绝：task_id=%s 文件名=%s 原因=%s", task_id, filename, exc.reason)
+        return jsonify({"error": exc.message, "reason": exc.reason, "task_id": task_id}), status
+
+    # as_attachment 让浏览器按附件下载；download_name 保留中文原名（Werkzeug 会自动做 RFC 5987 编码）。
+    return send_file(path, as_attachment=True, download_name=os.path.basename(path))
 
 
 @skill_bp.get("/tasks")

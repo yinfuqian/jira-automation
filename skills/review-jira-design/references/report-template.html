@@ -1,0 +1,292 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>原型设计准入审核 · {{需求名称}}</title>
+<style>
+:root{
+  --bg:#ffffff;
+  --ink:#37352f;
+  --ink2:#4d4b45;
+  --muted:#7d7b75;
+  --faint:#9d9b94;
+  --line:#e8e7e4;
+  --line2:#f1f0ed;
+  --red:#bd4a41;
+  --amber:#a97a26;
+  --blue:#3a76a0;
+  --green:#4a8168;
+  --mono:"SF Mono",ui-monospace,Consolas,"Cascadia Mono",monospace;
+}
+*{box-sizing:border-box}
+body{
+  margin:0;background:var(--bg);color:var(--ink);
+  font:15px/1.7 -apple-system,BlinkMacSystemFont,"SF Pro Text","Segoe UI","PingFang SC","Hiragino Sans GB","Microsoft YaHei",sans-serif;
+  -webkit-font-smoothing:antialiased;text-rendering:optimizeLegibility;
+}
+main{max-width:1120px;margin:0 auto;padding:60px 48px 80px}
+code{font:12.5px/1.5 var(--mono);color:#a2504a;background:#f2f1ee;border-radius:3px;padding:1px 5px;word-break:break-word}
+
+/* 页头 */
+.top{display:flex;justify-content:space-between;align-items:flex-start;gap:56px;padding-bottom:26px;border-bottom:1px solid var(--line)}
+.eyebrow{color:var(--faint);font:600 11px/1.4 var(--mono);letter-spacing:.15em}
+.top h1{margin:12px 0 8px;font-size:30px;line-height:1.25;font-weight:650;letter-spacing:-.022em}
+.top .sub{margin:0;color:var(--muted);font-size:13.5px}
+.decision{flex:0 0 auto;min-width:196px;max-width:264px;text-align:right;padding-top:4px}
+.decision .lab{display:block;color:var(--faint);font-size:12px;letter-spacing:.02em}
+.decision strong{display:block;margin:5px 0 7px;font-size:21px;line-height:1.3;font-weight:650;letter-spacing:-.012em}
+.decision .why{display:block;color:var(--muted);font-size:12.5px;line-height:1.65}
+.decision.pass strong{color:var(--green)}
+.decision.conditional strong{color:var(--amber)}
+.decision.return strong{color:var(--red)}
+.decision.pending strong{color:var(--blue)}
+
+/* 路径与指标：三列，仅用竖分隔线 */
+.meta,.metrics{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));border-bottom:1px solid var(--line)}
+.meta>div,.metric{padding:18px 26px 20px}
+.meta>div:first-child,.metric:first-child{padding-left:0}
+.meta>div:last-child,.metric:last-child{padding-right:0}
+.meta>div+div,.metric+.metric{border-left:1px solid var(--line2)}
+.meta b,.metric b{display:block;color:var(--faint);font-size:12px;font-weight:500;letter-spacing:.02em}
+.meta span{display:block;margin-top:5px;font-size:13px;line-height:1.62;color:var(--ink2);overflow-wrap:anywhere}
+.metric strong{display:block;margin:9px 0 5px;font-size:24px;line-height:1.2;font-weight:650;letter-spacing:-.015em}
+.metric p{margin:0;color:var(--muted);font-size:12.5px;line-height:1.62}
+.metric.is-bad strong{color:var(--red)}
+.metric.is-ok strong{color:var(--green)}
+.metric.is-warn strong{color:var(--amber)}
+
+/* 章节：靠分隔线分段，不做卡片 */
+.panel{padding:38px 0;border-bottom:1px solid var(--line)}
+.panel:last-of-type{border-bottom:0;padding-bottom:6px}
+.panel>h2{margin:0 0 16px;font-size:20px;line-height:1.38;font-weight:650;letter-spacing:-.016em}
+.lead{margin:0;font-size:15.5px;line-height:1.85;color:var(--ink2)}
+
+/* 需求映射表 */
+.map-wrap{overflow-x:auto}
+table.map{width:100%;min-width:780px;border-collapse:collapse;font-size:14px}
+table.map th{padding:0 18px 9px 0;border-bottom:1px solid var(--line);color:var(--faint);font-size:12px;font-weight:500;text-align:left;white-space:nowrap}
+table.map td{padding:12px 18px 12px 0;border-bottom:1px solid var(--line2);vertical-align:top;line-height:1.65}
+table.map tr:last-child td{border-bottom:0}
+table.map th:last-child,table.map td:last-child{padding-right:0}
+table.map td:first-child{font-weight:600;white-space:nowrap}
+
+/* 级别：小圆点 + 文字，不做胶囊底 */
+.level{display:inline-flex;align-items:center;gap:6px;font-size:12px;font-weight:600;white-space:nowrap;color:var(--muted)}
+.level::before{content:"";width:6px;height:6px;border-radius:50%;background:currentColor;flex:0 0 auto}
+.level.bad{color:var(--red)}
+.level.warn{color:var(--amber)}
+.level.info{color:var(--blue)}
+.level.ok{color:var(--green)}
+
+/* 问题：一条一段，靠分隔线区隔 */
+.issue-list{display:block}
+.issue{border-top:1px solid var(--line);padding:24px 0 26px}
+.issue:first-child{border-top:0;padding-top:2px}
+.issue:last-child{padding-bottom:4px}
+.issue-head{display:flex;align-items:center;gap:14px;flex-wrap:wrap}
+.issue-id{font:600 12.5px/1.6 var(--mono);color:var(--faint);letter-spacing:.02em}
+.issue-title{margin:0;font-size:15.5px;line-height:1.5;font-weight:650;letter-spacing:-.006em}
+.issue-body{display:grid;grid-template-columns:minmax(0,1.08fr) minmax(0,1fr);column-gap:44px;margin-top:14px}
+.facts,.callouts{display:grid;grid-template-columns:max-content minmax(0,1fr);column-gap:22px;align-content:start}
+.callouts{border-left:1px solid var(--line2);padding-left:34px}
+.fact,.callout{display:contents}
+.fact .k,.callout .k{grid-column:1;padding:8px 0;color:var(--faint);font-size:14px;line-height:1.72;white-space:nowrap}
+.fact .v{grid-column:2;padding:8px 0;font-size:14px;line-height:1.72;color:var(--ink2)}
+.callout .k{font-weight:600}
+.callout p{grid-column:2;margin:0;padding:8px 0;font-size:14px;line-height:1.72;color:var(--ink2)}
+.callout.impact .k{color:var(--red)}
+.callout.action .k{color:var(--blue)}
+.callout.done .k{color:var(--green)}
+.owner{font-weight:650;color:var(--blue)}
+
+/* 证据：内联展开，PRD 与原型左右对照 */
+[hidden]{display:none!important}
+.evidence-toggle{appearance:none;background:none;border:0;margin-left:auto;padding:2px 0;color:var(--blue);font-family:inherit;font-size:12.5px;font-weight:600;line-height:1.6;cursor:pointer;white-space:nowrap;border-bottom:1px solid transparent;transition:border-color .15s,color .15s}
+.evidence-toggle:hover{color:#2a5d84;border-bottom-color:currentColor}
+.evidence-toggle::after{content:"↓";margin-left:5px;font-size:11px}
+.evidence-toggle[aria-expanded="true"]::after{content:"↑"}
+.evidence-inline{margin-top:18px;padding:16px 20px 18px;background:#fafaf9;border-left:2px solid #e4e3df;border-radius:0 4px 4px 0}
+.evidence-inline-head{display:flex;align-items:center;gap:12px;flex-wrap:wrap;margin-bottom:2px}
+.evidence-inline-head h4{margin:0;font-size:14.5px;line-height:1.5;font-weight:650;letter-spacing:-.004em}
+.evidence-inline .compare{margin-top:12px}
+.evidence-id{font:600 12.5px/1.6 var(--mono);color:var(--faint);letter-spacing:.02em}
+.evidence-ref{color:var(--faint);font-size:12.5px}
+.evidence-ref::before{content:"·";margin-right:7px}
+.compare{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1fr);margin-top:14px}
+.side{padding:0 36px}
+.side:first-child{padding-left:0}
+.side+.side{border-left:1px solid var(--line2)}
+.evidence-inline .side{padding:0 26px}
+.evidence-inline .side:first-child{padding-left:0}
+.evidence-inline .side:last-child{padding-right:0}
+.side .k{display:block;margin-bottom:7px;font-size:12px;font-weight:600;letter-spacing:.02em;color:var(--faint)}
+.side.prd .k{color:var(--green)}
+.side.proto .k{color:var(--red)}
+.side p{margin:0;font-size:14.5px;line-height:1.78;color:var(--ink2)}
+.shots{display:grid;grid-template-columns:repeat(auto-fit,minmax(280px,1fr));gap:18px;margin-top:18px}
+.shots figure{margin:0;max-width:760px}
+.shots img{display:block;width:auto;height:auto;max-width:100%;max-height:520px;border:1px solid var(--line);border-radius:4px;background:#fff}
+.shots figcaption{margin-top:7px;color:var(--faint);font-size:12px;line-height:1.6}
+.evidence-foot{display:flex;flex-wrap:wrap;gap:6px 30px;margin-top:16px;padding-top:11px;border-top:1px solid var(--line2);color:var(--muted);font-size:12.5px;line-height:1.65}
+.evidence-foot b{color:var(--faint);font-weight:500;margin-right:6px}
+
+/* 清单与说明 */
+ol.checklist{margin:0;padding:0;list-style:none;counter-reset:c}
+ol.checklist li{counter-increment:c;position:relative;padding:9px 0 9px 32px;border-bottom:1px solid var(--line2);font-size:14px;line-height:1.72}
+ol.checklist li:last-child{border-bottom:0;padding-bottom:0}
+ol.checklist li::before{content:counter(c);position:absolute;left:0;top:9px;color:var(--faint);font:600 12.5px/1.72 var(--mono)}
+.note{margin:0;color:var(--ink2);font-size:14.5px;line-height:1.8}
+.foot{margin:34px 0 0;padding-top:16px;border-top:1px solid var(--line);color:var(--faint);font-size:12px;line-height:1.7}
+
+@media(max-width:880px){
+  main{padding:40px 24px 56px}
+  .top{display:block}
+  .decision{max-width:none;margin-top:18px;text-align:left}
+  .meta,.metrics{grid-template-columns:1fr}
+  .meta>div,.metric{padding:16px 0}
+  .meta>div+div,.metric+.metric{border-left:0;border-top:1px solid var(--line2)}
+  .facts,.callouts{grid-template-columns:1fr;column-gap:0}
+  .fact .k,.callout .k{grid-column:1;padding-bottom:0}
+  .fact .v,.callout p{grid-column:1;padding-top:2px;padding-bottom:10px}
+  .issue-body,.compare{grid-template-columns:1fr}
+  .callouts{border-left:0;padding-left:0;margin-top:8px;padding-top:8px;border-top:1px solid var(--line2)}
+  .side{padding:0}
+  .side+.side{border-left:0;margin-top:16px;padding-top:16px;border-top:1px solid var(--line2)}
+}
+@media print{
+  body{background:#fff}
+  main{max-width:none;padding:0}
+  .panel,.issue,.evidence-inline{break-inside:avoid}
+}
+</style>
+</head>
+<body>
+<main>
+
+  <header class="top">
+    <div>
+      <div class="eyebrow">G1 · PROTOTYPE DESIGN ADMISSION</div>
+      <h1>原型设计准入审核</h1>
+      <p class="sub">{{需求名称}} · {{PRD版本}} · {{审核时间}}</p>
+    </div>
+    <div class="decision {{结论样式}}">
+      <span class="lab">审核结论</span>
+      <strong>{{结论}}</strong>
+      <span class="why">{{结论依据}}</span>
+    </div>
+  </header>
+
+  <section class="meta">
+    <div><b>PRD</b><span>{{PRD路径}}</span></div>
+    <div><b>产品原型初稿</b><span>{{原型路径}}</span></div>
+    <div><b>审核范围</b><span>{{审核范围}}</span></div>
+  </section>
+
+  <section class="metrics">
+    <div class="metric is-ok"><b>PRD 完整性</b><strong>{{PRD完整性}}</strong><p>{{PRD完整性说明}}</p></div>
+    <div class="metric is-warn"><b>PRD—原型一致性</b><strong>{{一致性}}</strong><p>{{一致性说明}}</p></div>
+    <div class="metric is-bad"><b>问题分布</b><strong>{{阻断数}}</strong><p>{{需补齐数}} 项需补齐 · {{建议数}} 项建议</p></div>
+  </section>
+
+  <section class="panel">
+    <h2>结论摘要</h2>
+    <p class="lead">{{摘要}}</p>
+  </section>
+
+  <!-- 可选区块：没有需求映射时整段删除 -->
+  <section class="panel">
+    <h2>需求—页面映射</h2>
+    <div class="map-wrap">
+      <table class="map">
+        <thead><tr><th>需求</th><th>原型位置/路径</th><th>结论</th><th>说明</th></tr></thead>
+        <tbody>
+        <!-- 每行一条：<tr><td>FR-001 模板入口</td><td><code>.selector</code></td><td><span class="level ok">一致</span></td><td>说明。</td></tr> -->
+        {{映射行}}
+        </tbody>
+      </table>
+    </div>
+  </section>
+
+  <section class="panel">
+    <h2>问题与可执行建议</h2>
+    <div class="issue-list">
+      <!--
+      每条问题一段，用分隔线区隔，按阻断 → 需补齐 → 建议排序；issue 的级别 class 取 bad / warn / info / ok。有对应证据时，在标题行末尾加 <button class="evidence-toggle" type="button" data-evidence="evidence-A-001" data-show="查看证据 E-001" data-hide="收起证据 E-001" aria-expanded="false" aria-controls="evidence-A-001">查看证据 E-001</button>；没有证据的问题不加此按钮。证据内容内联在该问题下方，默认隐藏：
+      <article class="issue bad">
+        <div class="issue-head"><span class="issue-id">A-001</span><span class="level bad">阻断</span><h3 class="issue-title">问题标题</h3><button class="evidence-toggle" type="button" data-evidence="evidence-A-001" data-show="查看证据 E-001" data-hide="收起证据 E-001" aria-expanded="false" aria-controls="evidence-A-001">查看证据 E-001</button></div>
+        <div class="issue-body">
+          <div class="facts">
+            <div class="fact"><span class="k">需求依据</span><div class="v">PRD §章节 / AC 编号</div></div>
+            <div class="fact"><span class="k">原型位置</span><div class="v"><code>.selector</code> 或行号 / 操作路径</div></div>
+            <div class="fact"><span class="k">实际差异</span><div class="v">原型与 PRD 的具体不一致</div></div>
+          </div>
+          <div class="callouts">
+            <div class="callout impact"><span class="k">影响</span><p>对设计、开发或验收的具体影响</p></div>
+            <div class="callout action"><span class="k">责任人和修改动作</span><p><span class="owner">产品 + 设计</span>具体修改动作</p></div>
+            <div class="callout done"><span class="k">完成标准</span><p>复核时的可验证结果</p></div>
+          </div>
+        </div>
+        <div class="evidence-inline" id="evidence-A-001" hidden>
+          <div class="evidence-inline-head">
+            <span class="evidence-id">E-001</span>
+            <span class="evidence-ref">对应 A-001</span>
+            <h4>证据标题</h4>
+            <button class="evidence-toggle" type="button" data-evidence="evidence-A-001" data-fixed="收起" aria-expanded="true" aria-controls="evidence-A-001">收起</button>
+          </div>
+          <div class="compare">
+            <div class="side prd"><span class="k">PRD 要求</span><p>最小必要原文摘录</p></div>
+            <div class="side proto"><span class="k">原型实际</span><p>截图中可确认的事实</p></div>
+          </div>
+          <div class="shots">
+            <figure><img alt="截图说明" src="data:image/png;base64,..."><figcaption>截图说明</figcaption></figure>
+          </div>
+          <div class="evidence-foot"><span><b>定位</b> <code>.selector</code> / 行号 / 操作路径</span><span><b>证据类型</b> PRD 证据 + 原型静态证据 / 运行截图</span></div>
+        </div>
+      </article>
+      -->
+      {{问题卡片}}
+    </div>
+  </section>
+
+
+  <section class="panel">
+    <h2>最小补齐清单</h2>
+    <!-- 有序列出必办项：<ol class="checklist"><li>补齐内容</li></ol> -->
+    {{补齐清单}}
+  </section>
+
+  <section class="panel">
+    <h2>未验证项</h2>
+    <!-- 无未验证项时写：<p class="note">本轮没有未验证项。</p> -->
+    {{未验证项}}
+  </section>
+
+  <p class="foot">证据类型：PRD 证据 / 原型证据 / 运行证据 / 未验证。此报告只判断是否进入设计精修，不替代 G2/G3 验收。</p>
+</main>
+<script>
+(function () {
+  function sync(id, open) {
+    var panel = document.getElementById(id);
+    if (!panel) return;
+    panel.hidden = !open;
+    var btns = document.querySelectorAll('[data-evidence="' + id + '"]');
+    for (var i = 0; i < btns.length; i += 1) {
+      var b = btns[i];
+      b.setAttribute("aria-expanded", open ? "true" : "false");
+      if (b.getAttribute("data-fixed")) continue;
+      b.textContent = open ? (b.getAttribute("data-hide") || "收起") : (b.getAttribute("data-show") || "查看证据");
+    }
+  }
+  document.addEventListener("click", function (event) {
+    var btn = event.target && event.target.closest ? event.target.closest("[data-evidence]") : null;
+    if (!btn) return;
+    var id = btn.getAttribute("data-evidence");
+    var panel = document.getElementById(id);
+    if (!panel) return;
+    sync(id, panel.hidden);
+  });
+})();
+</script>
+</body>
+</html>

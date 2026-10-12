@@ -303,8 +303,14 @@ powershell -ExecutionPolicy Bypass -File scripts\export_release_image.ps1 `
 `jira-gate-1`（Jira 需求准入检查 G1，产出难度分级与达标结论，把逐项打标记的检查项清单写入需求单评论；
 不达标时流转到「评审中」并在评论里 @ 流转人；最后调用 `review-jira-songlizhi` 生成 OpenSpec 评审报告，
 作为附件上传到需求单，文件名以「宋立志」结尾；交付完成后清理本次任务的工作区中间产物）、
+`jira-gate-1-mock`（同一套判定流程的**只读预演版**：不写评论、不回写门禁字段、不上传附件、不流转状态，
+也不 @ 流转人；依次调用 `review-jira-songlizhi` 与 `review-jira-design` 产出需求质量评审报告与
+PRD—原型一致性审核报告，只把评论草稿与这两份报告打成
+`<工作目录>/outputs/<KEY>-G1预检包-<时间戳>.zip` 供下载）、
 `review-jira-songlizhi`（按 OpenSpec 好需求标准评审需求质量，
-产出 Markdown 报告，对 Jira 只读）与 `jira-code`（读取需求单的「开发方案」附件，从方案指定的基线分支拉出
+产出 Markdown 报告，对 Jira 只读）、`review-jira-design`（对照定稿 PRD 审核产品原型初稿，
+检查需求完整性、PRD—原型一致性、流程与状态覆盖，产出简洁可执行的自包含 HTML 报告；对 Jira 只读，
+由 `jira-gate-1-mock` 在需求质量评审之后调用）与 `jira-code`（读取需求单的「开发方案」附件，从方案指定的基线分支拉出
 `feature/<单号>` 分支，按方案实现代码并推送到远端；进度与异常都只更新在同一条
 Jira 评论上；既不改单据状态，也不上传附件；推送完成后按方案里写的**流水线环境地址**做**热更新**，
 热更新处理完再清理本地检出目录（顺序不能反：热更新要读检出目录里的部署文件与构建产物），
@@ -319,6 +325,7 @@ MCP server `pipeline-integration-mcp` 的有序调用）与 `pipeline-adapter`�
 | `GET` | `/skill/list` | 列出技能目录中的可用技能 |
 | `POST` | `/skill/run` | 提交技能任务，异步执行并立即返回 `task_id` |
 | `GET` | `/skill/task/<task_id>` | 查询任务状态、阶段进度与最终结论 |
+| `GET` | `/skill/task/<task_id>/artifacts/<文件名>` | 下载任务交付物（`outputs/`、`reports/`，文件名需 URL 编码；带 `?ticket=` 时可直接在浏览器打开） |
 | `GET` | `/skill/tasks` | 最近任务列表，支持 `limit`、`skill_id`、`status` |
 | `POST` | `/skill/task/<task_id>/cancel` | 取消排队或执行中的任务 |
 
@@ -360,6 +367,24 @@ curl -H "X-API-Token: <SKILL_API_TOKEN>" http://127.0.0.1:5000/skill/task/SKL-8F
 登录用户也可以直接用 `Authorization: Bearer <登录令牌>` 调用同一组接口。任务与进度同时写入数据库表
 `skill_run_records`，可通过 `GET /skill/tasks` 追踪。
 
+查询结果里的 `artifacts` 数组列出该任务当前可下载的交付物（`name`、`size`、`modified_at`、`download_url`），
+只包含约定的交付物目录（`outputs/` 与 `reports/`），任务尚未产出交付物或工作目录已清理时为空数组：
+
+```json
+{"artifacts":[{"name":"CALL-1941-G1预检包-20261012-153418.zip","size":15360,"modified_at":"2026-10-12T07:34:18Z","download_url":"/skill/task/SKL-8F3C1D2E4A5B6071/artifacts/CALL-1941-G1%E9%A2%84%E6%A3%80%E5%8C%85-20261012-153418.zip?ticket=eyJ0IjoiU0tMLThGM0MxRDJFIn0.aW1zaWdu.l9Kq2XbT7Rw"}]}
+```
+
+`download_url` 末尾的 `ticket` 是服务端用 HMAC 签名、与「任务 + 文件名」绑定的短时效票据，
+浏览器地址栏、`<a download>` 或 `window.open` 这类**无法自定义请求头**的下载方式可以直接打开
+`http://127.0.0.1:5000` + `download_url` 完成下载（响应带 `Content-Disposition: attachment`，
+浏览器按原名保存；命令行加 `curl -o "CALL-1941-G1预检包.zip" "<上址>"` 即可）。
+
+票据默认 30 分钟过期，可通过 `SKILL_ARTIFACT_TICKET_TTL` 调整；票据只在 URL 里出现、不落库，
+泄露影响面仅限于「某个任务下的某个文件」，且很快失效。也能继续用请求头下载：不带 `ticket` 时按
+`X-API-Token` 或登录令牌鉴权。下载接口只接受交付物目录下已存在的文件名：含路径分隔符、`..`、
+以 `.` 开头或为空时返回 `400`（`reason=invalid-name`），文件不存在返回 `404`（`reason=not-found`），
+票据或文件对不上则返回 `401`，任何情况都不会越出任务工作目录。
+
 ### 技能目录
 
 技能放在项目根 `skills/` 目录，容器内**只读**挂载到 `/data/skills`，与 Codex 运行目录（`CODEX_HOME`）分开存放。新增技能只需建立 `skills/<skill_id>/SKILL.md`，
@@ -375,6 +400,8 @@ curl -H "X-API-Token: <SKILL_API_TOKEN>" http://127.0.0.1:5000/skill/task/SKL-8F
 | --- | --- | --- |
 | `SKILL_API_TOKEN` | `local-dev-token` | 外部系统调用 `/skill` 接口的独立令牌；默认值仅供本地验证，生产环境必须替换为随机强令牌 |
 | `SKILL_URL_ALLOWED_HOSTS` | `jira.in.wezhuiyi.com` | `jira_url` 主机白名单，逗号分隔；留空表示不限制 |
+| `SKILL_ARTIFACT_TICKET_SECRET` | 留空 | 交付物下载票据的签名密钥；留空回退 `SKILL_API_TOKEN`，单独配置便于轮换票据而不影响接口调用 |
+| `SKILL_ARTIFACT_TICKET_TTL` | `1800` | 交付物下载票据有效期（秒），让 `download_url` 能直接在浏览器打开且不会长期有效 |
 | `SKILL_WORKSPACE_DIR` | `/data/skill-workspace` | 技能工作目录 |
 | `CODEX_SKILL_TIMEOUT` | 留空 | 单次技能执行超时秒数；留空表示按技能自身 `runtime.json` 声明（`jira-code` 7200、`jira-defect-gate` 3600、其余 1800），填写后统一覆盖 |
 | `CODEX_MODEL` | `codex/deepseek-flash` | Codex 使用的模型，后端以 `-c model=...` 覆盖，技能执行以该值为准 |

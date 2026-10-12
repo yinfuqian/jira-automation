@@ -6,6 +6,10 @@ from flask import g, jsonify, request
 
 ANONYMOUS_ENDPOINTS = {"auth.login", "auth.request_account", "health.live", "health.ready"}
 
+# 允许用 ?ticket= 签名票据免请求头访问的路径前缀与校验函数，由业务模块在装配时注册。
+# 浏览器发起的下载（地址栏、超链接、<a download>）无法自定义请求头，只能靠这条通道兜住。
+TICKET_VERIFIERS = {}
+
 # 可用的接口令牌配置：(令牌键, 允许路径键, 调用方标识键, 默认调用方标识, 默认允许路径)。
 # 路径配置缺失时回落到默认允许路径，避免令牌意外获得全接口权限。
 # SKILL_API_TOKEN 面向外部系统调用技能接口；ANALYSIS_API_TOKEN 面向技能脚本回写故障分析。
@@ -71,6 +75,26 @@ def match_api_token(app, path, headers):
     return None
 
 
+def register_ticket_verifier(path_prefix: str, verifier) -> None:
+    """注册某个路径前缀下可用的签名票据校验函数；重复注册时以最后一次为准。"""
+    TICKET_VERIFIERS[str(path_prefix)] = verifier
+
+
+def match_ticket(app, path, ticket):
+    """判断请求是否携带了当前路径可用的签名票据，命中时返回调用方标识。"""
+    provided = str(ticket or "").strip()
+    if not provided:
+        return None
+    target = str(path or "")
+    for prefix, verifier in TICKET_VERIFIERS.items():
+        if not target.startswith(prefix):
+            continue
+        username = verifier(app, target, provided)
+        if username:
+            return username
+    return None
+
+
 def install_authentication(app, session_service):
     """注册或配置 install_authentication 对应的业务数据，保持现有调用约定。"""
     @app.before_request
@@ -85,6 +109,13 @@ def install_authentication(app, session_service):
         principal_username = match_api_token(app, request.path, request.headers)
         if principal_username:
             g.current_user = ExternalApiPrincipal(principal_username)
+            g.auth_token = None
+            return None
+
+        # 浏览器直接下载交付物时带不了请求头，改用 download_url 里自带的短时效签名票据。
+        ticket_username = match_ticket(app, request.path, request.args.get("ticket"))
+        if ticket_username:
+            g.current_user = ExternalApiPrincipal(ticket_username)
             g.auth_token = None
             return None
 
