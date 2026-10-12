@@ -7,7 +7,7 @@
 - 日志文件、压缩日志和多张图片统一上传分析。
 - 图片识别统一由多模态模型逐张完成（本地 PaddleOCR 通道默认停用，可用 `LOCAL_OCR_ENABLED=true` 显式启用），`log_image` 与 `business_image` 都参与多模态分析。
 - 多张图片逐张保留，不相互覆盖；最终结果合并重复问题，但保留不同错误明细。
-- 结合主模块、相关模块、分支或 Tag 代码进行故障定位。
+- 结合主模块、相关模块与指定 Git Tag 代码进行故障定位；故障分析不依赖 `master`、`feature/*` 等分支。
 - `gpt-5.6-sol` 默认启用 `OPENAI_REASONING_EFFORT=high` 深度推理。
 - 用户由管理员维护 `users.csv`，应用热加载新增、禁用和立即下线状态。
 - 除登录和账号申请外，服务接口必须携带有效登录令牌。
@@ -486,10 +486,30 @@ node ..\skills\jira-code\scripts\jira-cli.mjs selftest
 node ..\skills\jira-code\scripts\git-flow.mjs creds
 node ..\skills\jira-gate-bug\scripts\jira-cli.mjs selftest
 node ..\skills\jira-gate-bug\scripts\analysis-cli.mjs selftest
+node ..\skills\jira-gate-bug\scripts\jira-cli.mjs scope <KEY|URL>
 node ..\skills\jira-gate-bug\scripts\analysis-cli.mjs resolve --product yibot --module yibot-server
 curl -H "X-API-Token: local-dev-token" http://127.0.0.1:5000/health/ready
 curl -H "X-API-Token: local-dev-token" http://127.0.0.1:5000/skill/list
 ```
+
+`jira-gate-bug` 的产品从 Jira「问题发现产品」读取；模块和版本优先取调用方输入，其次读取固定评论块
+`[FAULT_ANALYSIS]`，最后才使用唯一的 Jira 组件/版本字段。仓库地址和版本到 Git Tag 的规则统一维护在
+`skills/jira-gate-bug/config/scope-mapping.json`，不要把仓库地址重复写进每条评论。
+
+模块与 Tag 的评论格式固定为（第一条是主模块，后续是关联模块）：
+
+~~~text
+[FAULT_ANALYSIS]
+see-task:v1.2.3
+see-management:v1.2.3
+~~~
+
+调用分析时，需要拉取的关联模块通过可重复的 `--related <模块:Tag>` 传入；脚本会分别解析仓库和 Tag，并在提交前校验精准
+Tag 真实存在。评论固定块只写主模块和需要独立分析、拉取的非公共关联模块，每项都必须使用 `模块:精准Tag`；找不到精准 Tag 时按缺少分析参数打回，不会回落到 `master`、`feature/*` 或默认分支。
+
+`scope-mapping.json` 中标记为 `"common": true` 的公共组件不单独写进评论固定块，也不要求发布或提供精准 Tag。代码分析确认引用公共组件时，再联动查询并在结论中说明引用的公共组件功能和关键代码位置。
+
+效果类缺陷如果不需要日志和复现步骤，必须在评论区明确写出 `明确缺陷不需要额外提供日志信息`。门禁确认缺陷属于效果类后，可跳过日志与复现检查；普通报错、异常、接口、性能、数据或资源问题不适用。
 
 只想看 HTML 报告的排版、不想真的跑一次分析时，可以用既有结果 JSON 直接渲染，不访问网络：
 
@@ -672,4 +692,3 @@ docker compose exec worker codex --version
   出网与代理的排查方向。若该任务是从沙箱或离线环境启动的进程提交的，请改用正常网络环境重启 `worker`。
 - **worker 重启遗留**：`worker` 启动时若 `SKILL_RECOVER_ORPHANS=true`（默认），会把上一次运行中残留的
   `running` 任务标记为 `failed`，`stage=worker_restarted`；仍被其它 worker 正常执行的任务不会被误改。
-

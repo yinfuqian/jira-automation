@@ -696,6 +696,11 @@ def analyze_log_task(self, data):
                 code_snippets,
                 image_analysis=image_analysis,
                 image_paths=(input_paths if source_type == "image" else []) + related_image_paths,
+                common_repositories=[
+                    repository
+                    for repository in repositories
+                    if repository.get("common")
+                ],
             )
         except AiServiceError as exc:
             report_progress(self, "ai_service_failed", "AI 服务", 100, 98, str(exc))

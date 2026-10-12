@@ -161,6 +161,10 @@ def install_route_stubs():
     logfile_model_stub.Log = types.SimpleNamespace
     sys.modules["app.logfile.models.model"] = logfile_model_stub
 
+    config_stub = types.ModuleType("app.config")
+    config_stub.DEFAULT_REPO_CACHE_DIR = "/tmp/repo-cache"
+    sys.modules["app.config"] = config_stub
+
     upload_references_stub = types.ModuleType("app.uploads.references")
     upload_references_stub.AnalysisInputError = ValueError
     upload_references_stub.resolve_analysis_inputs = lambda data, upload_root, lookup: [data.get("file_path")]
@@ -228,6 +232,72 @@ class AsyncAnalysisRouteTests(unittest.TestCase):
 
         with self.assertRaises(routes.GitCloneError):
             routes.clone_analysis_repositories(repositories, fail_clone, max_workers=1)
+
+    def test_validate_analysis_repositories_requires_exact_existing_tags(self):
+        routes, _, _, _, _ = load_routes_module()
+        repositories = [
+            {
+                "role": "primary",
+                "moduleName": "see-task",
+                "branchAddress": "https://git.example/see-task.git",
+                "tagVersion": "v1.2.3",
+            },
+            {
+                "role": "related",
+                "moduleName": "bot-common",
+                "branchAddress": "https://git.example/bot-common.git",
+                "tagVersion": "missing-tag",
+            },
+        ]
+
+        result = routes.validate_analysis_repositories(
+            repositories,
+            tag_checker=lambda _address, tag: {"exists": tag == "v1.2.3", "reason": ""},
+        )
+
+        self.assertFalse(result["ok"])
+        self.assertEqual(result["checked"], 2)
+        self.assertEqual(len(result["missing"]), 1)
+        self.assertEqual(result["missing"][0]["moduleName"], "bot-common")
+        self.assertEqual(result["missing"][0]["tagVersion"], "missing-tag")
+
+    def test_build_analysis_repositories_keeps_common_related_module(self):
+        routes, _, _, _, _ = load_routes_module()
+        repositories = routes.build_analysis_repositories({
+            "moduleId": "1",
+            "moduleName": "see-task",
+            "branchAddress": "https://git.example/see-task.git",
+            "tagVersion": "v1.2.3",
+            "relatedModules": [{
+                "moduleId": "2",
+                "moduleName": "bot-common",
+                "branchAddress": "https://git.example/bot-common.git",
+                "common": True,
+            }],
+        }, "task-common")
+
+        self.assertEqual([item["role"] for item in repositories], ["primary", "related"])
+        self.assertEqual(repositories[1]["moduleName"], "bot-common")
+        self.assertEqual(repositories[1]["tagVersion"], "")
+        self.assertTrue(repositories[1]["metadataOnly"])
+        self.assertEqual(repositories[1]["workspaceId"], "task-common")
+
+    def test_common_reference_without_tag_does_not_require_remote_tag(self):
+        routes, _, _, _, _ = load_routes_module()
+
+        result = routes.validate_analysis_repositories(
+            [{
+                "role": "related",
+                "moduleName": "bot-common",
+                "branchAddress": "https://git.example/bot-common.git",
+                "tagVersion": "",
+                "common": True,
+            }],
+            tag_checker=lambda _address, _tag: self.fail("公共组件引用不应触发 Tag 校验"),
+        )
+
+        self.assertTrue(result["ok"])
+        self.assertEqual(result["skippedCommon"][0]["moduleName"], "bot-common")
 
     def test_image_chain_discovery_uses_metadata_without_ai(self):
         routes, _, _, _, _ = load_routes_module()
@@ -803,6 +873,31 @@ java.lang.NullPointerException: null
         self.assertIn("code_issue", prompt)
         self.assertIn("query_commands", prompt)
         self.assertIn("fix_commands", prompt)
+
+    def test_code_analysis_prompt_includes_common_component_reference_rule(self):
+        routes, flask_stub, _, _, fake_openai = load_routes_module()
+        flask_stub.current_app.config = {
+            "OPENAI_KEY": "token",
+            "OPENAI_URL": "https://newapi.in.wezhuiyi.com/v1",
+            "OPENAI_MODEL": "gpt-5.5",
+        }
+
+        routes.analyze_code_with_deepseek(
+            "failed to load effect config",
+            "backend summary",
+            [],
+            common_repositories=[{
+                "moduleName": "see-common",
+                "branchAddress": "https://code.in.wezhuiyi.com/see/see-common.git",
+                "common": True,
+            }],
+        )
+
+        prompt = fake_openai.last_instance.chat.completions.calls[0]["messages"][1]["content"]
+        self.assertIn("公共组件引用", prompt)
+        self.assertIn("see-common", prompt)
+        self.assertIn("本缺陷引用了 xxx 公共组件功能，关键代码在 <file>:<line>", prompt)
+        self.assertIn("不得编造", prompt)
 
     def test_log_analysis_prompt_requires_full_context_not_only_error_lines(self):
         routes, flask_stub, _, _, fake_openai = load_routes_module()

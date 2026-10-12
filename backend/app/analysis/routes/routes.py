@@ -308,6 +308,116 @@ def clone_git_repo(address, tag_version, workspace_id=None):
         raise clone_error from e
 
 
+def _repo_address_with_credentials(address):
+    """返回带 Git 凭据的仓库地址；凭据不写日志也不返回给调用方。"""
+    git_user = app.config.get("GIT_USER")
+    git_password = app.config.get("GIT_PASSWORD")
+    if git_user and git_password and str(address).startswith("https://"):
+        return str(address).replace(
+            "https://",
+            f"https://{git_user}:{git_password}@",
+            1,
+        )
+    return str(address or "")
+
+
+def inspect_git_tag(address, tag_version, timeout=30):
+    """检查远端仓库中是否存在精确 Tag，返回结构化结果而不抛出业务异常。"""
+    tag = str(tag_version or "").strip()
+    if not address or not tag:
+        return {"exists": False, "reason": "缺少仓库地址或 Tag"}
+
+    try:
+        result = subprocess.run(
+            [
+                "git",
+                "ls-remote",
+                "--tags",
+                "--refs",
+                _repo_address_with_credentials(address),
+                f"refs/tags/{tag}",
+            ],
+            check=False,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            timeout=timeout,
+        )
+    except subprocess.TimeoutExpired:
+        return {"exists": False, "reason": f"校验 Tag 超时：{tag}"}
+    except OSError as exc:
+        return {"exists": False, "reason": f"无法执行 Git Tag 校验：{exc}"}
+
+    if result.returncode != 0:
+        stderr = _sanitize_git_error(getattr(result, "stderr", ""))
+        detail = stderr.splitlines()[-1].strip() if stderr else f"Git 返回状态码 {result.returncode}"
+        return {"exists": False, "reason": detail}
+
+    exists = bool(_decode_process_output(getattr(result, "stdout", "")).strip())
+    return {
+        "exists": exists,
+        "reason": "" if exists else f"仓库中不存在精确 Tag：{tag}",
+    }
+
+
+def validate_analysis_repositories(repositories, tag_checker=None):
+    """校验分析用主模块和关联模块的精准 Tag 均真实存在。"""
+    checker = tag_checker or inspect_git_tag
+    missing = []
+    skipped_common = []
+    for repository in repositories or []:
+        module_name = str(repository.get("moduleName") or repository.get("moduleId") or "unknown")
+        address = str(repository.get("branchAddress") or "").strip()
+        tag_version = str(repository.get("tagVersion") or "").strip()
+        if repository.get("common") and not tag_version:
+            if not address:
+                missing.append({
+                    "moduleName": module_name,
+                    "branchAddress": address,
+                    "tagVersion": tag_version,
+                    "reason": "公共组件缺少仓库地址",
+                })
+            else:
+                skipped_common.append({"moduleName": module_name, "branchAddress": address})
+            continue
+        if not address or not tag_version:
+            missing.append({
+                "moduleName": module_name,
+                "branchAddress": address,
+                "tagVersion": tag_version,
+                "reason": "缺少仓库地址或精准 Tag",
+            })
+            continue
+
+        try:
+            checked = checker(address, tag_version)
+        except Exception as exc:
+            checked = {"exists": False, "reason": str(exc)}
+        if isinstance(checked, bool):
+            checked = {"exists": checked, "reason": "" if checked else f"仓库中不存在精确 Tag：{tag_version}"}
+        if not checked.get("exists"):
+            missing.append({
+                "moduleName": module_name,
+                "branchAddress": address,
+                "tagVersion": tag_version,
+                "reason": checked.get("reason") or f"仓库中不存在精确 Tag：{tag_version}",
+            })
+
+    return {
+        "ok": not missing,
+        "checked": len(repositories or []),
+        "skippedCommon": skipped_common,
+        "missing": missing,
+    }
+
+
+@analysis_bp.route("/validate_refs", methods=["POST"])
+def validate_analysis_refs():
+    """在提交异步分析前校验全部精准 Tag，避免进入克隆阶段后才发现。"""
+    data = request.json or {}
+    repositories = build_analysis_repositories(data)
+    return jsonify(validate_analysis_repositories(repositories))
+
+
 @analysis_bp.route("/submit_async", methods=["POST"])
 def submit_async_analysis():
     """提交 submit_async_analysis 对应的业务数据，保持现有调用约定。"""
@@ -2022,11 +2132,13 @@ def build_analysis_repositories(data, task_id=None):
         "moduleName": data.get("moduleName") or data.get("primaryModuleName") or "primary",
         "branchAddress": data.get("branchAddress"),
         "tagVersion": data.get("tagVersion"),
+        "common": bool(data.get("common")),
         "workspaceId": str(task_id or "shared"),
     }]
 
     for index, module in enumerate(data.get("relatedModules") or [], start=1):
-        if not module.get("branchAddress") or not module.get("tagVersion"):
+        is_common = bool(module.get("common"))
+        if not module.get("branchAddress") or (not module.get("tagVersion") and not is_common):
             continue
         module_id = str(module.get("moduleId") or module.get("module_id") or index)
         repositories.append({
@@ -2034,7 +2146,9 @@ def build_analysis_repositories(data, task_id=None):
             "moduleId": module_id,
             "moduleName": module.get("moduleName") or module.get("module_name") or f"related-{index}",
             "branchAddress": module.get("branchAddress"),
-            "tagVersion": module.get("tagVersion"),
+            "tagVersion": module.get("tagVersion") or "",
+            "common": is_common,
+            "metadataOnly": is_common and not module.get("tagVersion"),
             "workspaceId": str(task_id or "shared"),
         })
     return repositories
@@ -2069,11 +2183,14 @@ def clone_analysis_repositories(repositories, clone_func, max_workers=4):
             workspace_id=repository.get("workspaceId"),
         )
 
-    worker_count = max(1, min(int(max_workers or 1), len(repositories)))
+    clone_targets = [repository for repository in repositories if not repository.get("metadataOnly")]
+    if not clone_targets:
+        return cloned_repositories
+    worker_count = max(1, min(int(max_workers or 1), len(clone_targets)))
     with ThreadPoolExecutor(max_workers=worker_count) as executor:
         future_map = {
             executor.submit(run_clone, repository): repository
-            for repository in repositories
+            for repository in clone_targets
         }
         for future in as_completed(future_map):
             repository = future_map[future]
@@ -2791,12 +2908,38 @@ def build_code_findings(code_snippets):
     return findings
 
 
+def build_common_component_reference_context(common_repositories):
+    """把已声明的公共组件整理成引用关系，避免把它们误当成需要 Tag 的可拉取仓库。"""
+    components = []
+    for repository in common_repositories or []:
+        if not isinstance(repository, dict) or not repository.get("common"):
+            continue
+        name = str(repository.get("moduleName") or repository.get("moduleId") or "").strip()
+        if not name:
+            continue
+        address = str(repository.get("branchAddress") or "").strip()
+        label = f"{name}（仓库：{address}）" if address else name
+        if label not in components:
+            components.append(label)
+    if not components:
+        return ""
+    joined = "、".join(components)
+    return (
+        "\u3010公共组件引用\u3011\n"
+        f"代码分析发现可能引用公共组件：{joined}。\n"
+        "公共组件不要求精准 Tag，也不按主模块或非公共关联模块处理；仅在日志或主模块代码确实"
+        "存在引用时，才在结论中写明“本缺陷引用了 xxx 公共组件功能，关键代码在 <file>:<line>”。\n"
+        "如果无法定位关键代码，必须明确说明无法定位，不得编造引用关系或代码位置。\n\n"
+    )
+
+
 def analyze_code_with_deepseek(
     log_content,
     log_analysis,
     code_snippets,
     image_analysis=None,
     image_paths=None,
+    common_repositories=None,
 ):
     """执行故障分析并返回 analyze_code_with_deepseek 对应的业务数据，保持现有调用约定。"""
     logging.info("==> \u8fdb\u5165 analyze_code_with_deepseek")
@@ -2851,6 +2994,7 @@ def analyze_code_with_deepseek(
         f"{log_context}\n\n"
         f"\u3010\u65e5\u5fd7\u521d\u6b65\u5206\u6790\u3011\n{log_analysis}"
         f"{image_context}\n\n"
+        f"{build_common_component_reference_context(common_repositories)}"
         f"\u3010\u76f8\u5173\u4ee3\u7801\u7247\u6bb5\u3011\n{context or fallback_context}"
     )
     logging.info(

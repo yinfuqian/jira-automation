@@ -1,0 +1,92 @@
+{
+  "versionRules": [
+    {
+      "name": "exact-ref",
+      "pattern": "^.+$",
+      "ref": "{version}"
+    }
+  ],
+  "products": {
+    "see": {
+      "modules": {
+        "manifest": { "repoUrl": "https://code.in.wezhuiyi.com/see/manifest.git" },
+        "see-common": { "repoUrl": "https://code.in.wezhuiyi.com/see/see-common.git" },
+        "see-dataset": { "repoUrl": "https://code.in.wezhuiyi.com/see/see-dataset.git" },
+        "see-management": { "repoUrl": "https://code.in.wezhuiyi.com/see/see-management.git" },
+        "see-portal": { "repoUrl": "https://code.in.wezhuiyi.com/see/see-portal.git" },
+        "see-task": { "repoUrl": "https://code.in.wezhuiyi.com/see/see-task.git" }
+      }
+    },
+    "pal": {
+      "modules": {
+        "manifest": { "repoUrl": "https://code.in.wezhuiyi.com/pal/manifest.git" },
+        "pal-access-adapter": { "repoUrl": "https://code.in.wezhuiyi.com/pal/pal-access-adapter.git" },
+        "pal-common": { "repoUrl": "https://code.in.wezhuiyi.com/pal/pal-common.git", "common": true },
+        "pal-management": { "repoUrl": "https://code.in.wezhuiyi.com/pal/pal-management.git" },
+        "pal-quality-inspection": { "repoUrl": "https://code.in.wezhuiyi.com/pal/pal-quality-inspection.git" }
+      }
+    },
+    "bot": {
+      "modules": {
+        "bot-common": { "repoUrl": "https://code.in.wezhuiyi.com/bot/bot-common.git", "common": true },
+        "bot-dialog": { "repoUrl": "https://code.in.wezhuiyi.com/bot/bot-dialog.git" },
+        "bot-gateway": { "repoUrl": "https://code.in.wezhuiyi.com/bot/bot-gateway.git" },
+        "bot-management": { "repoUrl": "https://code.in.wezhuiyi.com/bot/bot-management.git" },
+        "bot-operation": { "repoUrl": "https://code.in.wezhuiyi.com/bot/bot-operation.git" },
+        "bot-operation-log": { "repoUrl": "https://code.in.wezhuiyi.com/bot/bot-operation-log.git" },
+        "bot-portal": { "repoUrl": "https://code.in.wezhuiyi.com/bot/bot-portal.git" },
+        "bot-stat": { "repoUrl": "https://code.in.wezhuiyi.com/bot/bot-stat.git" },
+        "manifest": { "repoUrl": "https://code.in.wezhuiyi.com/bot/manifest.git" }
+      }
+    },
+    "yicall": {
+      "modules": {
+        "manifest": { "repoUrl": "https://code.in.wezhuiyi.com/yicall/manifest.git" },
+        "yicall-common": { "repoUrl": "https://code.in.wezhuiyi.com/yicall/yicall-common.git", "common": true },
+        "yicall-dialog": { "repoUrl": "https://code.in.wezhuiyi.com/yicall/yicall-dialog.git" },
+        "yicall-management": { "repoUrl": "https://code.in.wezhuiyi.com/yicall/yicall-management.git" },
+        "yicall-management-system": { "repoUrl": "https://code.in.wezhuiyi.com/yicall/yicall-management-system.git" },
+        "yicall-openapi": { "repoUrl": "https://code.in.wezhuiyi.com/yicall/yicall-openapi.git" },
+        "yicall-task": { "repoUrl": "https://code.in.wezhuiyi.com/yicall/yicall-task.git" }
+      }
+    },
+    "yibot": {
+      "modules": {
+        "adaptor-java": { "repoUrl": "https://code.in.wezhuiyi.com/yibot/adaptor-java.git" },
+        "manifest": { "repoUrl": "https://code.in.wezhuiyi.com/yibot/manifest.git" },
+        "yibot-management": { "repoUrl": "https://code.in.wezhuiyi.com/yibot/yibot-management.git" },
+        "yibot-server": { "repoUrl": "https://code.in.wezhuiyi.com/yibot/web/yibot-server.git" },
+        "yibot-view": { "repoUrl": "https://code.in.wezhuiyi.com/yibot/web/yibot-view.git" },
+        "zyzx-java": { "repoUrl": "https://code.in.wezhuiyi.com/yibot/zyzx-java.git" }
+      }
+    },
+    "eco": {
+      "modules": {
+        "bi-web": { "repoUrl": "https://code.in.wezhuiyi.com/eco/bi-web.git" },
+        "bot-query-monitor": { "repoUrl": "https://code.in.wezhuiyi.com/eco/bot-query-monitor.git" },
+        "soft": { "repoUrl": "https://code.in.wezhuiyi.com/eco/soft.git", "common": true },
+        "vision": { "repoUrl": "https://code.in.wezhuiyi.com/eco/vision.git", "common": true },
+        "wenben-calc": { "repoUrl": "https://code.in.wezhuiyi.com/eco/wenben-calc.git", "common": true },
+        "wenben-filebeat": { "repoUrl": "https://code.in.wezhuiyi.com/eco/wenben-filebeat.git", "common": true },
+        "wenben-stat": { "repoUrl": "https://code.in.wezhuiyi.com/eco/wenben-stat.git", "common": true },
+        "wenben-view": { "repoUrl": "https://code.in.wezhuiyi.com/eco/wenben-view.git", "common": true }
+      }
+    },
+    "hxk": {
+      "modules": {
+        "customer-service": { "repoUrl": "https://code.in.wezhuiyi.com/hxk/customer-service.git", "common": true },
+        "ruoyi-bot": { "repoUrl": "https://code.in.wezhuiyi.com/hxk/ruoyi-bot.git", "common": true },
+        "ruoyi-call": { "repoUrl": "https://code.in.wezhuiyi.com/hxk/ruoyi-call.git", "common": true },
+        "xxl-job": { "repoUrl": "https://code.in.wezhuiyi.com/hxk/xxl-job.git", "common": true }
+      }
+    },
+    "falcon": {
+      "modules": {
+        "access": { "repoUrl": "https://code.in.wezhuiyi.com/falcon/access.git" },
+        "custom": { "repoUrl": "https://code.in.wezhuiyi.com/falcon/custom.git" },
+        "fep": { "repoUrl": "https://code.in.wezhuiyi.com/falcon/fep.git" },
+        "miniconda": { "repoUrl": "https://code.in.wezhuiyi.com/falcon/miniconda.git" }
+      }
+    }
+  }
+}

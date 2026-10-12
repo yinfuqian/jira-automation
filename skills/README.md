@@ -57,3 +57,16 @@ skills/
 | `ANALYSIS_API_USERNAME` | 审计日志中记录的调用方标识 | `analysis-skill` |
 
 `/skill` 系列接口的入参与返回保持不变；内部令牌只影响 `/analysis`、`/logfile` 等回写路径的鉴权范围。
+
+`jira-gate-bug` 的故障分析范围由 `jira-gate-bug/config/scope-mapping.json` 维护：文件内配置产品、模块、
+仓库地址、Git Tag、`versionMap` 精确映射和 `versionRules` 正则规则。Jira 产品取「问题发现产品」；模块与 Tag
+字段缺失或存在多个候选时，才要求提单人补 `[FAULT_ANALYSIS]` 固定评论块，评论内只写 `模块:Tag`：
+
+```text
+[FAULT_ANALYSIS]
+see-task:v1.2.3
+see-management:v1.2.3
+```
+
+产品、仓库地址和版本到 Git Tag 的转换规则都写在配置里，不需要重复写进评论。第一条是主模块，后续条目是关联模块；
+需要分析或拉取的非公共模块必须同时写模块名和实际存在的精准 Git Tag，公共组件不单独写进固定块，也不填 `master`、`feature/*` 等分支。提交分析前会校验主模块和非公共关联模块的精准 Tag，找不到 Tag 会按缺少分析参数打回。

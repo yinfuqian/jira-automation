@@ -27,6 +27,20 @@ export const SELF_CHECK_KEYWORDS = {
   evidence: ["日志", "截图", "复现", "环境", "版本", "时间点", "步骤", "附件", "操作", "报错"],
 };
 
+/** 效果类缺陷跳过日志/复现要求的固定评论语句。 */
+export const LOG_REQUIREMENT_EXEMPTION_PHRASE = "明确缺陷不需要额外提供日志信息";
+
+/** Jira 中可能承载「问题发现产品」的字段名，按优先级排列。 */
+const PRODUCT_FIELD_NAMES = ["问题发现产品", "发现产品", "产品归属"];
+
+/** 故障分析评论固定块的字段别名。 */
+const FAULT_SCOPE_KEY_ALIASES = {
+  product: ["product", "productname", "产品", "产品名", "问题发现产品"],
+  module: ["module", "modulename", "模块", "模块名"],
+  version: ["version", "tag", "tagversion", "版本", "标签", "标签版本"],
+  branch: ["branch", "branchaddress", "repo", "repourl", "repository", "分支", "仓库", "仓库地址"],
+};
+
 /** 从任意输入中解析 Jira 问题 Key */
 export function parseIssueKey(input) {
   if (!input) return null;
@@ -299,6 +313,191 @@ export function isEmptyValue(value) {
   return text === "" || NO_VALUE.includes(text);
 }
 
+
+/** 返回去重后的非空文本列表，兼容数组与 Jira 常见的多值返回。 */
+function uniqueTextValues(value) {
+  const source = Array.isArray(value) ? value : [value];
+  const result = [];
+  for (const item of source) {
+    const text = toPlainText(item).trim();
+    if (!text || isEmptyValue(text) || result.includes(text)) continue;
+    result.push(text);
+  }
+  return result;
+}
+
+
+/** 解析评论中的固定块：[FAULT_ANALYSIS] / [故障分析]。 */
+function parseFaultScopeBlock(body) {
+  const aliases = Object.entries(FAULT_SCOPE_KEY_ALIASES).reduce((result, [key, names]) => {
+    for (const name of names) result[name.toLowerCase().replace(/[\s_-]+/g, "")] = key;
+    return result;
+  }, {});
+  const values = {};
+  const entries = [];
+  let inBlock = false;
+  for (const line of String(body || "").split(/\r?\n/)) {
+    const text = line.trim().replace(/^[*-]\s+/, "");
+    if (/^\[\s*(?:FAULT_ANALYSIS|故障分析(?:参数)?)\s*\]$/i.test(text)) {
+      inBlock = true;
+      continue;
+    }
+    if (!inBlock) continue;
+    if (!text) continue;
+    if (/^\[.+\]$/.test(text)) break;
+    const bareModule = text.match(/^([A-Za-z0-9_.-]+)$/);
+    if (bareModule) {
+      entries.push({ module: bareModule[1], tag: "" });
+      continue;
+    }
+    const match = text.match(/^([^:=]{1,40})\s*[:=]\s*(.+)$/);
+    if (!match) continue;
+    const normalizedKey = match[1].trim().toLowerCase().replace(/[\s_-]+/g, "");
+    const key = aliases[normalizedKey];
+    const value = match[2].trim();
+    if (key) {
+      if (value) values[key] = value;
+      continue;
+    }
+    const pair = text.match(/^([A-Za-z0-9_.-]+)\s*:\s*(\S+)$/);
+    if (pair) entries.push({ module: pair[1], tag: pair[2] });
+  }
+  return (Object.keys(values).length || entries.length) ? { values, entries } : null;
+}
+
+
+/** 从最新评论向前寻找故障分析固定块，返回解析值及来源评论。 */
+export function extractFaultAnalysisBlock(issue) {
+  const comments = (issue && issue.comments) || [];
+  for (let index = comments.length - 1; index >= 0; index -= 1) {
+    const comment = comments[index];
+    const parsed = parseFaultScopeBlock(comment && comment.body);
+    if (!parsed) continue;
+    return {
+      found: true,
+      values: parsed.values,
+      entries: parsed.entries,
+      commentId: comment.id,
+      author: comment.author || "",
+      created: comment.created || "",
+    };
+  }
+  return { found: false, values: {} };
+}
+
+
+/** 提取环境文本中的明确版本号，供 Jira 版本字段缺失时兜底。 */
+function versionsFromEnvironment(value) {
+  const labelled = String(value || "")
+    .split(/\r?\n/)
+    .filter((line) => /(?:版本|version|tag|release)/i.test(line))
+    .join(" ");
+  if (!labelled) return [];
+  const matches = labelled.match(/\bv?\d+(?:\.\d+){1,3}(?:[-+][A-Za-z0-9._-]+)*\b/gi) || [];
+  return uniqueTextValues(matches);
+}
+
+
+/**
+ * 从一张 Jira 缺陷单中提取故障分析定位信息。
+ *
+ * 产品：调用方覆盖 > Jira「问题发现产品」 > 评论固定块（兼容人工纠正）。
+ * 模块：调用方覆盖 > 评论固定块 > Jira 组件（唯一值才自动采用）。
+ * 版本：调用方覆盖 > 评论固定块 > 影响版本/修复版本/环境（多来源只接受唯一值）。
+ * 分支：调用方覆盖 > 评论固定块；仓库地址与分支规则仍由 scope-mapping.json 维护。
+ */
+export function extractFaultAnalysisScope(issue, overrides = {}) {
+  const block = extractFaultAnalysisBlock(issue);
+  const sources = {};
+  const candidates = { module: [], version: [] };
+  const relatedModules = [];
+  const pick = (...values) => values.map((item) => String(item || "").trim()).find((item) => item && !isEmptyValue(item)) || "";
+  const pairEntries = Array.isArray(block.entries) ? block.entries : [];
+  const primaryPair = pairEntries[0] || null;
+
+  const customFields = (issue && issue.customFields) || {};
+  let jiraProduct = "";
+  let jiraProductField = "";
+  for (const name of PRODUCT_FIELD_NAMES) {
+    if (!isEmptyValue(customFields[name])) {
+      jiraProduct = String(customFields[name]).trim();
+      jiraProductField = name;
+      break;
+    }
+  }
+
+  const product = pick(overrides.product, jiraProduct, block.values.product);
+  if (product) {
+    sources.product = overrides.product && product === String(overrides.product).trim()
+      ? "调用方输入"
+      : jiraProduct && product === jiraProduct
+        ? `Jira:${jiraProductField}`
+        : `评论:${block.commentId || ""}`;
+  }
+
+  const moduleCandidates = uniqueTextValues(issue && issue.components);
+  const module = pick(overrides.module, block.values.module, primaryPair && primaryPair.module);
+  if (module) {
+    sources.module = overrides.module && module === String(overrides.module).trim()
+      ? "调用方输入"
+      : block.values.module && module === block.values.module
+        ? `评论:${block.commentId || ""}`
+        : `评论:${block.commentId || ""}:${module}`;
+  } else if (moduleCandidates.length === 1) {
+    sources.module = "Jira:模块/组件";
+  } else if (moduleCandidates.length > 1) {
+    candidates.module = moduleCandidates;
+  }
+  const moduleValue = module || (moduleCandidates.length === 1 ? moduleCandidates[0] : "");
+
+  const versionCandidates = [];
+  const addVersionSource = (source, values) => {
+    for (const value of uniqueTextValues(values)) versionCandidates.push({ source, value });
+  };
+  addVersionSource("Jira:影响版本", issue && issue.affectedVersions);
+  addVersionSource("Jira:修复版本", issue && issue.fixVersions);
+  addVersionSource("Jira:环境", versionsFromEnvironment(issue && issue.environment));
+  const uniqueVersions = [...new Set(versionCandidates.map((item) => item.value))];
+  let version = pick(overrides.version, block.values.version, primaryPair && primaryPair.tag);
+  if (version) {
+    sources.version = overrides.version && version === String(overrides.version).trim()
+      ? "调用方输入"
+      : block.values.version && version === block.values.version
+        ? `评论:${block.commentId || ""}`
+        : `评论:${block.commentId || ""}:${version}`;
+  } else if (uniqueVersions.length === 1) {
+    version = uniqueVersions[0];
+    sources.version = versionCandidates.find((item) => item.value === version).source;
+  } else {
+    candidates.version = uniqueVersions;
+  }
+
+  const branch = pick(overrides.branch, block.values.branch);
+  if (branch) sources.branch = overrides.branch && branch === String(overrides.branch).trim() ? "调用方输入" : `评论:${block.commentId || ""}`;
+
+  for (const entry of pairEntries) {
+    if (entry.module === module && (!version || entry.tag === version)) continue;
+    relatedModules.push({ module: entry.module, version: entry.tag, source: `评论:${block.commentId || ""}` });
+  }
+
+  const missing = [];
+  if (!product) missing.push("product");
+  if (!moduleValue) missing.push("module");
+  if (!version) missing.push("version");
+
+  return {
+    product,
+    module: moduleValue,
+    version,
+    branch,
+    relatedModules,
+    sources,
+    candidates,
+    missing,
+    block,
+  };
+}
+
 /** 把 Jira 原始返回规范化成便于判定的结构 */
 export function normalizeIssue(raw) {
   const f = raw.fields || {};
@@ -481,6 +680,16 @@ export function renderIssueMarkdown(issue, options = {}) {
     for (const l of issue.links) lines.push("- " + l.label + " " + l.key + " " + (l.summary || "") + "（" + (l.status || "") + "）");
   }
 
+  const logExemption = findLogRequirementExemption(issue);
+  if (logExemption.found) {
+    const source = logExemption.matches[logExemption.matches.length - 1];
+    lines.push("");
+    lines.push("## 日志/复现豁免");
+    lines.push("- 命中固定语句：明确缺陷不需要额外提供日志信息");
+    lines.push("- 来源评论：" + (source.author || "未知") + " @ " + (source.created || "") + "（评论 #" + (source.commentId || "") + "）");
+    lines.push("- 使用前提：本单必须判定为效果类缺陷；其它缺陷仍按常规检查。");
+  }
+
   lines.push("");
   lines.push("## 评论（共 " + issue.comments.length + " 条，显示最近 " + Math.min(maxComments, issue.comments.length) + " 条）");
   for (const c of issue.comments.slice(-maxComments)) {
@@ -562,6 +771,32 @@ export function findComments(issue, predicate) {
   return comments.filter((c) => {
     try { return !!predicate(c); } catch (e) { return false; }
   });
+}
+
+/**
+ * 查找效果类缺陷的日志/复现豁免声明。
+ * 仅精确命中约定语句才返回 found=true；是否属于效果类缺陷仍由门禁结合单内容判断。
+ */
+export function findLogRequirementExemption(issue) {
+  const matches = [];
+  for (const comment of (issue && issue.comments) || []) {
+    const text = String(comment.body || "");
+    if (!text.includes(LOG_REQUIREMENT_EXEMPTION_PHRASE)) continue;
+    matches.push({
+      commentId: comment.id,
+      author: comment.author,
+      created: comment.created,
+      phrase: LOG_REQUIREMENT_EXEMPTION_PHRASE,
+    });
+  }
+  return {
+    found: matches.length > 0,
+    matches,
+    phrase: LOG_REQUIREMENT_EXEMPTION_PHRASE,
+    reason: matches.length
+      ? "评论区已明确声明：" + LOG_REQUIREMENT_EXEMPTION_PHRASE
+      : "评论区未找到精确语句：" + LOG_REQUIREMENT_EXEMPTION_PHRASE,
+  };
 }
 
 /**

@@ -4,9 +4,9 @@
  *
  * 用法：
  *   node scripts/analysis-cli.mjs selftest
- *   node scripts/analysis-cli.mjs resolve --product <名称|ID> --module <名称|ID> [--branch <仓库地址>] [--version <Tag>]
+ *   node scripts/analysis-cli.mjs resolve --product <名称|ID> --module <名称|ID> [--version <Tag>] [--related <模块:Tag> ...] [--config <映射文件>]
  *   node scripts/analysis-cli.mjs analyze --dir <附件目录> --product <名称|ID> --module <名称|ID> \
- *       [--branch <仓库地址>] [--version <Tag>] [--out <报告.html>] [--key <缺陷单号>] [--jira-url <地址>] \
+ *       [--branch <仓库地址>] [--version <Tag>] [--related <模块:Tag> ...] [--config <映射文件>] [--out <报告.html>] [--key <缺陷单号>] [--jira-url <地址>] \
  *       [--image-tag log_image] [--image-description <说明>] [--date-filter <YYYY-MM-DD>] [--timeout 1800]
  *
  * 接口地址与令牌：--base-url/--token 优先，其次 ANALYSIS_API_BASE_URL / ANALYSIS_API_TOKEN 环境变量。
@@ -19,9 +19,10 @@ import * as analysis from "./analysis.mjs";
 
 const USAGE = `用法：
   node scripts/analysis-cli.mjs selftest
-  node scripts/analysis-cli.mjs resolve --product <名称|ID> --module <名称|ID> [--branch <仓库地址>] [--version <Tag>]
+  node scripts/analysis-cli.mjs resolve --product <名称|ID> --module <名称|ID> [--version <Tag>] [--related <模块:Tag> ...] [--config <映射文件>]
   node scripts/analysis-cli.mjs analyze --dir <附件目录> --product <名称|ID> --module <名称|ID>
-        [--branch <仓库地址>] [--version <Tag>] [--out <报告.html>] [--key <缺陷单号>]
+        [--branch <仓库地址>] [--version <Tag>] [--config <映射文件>] [--out <报告.html>] [--key <缺陷单号>]
+        [--related <模块:Tag> ...]
         [--jira-url <地址>] [--image-tag log_image] [--image-description <说明>]
         [--date-filter <YYYY-MM-DD>] [--timeout 1800] [--json-summary <文件>]`;
 
@@ -38,7 +39,11 @@ function parseArgs(argv) {
       if (next === undefined || String(next).startsWith("--")) {
         options[key] = true;
       } else {
-        options[key] = next;
+        if (key === "related" && options[key] !== undefined) {
+          options[key] = [].concat(options[key], next);
+        } else {
+          options[key] = next;
+        }
         index += 1;
       }
     } else {
@@ -49,11 +54,29 @@ function parseArgs(argv) {
 }
 
 
+/** 解析可重复的 --related 参数：模块名:Tag。 */
+function parseRelatedOptions(options) {
+  const raw = options.related === undefined ? [] : [].concat(options.related);
+  const result = [];
+  for (const item of raw) {
+    for (const spec of String(item || "").split(/\s*,\s*|\s+/).filter(Boolean)) {
+      const separator = spec.indexOf(":");
+      if (separator <= 0 || separator === spec.length - 1) {
+        throw new Error(`--related 格式错误：${spec}；应为 <模块:Tag>`);
+      }
+      result.push({ module: spec.slice(0, separator), version: spec.slice(separator + 1) });
+    }
+  }
+  return result;
+}
+
+
 /** 组装接口调用参数 */
 function callOptions(options) {
   const result = {};
   if (typeof options["base-url"] === "string") result.baseUrl = options["base-url"];
   if (typeof options.token === "string") result.token = options.token;
+  if (typeof options.config === "string") result.configPath = options.config;
   return result;
 }
 
@@ -88,7 +111,9 @@ async function main() {
         module: options.module,
         branch: typeof options.branch === "string" ? options.branch : undefined,
         version: typeof options.version === "string" ? options.version : undefined,
+        related: parseRelatedOptions(options),
       }, callArgs);
+      await analysis.validateScopeTags(scope, callArgs);
       console.log(JSON.stringify(scope, null, 2));
       return;
     }
@@ -101,8 +126,10 @@ async function main() {
         module: options.module,
         branch: typeof options.branch === "string" ? options.branch : undefined,
         version: typeof options.version === "string" ? options.version : undefined,
+        related: parseRelatedOptions(options),
       }, callArgs);
-      console.log(`[analysis] 分析范围：产品=${scope.productName || scope.productId} 模块=${scope.moduleName || scope.moduleId} 版本=${scope.tagVersion}`);
+      await analysis.validateScopeTags(scope, callArgs);
+      console.log(`[analysis] 分析范围：产品=${scope.productName || scope.productId} 模块=${scope.moduleName || scope.moduleId} Tag=${scope.tagVersion} 关联模块=${(scope.relatedModules || []).length}`);
 
       const payload = await analysis.analyzeDirectory(options.dir, { scope }, {
         ...callArgs,

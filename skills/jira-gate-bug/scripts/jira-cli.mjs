@@ -7,6 +7,8 @@
  *   node scripts/jira-cli.mjs get <KEY|URL>                   # 输出紧凑 Markdown 摘要（含评论）
  *   node scripts/jira-cli.mjs json <KEY|URL>                  # 输出规范化 JSON
  *   node scripts/jira-cli.mjs selfcheck <KEY|URL>             # 判断评论区是否已有自查结果
+ *   node scripts/jira-cli.mjs log-exemption <KEY|URL>         # 判断效果类缺陷是否明确声明豁免日志/复现
+ *   node scripts/jira-cli.mjs scope <KEY|URL>                 # 提取产品、模块、版本与可选分支
  *   node scripts/jira-cli.mjs attachments <KEY|URL> <目录>     # 下载缺陷单附件
  *   node scripts/jira-cli.mjs comment <KEY|URL> --file <文件>  # 新增评论
  *   node scripts/jira-cli.mjs comment-update <KEY|URL> <评论ID> --file <文件>
@@ -34,6 +36,8 @@ const USAGE = `用法：
   node scripts/jira-cli.mjs get <KEY|URL>
   node scripts/jira-cli.mjs json <KEY|URL>
   node scripts/jira-cli.mjs selfcheck <KEY|URL>
+  node scripts/jira-cli.mjs log-exemption <KEY|URL>
+  node scripts/jira-cli.mjs scope <KEY|URL>
   node scripts/jira-cli.mjs attachments <KEY|URL> <目录>
   node scripts/jira-cli.mjs comment <KEY|URL> --file <文件> [--body <文本>]
   node scripts/jira-cli.mjs comment-update <KEY|URL> <评论ID> --file <文件>
@@ -175,6 +179,18 @@ async function main() {
       requireArgs(positional, 1, "selfcheck <KEY|URL>");
       const issue = await jira.getIssue(positional[0], callOptions);
       console.log(JSON.stringify(jira.findSelfCheckComments(issue), null, 2));
+      return;
+    }
+    case "log-exemption": {
+      requireArgs(positional, 1, "log-exemption <KEY|URL>");
+      const issue = await jira.getIssue(positional[0], callOptions);
+      console.log(JSON.stringify(jira.findLogRequirementExemption(issue), null, 2));
+      return;
+    }
+    case "scope": {
+      requireArgs(positional, 1, "scope <KEY|URL>");
+      const issue = await jira.getIssue(positional[0], callOptions);
+      console.log(JSON.stringify(jira.extractFaultAnalysisScope(issue), null, 2));
       return;
     }
     case "attachments": {

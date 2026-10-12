@@ -67,6 +67,14 @@ node <技能目录>/scripts/jira-cli.mjs json <KEY|URL>   # 需要精确字段�
 
 按 `references/checklist.md` 逐项判定，每条判定都要指向具体证据（字段名、描述段落、附件文件名、评论时间点）。找不到证据一律记为“证据不足”，不允许无证据的“已满足”。
 
+效果类缺陷先执行日志/复现豁免检查：
+
+```bash
+node <技能目录>/scripts/jira-cli.mjs log-exemption <KEY|URL>
+```
+
+`found=true` 表示评论区命中固定语句 `明确缺陷不需要额外提供日志信息`。只有同时确认本单属于效果类缺陷时，才可按 `references/checklist.md` 第 0 节豁免复现步骤和日志要求；普通故障、报错、接口异常、性能、数据或资源问题不适用。豁免不改变其它完整性检查和红线。
+
 - 存在任一 `MUST` 缺失或命中一票打回红线 → **打回**：
   1. 按「输出模板 · 打回」写评论（列出 `(x)` 项与要补的内容）。
   2. `node <技能目录>/scripts/jira-cli.mjs gate-set <KEY> --file gate.json`，`gate.json` 内容 `{"result":"不通过","selfCheck":"无"}`（字段不存在时会返回 `skipped`，不影响评论，继续即可）。
@@ -101,22 +109,44 @@ node <技能目录>/scripts/jira-cli.mjs attachments <KEY|URL> <工作目录>/<K
 
 按下面的优先级确定，并把最终使用的范围写进评论：
 
-1. 技能调用方传入的 `inputs`（例如 `productId`、`moduleId`、`branchAddress`、`tagVersion`，或产品名 / 模块名）。
-2. 缺陷单里的产品归属、模块/组件、影响版本等字段。
-3. 都缺失时**不要猜**：按「输出模板 · 缺分析参数」写评论，列出缺少的字段，写门禁字段 `{"result":"未检查","selfCheck":"无"}`，结束任务。
+1. 产品：优先取技能调用方 `inputs.product`，否则取 Jira 字段「问题发现产品」；值为空或 `无` 时按缺失处理。
+2. 模块：优先取调用方 `inputs.module`，其次取评论固定块的第一条 `模块:Tag`，最后仅在 Jira 模块/组件只有一个值时自动采用。多个候选时**不要猜**，直接列出候选并要求补充。
+3. 精准 Tag：主模块和非公共关联模块优先取调用方 `inputs.version`，其次取评论固定块对应条目的 Tag，最后从 Jira 的影响版本、修复版本、环境字段中取唯一明确值。这里必须最终解析为 GitLab 中真实存在的精准 Tag，不能只停留在业务版本号。评论区固定块只写需要独立分析和拉取的模块，不写公共组件；公共组件由代码分析按需联动处理。
+4. 仓库地址与 Git Tag：由 `config/scope-mapping.json` 根据产品、模块和版本规则确定；故障分析只关注 Tag，不使用 `master`、`feature/*` 等分支。
+5. 上述任一必需信息缺失、Tag 不存在或映射失败时：按「输出模板 · 缺分析参数」写评论，写门禁字段 `{"result":"未检查","selfCheck":"无"}`，结束任务。
 
-先用 `resolve` 验证参数能对上工具里的产品与模块，再提交分析：
+参数齐全、映射成功且远端精准 Tag 校验通过时，直接继续执行 4.3，不需要再向提单人或研发确认模块、仓库地址或 Tag；只有缺失、歧义、Tag 不存在或映射失败时才回到评论区补充。
+
+先用 `scope` 一次性读取 Jira 产品、模块、Tag 和可选仓库来源，再决定是否需要补充固定评论块：
 
 ```bash
-node <技能目录>/scripts/analysis-cli.mjs resolve --product <名称|ID> --module <名称|ID> [--branch <仓库地址>] [--version <Tag>]
+node <技能目录>/scripts/jira-cli.mjs scope <KEY|URL>
 ```
+
+只有 Jira 的模块/版本字段缺失或存在多个候选时，才要求提单人补一条固定格式评论。产品不要写进固定块；仓库地址和版本到 Tag 的转换规则也不要写进评论：
+
+```text
+[FAULT_ANALYSIS]
+see-task:v1.2.3
+see-management:v1.2.3
+```
+
+固定块从最新评论向前匹配；第一条是主模块，后面的条目作为关联模块一起分析。需要分析或拉取的非公共模块写 `模块:精准Tag`，模块名和精准 Tag 都不能省略；找不到或无法确认远端存在的 Tag 时按缺参打回。公共组件不单独写进固定块，只由代码分析在确实引用时联动记录。不要写 `master`、`feature/*` 分支。`repo=<仓库地址>` 仅在临时覆盖仓库时使用。不要写自由格式的“模块是 xxx / 版本是 xxx”，解析器只接受上述固定块。
+
+先用 `resolve` 验证参数能对上工具里的产品与模块，并校验主模块和关联模块的精准 Tag 是否真实存在，再提交分析：
+
+```bash
+node <技能目录>/scripts/analysis-cli.mjs resolve --product <名称|ID> --module <名称|ID> [--version <Tag>] [--related <模块:Tag> ...] [--config <映射文件>]
+```
+
+`resolve` 返回“精准 Git Tag 校验失败”时，按缺参模板打回，并把失败模块和 Tag 原样列出；不要改用默认分支，也不要继续调用 `analyze`。
 
 **4.3 调用故障分析接口并生成 HTML 报告**
 
 ```bash
 node <技能目录>/scripts/analysis-cli.mjs analyze \
   --dir <工作目录>/<KEY>/attachments \
-  --product <名称|ID> --module <名称|ID> [--branch <仓库地址>] [--version <Tag>] \
+  --product <名称|ID> --module <名称|ID> [--version <Tag>] [--related <模块:Tag> ...] \
   --key <KEY> --jira-url <缺陷单地址> \
   --out <工作目录>/<KEY>/故障分析报告-<KEY>.html
 ```
@@ -214,10 +244,25 @@ h3. 缺陷单预检：待补充分析参数
 
 h4. 需要补充
 
-# (x) *产品归属*：未填写 → 补产品名称
-# (x) *模块 / 组件*：未填写 → 补模块名称
+# (x) *产品归属*：未填写 → 在 Jira「问题发现产品」字段选择产品
+# (x) *模块 / 组件*：未填写 → 补固定评论块 <模块名>:<Tag>
+# (x) *精准 Tag*：see-task:v1.2.3 在 GitLab 不存在 → 改填该模块实际发布的 Tag
 # (/) *影响版本*：v3.2.1
 ```
+
+写这条评论时只列实际缺失项，不要把示例中的未通过项原样照抄。缺模块或 Tag 时，在评论里给出下面这段固定块，并把已知模块和已知 Tag 填好；未知值替换成实际值后再触发本技能：
+
+```text
+[FAULT_ANALYSIS]
+<模块名>:<Tag>
+<关联模块名>:<Tag>
+```
+
+固定块补齐并重新触发后，技能会解析产品、主模块、关联模块和 Git Tag，先校验所有 Tag 都真实存在，再提交分析，不再要求额外确认。仓库地址不需要补；若产品/模块在 Jira 中已有值但 `scope-mapping.json` 中没有映射，则评论中应明确要求管理员补配置，而不是让提单人反复尝试。
+
+公共组件仓库在 `scope-mapping.json` 中以 `common: true` 留存，但不作为独立模块写进评论固定块，也不要求发布或提供精准 Tag。代码分析如果确认主模块或关联代码引用了公共组件，应联动查询该公共组件，并在结论中说明“本缺陷引用了 xxx 公共组件功能，关键代码在 xxxxxx”；无法定位关键代码时必须明确说明，不得编造。公共组件没有精准 Tag 不作为打回原因，也不会改用默认分支兜底。
+
+效果类缺陷命中日志/复现豁免时，评论中的相关检查项写成 `(/)`，并注明固定依据“评论区已声明：明确缺陷不需要额外提供日志信息”，不得再要求补日志或复现步骤；其它检查项照常列出实际结果。未命中固定语句、或本单并不属于效果类缺陷时，不得使用该豁免。
 
 **Jira wiki 标记对照**（写评论时按此转换，不要提交 Markdown）
 
@@ -238,6 +283,7 @@ h4. 需要补充
 
 - Jira 令牌：`JIRA_TOKEN` 环境变量（部署时由 `.env` 注入）。容器内后端注入 `SKILLRUN_ENV_LOCKED=1` 后只认该环境变量与 `JIRA_BASE_URL`；桌面端未锁定时可回落到 `--token`，或技能目录 / `~/.codex` 下的 `.jira-token`、`jira-token.txt`、`~/.codex/jira/config.json`。
 - 故障分析服务：`ANALYSIS_API_BASE_URL`（容器内默认 `http://api:5000`，宿主网络为 `http://127.0.0.1:5000`）与 `ANALYSIS_API_TOKEN`（内部令牌，未配置时脚本会直接报错并说明如何配置）。
+- 分析范围映射：`config/scope-mapping.json` 维护产品、模块、仓库地址与版本到 Git Tag 的规则。产品值来自 Jira「问题发现产品」；模块缺失或产品下有多个模块时必须补充，不允许模糊匹配。
 - 可选 `jira-config.json`（放在技能目录或 `~/.codex/jira/config.json`）：
 
 ```json
@@ -272,8 +318,9 @@ h4. 需要补充
 | 现象 | 处理 |
 |---|---|
 | `未配置 ANALYSIS_API_TOKEN` | 在 `.env` 设置 `ANALYSIS_API_TOKEN` 并在 api/worker 生效后重试 |
-| `缺少代码仓库地址或版本` | 用 `--branch` / `--version` 明确指定，或在缺陷单里补齐后重试 |
-| `故障分析工具中没有匹配的产品/模块` | 请管理员在工具里先维护产品、模块与分支绑定关系 |
+| `缺少代码仓库地址或版本` | 先用 `jira-cli.mjs scope` 查看来源；缺模块/版本时按固定评论块补齐，仓库地址由 `scope-mapping.json` 维护 |
+| `分析范围映射失败` | 检查 `config/scope-mapping.json` 是否包含该产品/模块和版本规则；不要用工具内旧绑定静默兜底 |
+| `故障分析工具中没有匹配的产品/模块` | 请管理员在 `config/scope-mapping.json` 维护产品、模块与仓库地址映射 |
 | 分析任务超时 | 任务仍可能在后台完成：前端「历史记录」可见；可提高 `CODEX_SKILL_TIMEOUT` 与 `--timeout` 后重跑 |
 | `鉴权失败` / HTTP 401 | 检查 `JIRA_TOKEN` 是否过期、`ANALYSIS_API_TOKEN` 是否与 api 服务一致 |
 | 附件上传 413 | 报告或附件超过单据限制，压缩报告或拆分日志后重试 |

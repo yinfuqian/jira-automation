@@ -1,11 +1,16 @@
 /**
  * analysis.mjs —— 调用本工具（故障分析服务）HTTP 接口完成一次自动故障分析。
  *
- * 流程：解析产品/模块/分支 → 上传缺陷单附件 → 提交异步分析 → 轮询进度 → 渲染 HTML 报告。
+ * 流程：解析产品/模块/精准 Tag → 校验远端 Tag → 上传缺陷单附件 → 提交异步分析 → 轮询进度 → 渲染 HTML 报告。
  * 服务地址与内部令牌来自环境变量（ANALYSIS_API_BASE_URL / ANALYSIS_API_TOKEN），
  * 也可通过命令行参数覆盖；令牌只放在请求头 X-API-Token，不打印、不写进报告。
  */
 import { escapeHtml, renderAnalysisHtml } from "./report.mjs";
+import {
+  resolveGitTag,
+  resolveModuleMapping,
+  resolveProductMapping,
+} from "./scope.mjs";
 
 export const DEFAULT_BASE_URL = "http://127.0.0.1:5000";
 export const IMAGE_EXTENSIONS = [".png", ".jpg", ".jpeg"];
@@ -93,8 +98,9 @@ export async function resolveProduct(value, options = {}) {
   if (/^\d+$/.test(wanted)) return { id: wanted, name: "" };
   const data = await apiRequest("GET", "/product/get?name=" + encodeURIComponent(wanted), options);
   const products = (data && data.products) || [];
-  const exact = products.find((item) => String(item.name || "").trim() === wanted) || products[0];
-  if (!exact) throw new Error("故障分析工具中没有匹配的产品：" + wanted + "（请先在工具里维护产品与模块）");
+  const exact = products.find((item) => String(item.name || "").trim().toLowerCase() === wanted.toLowerCase())
+    || (products.length === 1 ? products[0] : null);
+  if (!exact) throw new Error("故障分析工具中没有唯一匹配的产品：" + wanted + "（请先同步或维护 GitLab 产品与模块）");
   return { id: String(exact.id), name: String(exact.name || "") };
 }
 
@@ -109,23 +115,45 @@ export async function resolveModule(productId, value, options = {}) {
   }
   const data = await apiRequest("GET", "/module/search?names=" + encodeURIComponent(wanted), options);
   const modules = (data && data.modules) || [];
-  const exact = modules.find((item) => String(item.module_name || "").trim() === wanted) || modules[0];
-  if (!exact) throw new Error("故障分析工具中没有匹配的模块：" + wanted);
+  const exact = modules.find((item) => String(item.module_name || "").trim().toLowerCase() === wanted.toLowerCase())
+    || (modules.length === 1 ? modules[0] : null);
+  if (!exact) throw new Error("故障分析工具中没有唯一匹配的模块：" + wanted + "（产品：" + productId + "）");
   return { id: String(exact.module_id), name: String(exact.module_name || ""), branch: exact.branch || null };
 }
 
 /**
  * 解析一次分析所需的定位参数：productId / moduleId / branchAddress / tagVersion。
- * 显式传入的 branch/version 优先，其次用模块绑定的分支信息。
+ * branchAddress 实际是仓库地址；tagVersion 只接受 Git Tag。
+ * 仓库地址优先取显式输入，其次取 scope-mapping.json；不再回落到工具里的分支绑定。
  */
-export async function resolveScope(input = {}, options = {}) {
-  const product = await resolveProduct(input.product, options);
+async function resolveScopeEntry(input = {}, options = {}, resolvedProduct = null, allowCommonWithoutTag = false) {
+  const product = resolvedProduct || await resolveProduct(input.product, options);
   const module = await resolveModule(product.id, input.module, options);
-  const branchInfo = module.branch || {};
-  const branchAddress = String(input.branch || branchInfo.branch_address || "").trim();
-  const tagVersion = String(input.version || branchInfo.tag_version || "").trim();
-  if (!branchAddress || !tagVersion) {
-    throw new Error("缺少代码仓库地址或版本：请在缺陷单里补充，或用 --branch / --version 指定（模块：" + module.name + "）");
+  let configuredRepo = "";
+  let configuredRef = "";
+  let configuredCommon = false;
+  let configError = null;
+  try {
+    const productMapping = resolveProductMapping(input.product, null, options.configPath);
+    const moduleMapping = resolveModuleMapping(productMapping, input.module);
+    configuredRepo = moduleMapping.repoUrl;
+    configuredCommon = Boolean(moduleMapping.value.common);
+    if (input.version) {
+      configuredRef = resolveGitTag(productMapping, moduleMapping, input.version, null, options.configPath).gitTag;
+    }
+  } catch (error) {
+    configError = error;
+  }
+  const explicitFullScope = Boolean(input.branch && (input.ref || input.version));
+  if (configError && !explicitFullScope) {
+    throw new Error("分析范围映射失败：" + configError.message + "；如确需人工指定，请同时传 --branch 与 --version");
+  }
+  const branchAddress = String(input.branch || configuredRepo || "").trim();
+  const tagVersion = String(input.ref || configuredRef || input.version || "").trim();
+  const commonWithoutTag = configuredCommon && allowCommonWithoutTag && !tagVersion;
+  if (!branchAddress || (!tagVersion && !commonWithoutTag)) {
+    const detail = configError ? "；映射配置错误：" + configError.message : "";
+    throw new Error("缺少代码仓库地址或 Tag：请从 Jira 读取产品、模块与 Tag 版本，或用 --branch / --version 指定（模块：" + module.name + "）" + detail);
   }
   return {
     productId: product.id,
@@ -134,7 +162,65 @@ export async function resolveScope(input = {}, options = {}) {
     moduleName: module.name,
     branchAddress,
     tagVersion,
+    common: configuredCommon,
   };
+}
+
+/**
+ * 解析主模块与可选关联模块。关联模块共用主模块的产品。
+ */
+export async function resolveScope(input = {}, options = {}) {
+  const product = await resolveProduct(input.product, options);
+  const primary = await resolveScopeEntry(input, options, product);
+  const relatedModules = [];
+  const seen = new Set([String(primary.moduleId)]);
+  for (const item of input.related || []) {
+    const related = await resolveScopeEntry({ ...item, product: input.product }, options, product, true);
+    if (seen.has(String(related.moduleId))) continue;
+    seen.add(String(related.moduleId));
+    const relatedEntry = {
+      moduleId: related.moduleId,
+      moduleName: related.moduleName,
+      branchAddress: related.branchAddress,
+      tagVersion: related.tagVersion,
+    };
+    if (related.common) relatedEntry.common = true;
+    relatedModules.push(relatedEntry);
+  }
+  return { ...primary, relatedModules };
+}
+
+/**
+ * 校验主模块与关联模块使用的都是远端真实存在的精准 Tag。
+ * 该检查在提交分析前完成，找不到 Tag 时由门禁按缺参打回。
+ */
+export async function validateScopeTags(scope, options = {}) {
+  if (!scope) throw new Error("缺少分析范围，无法校验精准 Tag");
+  const relatedModules = (scope.relatedModules || []).map((item) => ({
+    moduleId: item.moduleId,
+    moduleName: item.moduleName,
+    branchAddress: item.branchAddress,
+    tagVersion: item.tagVersion,
+    common: item.common,
+  }));
+  const result = await apiRequest("POST", "/analysis/validate_refs", {
+    ...options,
+    body: {
+      productId: scope.productId,
+      moduleId: scope.moduleId,
+      moduleName: scope.moduleName,
+      branchAddress: scope.branchAddress,
+      tagVersion: scope.tagVersion,
+      relatedModules,
+    },
+  });
+  if (!result || result.ok !== true) {
+    const details = ((result && result.missing) || [])
+      .map((item) => `${item.moduleName || "unknown"}:${item.tagVersion || "（未提供 Tag）"}${item.reason ? `（${item.reason}）` : ""}`)
+      .join("；");
+    throw new Error("精准 Git Tag 校验失败：" + (details || "远端仓库中找不到指定 Tag"));
+  }
+  return result;
 }
 
 /** 按扩展名把附件目录分成图片与日志两类 */
@@ -291,6 +377,7 @@ export async function analyzeDirectory(dir, input = {}, options = {}) {
       moduleId: scope.moduleId,
       branchAddress: scope.branchAddress,
       tagVersion: scope.tagVersion,
+      relatedModules: scope.relatedModules || [],
       source_type: "file",
       log_ids: upload.log_ids,
       file_path: upload.file_paths[0],
@@ -304,6 +391,7 @@ export async function analyzeDirectory(dir, input = {}, options = {}) {
       moduleId: scope.moduleId,
       branchAddress: scope.branchAddress,
       tagVersion: scope.tagVersion,
+      relatedModules: scope.relatedModules || [],
       source_type: "image",
       image_tag: upload.image_tag,
       image_description: upload.image_description,

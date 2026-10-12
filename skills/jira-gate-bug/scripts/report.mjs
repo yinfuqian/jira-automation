@@ -252,6 +252,9 @@ export function renderAnalysisHtml(payload = {}) {
     scope.moduleName ? "模块：" + toText(scope.moduleName) : "",
     scope.branchAddress ? "仓库：" + toText(scope.branchAddress) : "",
     scope.tagVersion ? "版本：" + toText(scope.tagVersion) : "",
+    (scope.relatedModules || []).filter((item) => item && item.common).length
+      ? "引用公共组件：" + (scope.relatedModules || []).filter((item) => item && item.common).map((item) => toText(item.moduleName)).join("、")
+      : "",
   ].filter(Boolean);
   if (scopeBits.length) parts.push("<p class=\"meta\">" + escapeHtml(scopeBits.join(" ｜ ")) + "</p>");
   parts.push("</header>");
