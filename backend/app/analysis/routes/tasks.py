@@ -30,6 +30,9 @@ def build_analysis_evidence(
     detected_languages=None,
     ai_call_count=0,
     repositories=None,
+    common_module_references=None,
+    auto_pulled_common_modules=None,
+    common_pull_skipped=None,
 ):
     """构建并返回 build_analysis_evidence 对应的业务数据，保持现有调用约定。"""
     snippet_files = []
@@ -56,6 +59,9 @@ def build_analysis_evidence(
             "branchAddress": repository.get("branchAddress"),
             "tagVersion": repository.get("tagVersion"),
             "cloned": bool(repository.get("repo_path")),
+            "common": bool(repository.get("common")),
+            "metadataOnly": bool(repository.get("metadataOnly")),
+            "autoPulled": bool(repository.get("autoPulled")),
         }
         for repository in (repositories or [])
         if isinstance(repository, dict)
@@ -70,6 +76,12 @@ def build_analysis_evidence(
         "related_code_module_count": len(related_code_modules),
         "code_context_modules": code_context_modules,
         "selected_code_repositories": selected_code_repositories,
+        "common_module_reference_count": len(common_module_references or []),
+        "common_module_references": common_module_references or [],
+        "auto_pulled_common_module_count": len(auto_pulled_common_modules or []),
+        "auto_pulled_common_modules": auto_pulled_common_modules or [],
+        "common_pull_skipped_count": len(common_pull_skipped or []),
+        "common_pull_skipped": common_pull_skipped or [],
         "log_error_event_count": len(log_error_events or []),
         "log_error_events": log_error_events or [],
         "grouped_issue_count": len(grouped_log_errors or []),
@@ -455,10 +467,12 @@ def analyze_log_task(self, data):
         annotate_code_snippets,
         analyze_code_with_deepseek,
         AiServiceError,
+        auto_pull_common_repositories,
         build_analysis_repositories,
         build_backend_log_analysis,
         build_cached_analysis_payload,
         build_code_findings,
+        build_common_module_candidates,
         build_error_fingerprint,
         clone_analysis_repositories,
         clone_git_repo,
@@ -579,6 +593,72 @@ def analyze_log_task(self, data):
             context for context in [related_evidence_context, skipped_chain_issue_context] if context
         )
         analysis_log_content = f"{log_content}\n\n{extra_context}" if extra_context else log_content
+        common_candidates = build_common_module_candidates(data)
+        common_pull = {"references": [], "repositories": [], "skipped": []}
+        auto_pulled_common_modules = []
+        if common_candidates:
+            report_progress(
+                self,
+                "common_repo_pull_started",
+                "公共组件联动",
+                0,
+                82,
+                "开始识别并拉取公共组件 0%",
+            )
+            try:
+                common_pull = auto_pull_common_repositories(
+                    cloned_repositories,
+                    common_candidates,
+                    clone_git_repo,
+                    max_workers=4,
+                    source_text=analysis_log_content,
+                    task_id=task_id,
+                )
+            except Exception as exc:
+                logging.exception("公共组件自动联动失败，已跳过后继续主分析：%s", exc)
+                common_pull = {
+                    "references": [],
+                    "repositories": [],
+                    "skipped": [{"moduleName": "common", "reason": f"公共组件联动异常：{exc}"}],
+                }
+            linked_common_repositories = common_pull.get("repositories") or []
+            auto_pulled_common_modules = [
+                repository
+                for repository in linked_common_repositories
+                if repository.get("autoPulled")
+            ]
+            for linked_repository in linked_common_repositories:
+                metadata_index = next(
+                    (
+                        index
+                        for index, repository in enumerate(cloned_repositories)
+                        if repository.get("common")
+                        and not repository.get("repo_path")
+                        and repository.get("moduleName") == linked_repository.get("moduleName")
+                    ),
+                    None,
+                )
+                if metadata_index is None:
+                    cloned_repositories.append(linked_repository)
+                else:
+                    cloned_repositories[metadata_index] = linked_repository
+            repo_paths.extend(
+                repository.get("repo_path")
+                for repository in linked_common_repositories
+                if repository.get("repo_path")
+            )
+            report_progress(
+                self,
+                "common_repo_pull_done",
+                "公共组件联动",
+                100,
+                83,
+                f"公共组件联动 100%，引用 {len(common_pull.get('references') or [])} 个，"
+                f"自动拉取 {len(auto_pulled_common_modules)} 个，"
+                f"跳过 {len(common_pull.get('skipped') or [])} 个",
+            )
+        common_module_references = common_pull.get("references") or []
+        common_pull_skipped = common_pull.get("skipped") or []
         error_fingerprint = build_error_fingerprint(
             data.get("productId"),
             data.get("moduleId"),
@@ -588,6 +668,7 @@ def analyze_log_task(self, data):
             fallback_text=log_content,
             grouped_log_errors=grouped_log_errors,
             related_modules=data.get("relatedModules"),
+            common_modules=common_module_references,
         )
         log_hash = hashlib.sha256(log_content.encode("utf-8")).hexdigest()
 
@@ -604,8 +685,14 @@ def analyze_log_task(self, data):
                 resolved_errors=[],
                 code_snippets=payload.get("code_snippets") or [],
                 repositories=cloned_repositories,
+                common_module_references=common_module_references,
+                auto_pulled_common_modules=auto_pulled_common_modules,
+                common_pull_skipped=common_pull_skipped,
             )
             payload["repositories"] = cloned_repositories
+            payload["common_module_references"] = common_module_references
+            payload["auto_pulled_common_modules"] = auto_pulled_common_modules
+            payload["common_pull_skipped"] = common_pull_skipped
             payload.setdefault("analysis_evidence", {}).update({
                 key: cached_code_evidence[key]
                 for key in (
@@ -614,6 +701,12 @@ def analyze_log_task(self, data):
                     "related_code_module_count",
                     "code_context_modules",
                     "selected_code_repositories",
+                    "common_module_reference_count",
+                    "common_module_references",
+                    "auto_pulled_common_module_count",
+                    "auto_pulled_common_modules",
+                    "common_pull_skipped_count",
+                    "common_pull_skipped",
                 )
             })
             insert_query_record(
@@ -671,6 +764,9 @@ def analyze_log_task(self, data):
             detected_languages=detected_languages,
             ai_call_count=1,
             repositories=cloned_repositories,
+            common_module_references=common_module_references,
+            auto_pulled_common_modules=auto_pulled_common_modules,
+            common_pull_skipped=common_pull_skipped,
         )
         report_progress(
             self,
@@ -696,11 +792,7 @@ def analyze_log_task(self, data):
                 code_snippets,
                 image_analysis=image_analysis,
                 image_paths=(input_paths if source_type == "image" else []) + related_image_paths,
-                common_repositories=[
-                    repository
-                    for repository in repositories
-                    if repository.get("common")
-                ],
+                common_repositories=common_module_references,
             )
         except AiServiceError as exc:
             report_progress(self, "ai_service_failed", "AI 服务", 100, 98, str(exc))
@@ -748,6 +840,9 @@ def analyze_log_task(self, data):
             "code_snippets": code_snippets,
             "code_findings": code_findings,
             "analysis_evidence": analysis_evidence,
+            "common_module_references": common_module_references,
+            "auto_pulled_common_modules": auto_pulled_common_modules,
+            "common_pull_skipped": common_pull_skipped,
             "issue_conclusion": issue_conclusion,
             "code_analysis": code_analysis,
         }

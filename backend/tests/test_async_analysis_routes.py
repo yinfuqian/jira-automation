@@ -299,6 +299,96 @@ class AsyncAnalysisRouteTests(unittest.TestCase):
         self.assertTrue(result["ok"])
         self.assertEqual(result["skippedCommon"][0]["moduleName"], "bot-common")
 
+    def test_auto_pull_common_repositories_only_clones_referenced_module(self):
+        routes, _, _, _, _ = load_routes_module()
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            source_repo = Path(temp_dir) / "source-repo"
+            common_repo = Path(temp_dir) / "bot-common"
+            source_repo.mkdir()
+            common_repo.mkdir()
+            (source_repo / "pom.xml").write_text(
+                "<dependency><artifactId>bot-common</artifactId></dependency>",
+                encoding="utf-8",
+            )
+            calls = []
+
+            def clone_common(address, tag_version, workspace_id=None):
+                calls.append((address, tag_version, workspace_id))
+                return str(common_repo)
+
+            result = routes.auto_pull_common_repositories(
+                [{
+                    "role": "primary",
+                    "moduleName": "bot-gateway",
+                    "repo_path": str(source_repo),
+                }],
+                [
+                    {
+                        "moduleName": "bot-common",
+                        "branchAddress": "https://git.example/bot-common.git",
+                        "common": True,
+                    },
+                    {
+                        "moduleName": "unused-common",
+                        "branchAddress": "https://git.example/unused-common.git",
+                        "common": True,
+                    },
+                ],
+                clone_common,
+                max_workers=2,
+                task_id="task-common",
+            )
+
+        self.assertEqual(len(calls), 1)
+        self.assertEqual(calls[0][0], "https://git.example/bot-common.git")
+        self.assertEqual(calls[0][1], "")
+        self.assertEqual(calls[0][2], "task-common")
+        self.assertEqual(result["references"][0]["moduleName"], "bot-common")
+        self.assertEqual(result["references"][0]["matchedBy"], "code")
+        self.assertEqual(result["references"][0]["file"], "pom.xml")
+        self.assertEqual(result["references"][0]["line"], 1)
+        self.assertEqual(result["repositories"][0]["role"], "common")
+        self.assertTrue(result["repositories"][0]["autoPulled"])
+        self.assertEqual(result["skipped"], [])
+
+    def test_auto_pull_common_repository_failure_is_reported_without_raising(self):
+        routes, _, _, _, _ = load_routes_module()
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            source_repo = Path(temp_dir) / "source-repo"
+            source_repo.mkdir()
+            (source_repo / "service.py").write_text(
+                "from bot_common import helper\n",
+                encoding="utf-8",
+            )
+
+            def fail_clone(*args, **kwargs):
+                raise routes.GitCloneError("public network denied")
+
+            result = routes.auto_pull_common_repositories(
+                [{
+                    "role": "primary",
+                    "moduleName": "bot-gateway",
+                    "repo_path": str(source_repo),
+                }],
+                [{
+                    "moduleName": "bot-common",
+                    "aliases": ["bot_common"],
+                    "branchAddress": "https://git.example/bot-common.git",
+                    "common": True,
+                }],
+                fail_clone,
+                max_workers=1,
+                task_id="task-common",
+            )
+
+        self.assertEqual(result["repositories"], [])
+        self.assertEqual(len(result["skipped"]), 1)
+        self.assertEqual(result["skipped"][0]["moduleName"], "bot-common")
+        self.assertIn("公共组件仓库拉取失败", result["skipped"][0]["reason"])
+        self.assertIn("public network denied", result["skipped"][0]["reason"])
+
     def test_image_chain_discovery_uses_metadata_without_ai(self):
         routes, _, _, _, _ = load_routes_module()
         source = inspect.getsource(routes.build_chain_relevance_input)

@@ -81,6 +81,29 @@ export function resolveModuleMapping(productMapping, module) {
 }
 
 
+/**
+ * 列出产品下标记为 common 的公共组件候选。
+ * 公共组件不出现在 Jira 评论固定块中，但代码分析需要据此识别真实引用并按需联动拉取。
+ */
+export function listConfiguredCommonModules(product, config, configPath) {
+  const productMapping = resolveProductMapping(product, config, configPath);
+  return moduleEntries(productMapping)
+    .filter(({ value }) => Boolean(value.common))
+    .map(({ key, value }) => {
+      const repoUrl = String(value.repoUrl || "").trim();
+      if (!repoUrl) throw new Error(`公共组件 ${key} 未配置 repoUrl`);
+      return {
+        moduleId: `common:${key}`,
+        moduleName: key,
+        branchAddress: repoUrl,
+        common: true,
+        aliases: Array.isArray(value.aliases) ? value.aliases : [],
+        codePatterns: Array.isArray(value.codePatterns) ? value.codePatterns : [],
+      };
+    });
+}
+
+
 function renderRuleRef(refTemplate, version, match) {
   return String(refTemplate || "").replace(/\{([^}]+)\}/g, (whole, token) => {
     if (token === "version") return version;

@@ -80,11 +80,12 @@ def _build_git_clone_error(address, tag_version, exc):
     detail = stderr.splitlines()[-1].strip() if stderr else "Git 返回状态码 128"
     lowered = detail.lower()
     repo_name = str(address or "").rstrip("/").split("/")[-1].removesuffix(".git")
+    ref_label = str(tag_version or "").strip() or "默认分支"
     if "remote branch" in lowered and "not found" in lowered:
-        return GitCloneError(f"仓库 {repo_name} 中不存在分支/Tag {tag_version}")
+        return GitCloneError(f"仓库 {repo_name} 中不存在分支/Tag {ref_label}")
     if any(signal in lowered for signal in ("repository not found", "authentication failed", "access denied", "403")):
         return GitCloneError(f"仓库 {repo_name} 不存在或当前 Git 账号无权限")
-    return GitCloneError(f"仓库 {repo_name} 拉取失败（分支/Tag: {tag_version}）：{detail}")
+    return GitCloneError(f"仓库 {repo_name} 拉取失败（分支/Tag: {ref_label}）：{detail}")
 
 
 def normalize_ai_exception(exc):
@@ -292,8 +293,12 @@ def clone_git_repo(address, tag_version, workspace_id=None):
             tag_version,
             workspace_id or "shared",
         )
+        clone_command = ["git", "clone"]
+        if str(tag_version or "").strip():
+            clone_command.extend(["-b", str(tag_version).strip()])
+        clone_command.extend([repo_address, repo_dir])
         subprocess.run(
-            ["git", "clone", "-b", tag_version, repo_address, repo_dir],
+            clone_command,
             check=True,
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE
@@ -588,6 +593,7 @@ def build_error_fingerprint(
     fallback_text=None,
     grouped_log_errors=None,
     related_modules=None,
+    common_modules=None,
 ):
     """构建并返回 build_error_fingerprint 对应的业务数据，保持现有调用约定。"""
     first_error = (error_info or [{}])[0] or {}
@@ -614,10 +620,18 @@ def build_error_fingerprint(
         and module.get("branchAddress")
         and module.get("tagVersion")
     )
+    common_repository_refs = sorted(
+        (
+            str(module.get("moduleName") or module.get("moduleId") or ""),
+            str(module.get("branchAddress") or ""),
+        )
+        for module in (common_modules or [])
+        if isinstance(module, dict) and module.get("branchAddress")
+    )
     seed = "|".join([
         (
             "grouped-errors-v3-related"
-            if related_repository_versions
+            if related_repository_versions or common_repository_refs
             else ("grouped-errors-v2" if group_signatures else "legacy-error-v1")
         ),
         str(product_id or ""),
@@ -629,6 +643,7 @@ def build_error_fingerprint(
         normalized_message,
         safe_json_dumps(group_signatures),
         safe_json_dumps(related_repository_versions),
+        safe_json_dumps(common_repository_refs),
     ])
     return hashlib.sha256(seed.encode("utf-8")).hexdigest()
 
@@ -2214,6 +2229,235 @@ def clone_analysis_repositories(repositories, clone_func, max_workers=4):
     return cloned_repositories
 
 
+def build_common_module_candidates(data):
+    """汇总产品配置中的公共组件候选，供代码引用扫描与按需联动拉取使用。"""
+    candidates = []
+    sources = []
+    for module in data.get("commonModules") or []:
+        if isinstance(module, dict):
+            sources.append(module)
+    for module in data.get("relatedModules") or []:
+        if isinstance(module, dict) and module.get("common"):
+            sources.append(module)
+
+    seen = set()
+    for module in sources:
+        name = str(module.get("moduleName") or module.get("module_name") or module.get("moduleId") or "").strip()
+        address = str(module.get("branchAddress") or module.get("repoUrl") or "").strip()
+        if not name or not address:
+            continue
+        key = normalize_service_module_name(name) or address
+        if key in seen:
+            continue
+        seen.add(key)
+        aliases = module.get("aliases") if isinstance(module.get("aliases"), list) else []
+        code_patterns = module.get("codePatterns") if isinstance(module.get("codePatterns"), list) else []
+        candidates.append({
+            "moduleId": str(module.get("moduleId") or module.get("module_id") or f"common:{name}"),
+            "moduleName": name,
+            "branchAddress": address,
+            "tagVersion": str(module.get("tagVersion") or "").strip(),
+            "common": True,
+            "aliases": [str(item).strip() for item in aliases if str(item).strip()],
+            "codePatterns": [str(item).strip() for item in code_patterns if str(item).strip()],
+        })
+    return candidates
+
+
+def common_module_matches_text(module, text):
+    """判断文本是否引用了指定公共组件，支持模块名别名和可选正则。"""
+    value = str(text or "")
+    if not value:
+        return False
+    for pattern in module.get("codePatterns") or []:
+        try:
+            if re.search(pattern, value, flags=re.IGNORECASE):
+                return True
+        except re.error:
+            logging.warning("公共组件 %s 的 codePatterns 正则无效：%s", module.get("moduleName"), pattern)
+    names = [module.get("moduleName"), *(module.get("aliases") or [])]
+    return any(module_name_matches_text(name, value) for name in names if name)
+
+
+def discover_common_module_references(source_repositories, common_modules, source_text="", max_matches=32):
+    """从主模块/关联模块代码和日志中识别真实引用的公共组件。"""
+    candidates = [
+        module for module in (common_modules or [])
+        if isinstance(module, dict) and module.get("moduleName") and module.get("branchAddress")
+    ]
+    if not candidates:
+        return []
+
+    references = {}
+    for repository in source_repositories or []:
+        repo_path = repository.get("repo_path") if isinstance(repository, dict) else None
+        if (
+            not repo_path
+            or not os.path.isdir(repo_path)
+            or repository.get("common")
+            or repository.get("role") == "common"
+        ):
+            continue
+        for file_path in iter_source_files(repo_path):
+            lines = read_text_lines(file_path)
+            if not lines:
+                continue
+            try:
+                relative_file = os.path.relpath(file_path, repo_path)
+            except ValueError:
+                relative_file = file_path
+            for line_index, line in enumerate(lines, start=1):
+                haystack = f"{relative_file}\n{line}"
+                for module in candidates:
+                    name = str(module.get("moduleName") or "")
+                    if name in references or not common_module_matches_text(module, haystack):
+                        continue
+                    references[name] = {
+                        "moduleId": module.get("moduleId"),
+                        "moduleName": name,
+                        "branchAddress": module.get("branchAddress"),
+                        "tagVersion": module.get("tagVersion") or "",
+                        "common": True,
+                        "matchedBy": "code",
+                        "sourceModuleName": repository.get("moduleName"),
+                        "sourceRepoPath": repo_path,
+                        "sourceFile": file_path,
+                        "file": relative_file,
+                        "line": line_index,
+                        "snippet": str(line).strip()[:240],
+                    }
+                    if len(references) >= max_matches:
+                        return list(references.values())
+
+    log_text = str(source_text or "")
+    if log_text:
+        for module in candidates:
+            name = str(module.get("moduleName") or "")
+            if name in references or not common_module_matches_text(module, log_text):
+                continue
+            references[name] = {
+                "moduleId": module.get("moduleId"),
+                "moduleName": name,
+                "branchAddress": module.get("branchAddress"),
+                "tagVersion": module.get("tagVersion") or "",
+                "common": True,
+                "matchedBy": "log",
+                "sourceModuleName": "",
+                "file": "",
+                "line": None,
+                "snippet": "",
+            }
+            if len(references) >= max_matches:
+                break
+    return list(references.values())
+
+
+def auto_pull_common_repositories(
+    source_repositories,
+    common_modules,
+    clone_func,
+    max_workers=4,
+    source_text="",
+    task_id=None,
+):
+    """识别公共组件引用并仅联动拉取命中的公共组件仓库。"""
+    references = discover_common_module_references(
+        source_repositories,
+        common_modules,
+        source_text=source_text,
+    )
+    if not references:
+        return {"references": [], "repositories": [], "skipped": []}
+
+    source_by_name = {
+        str(repository.get("moduleName") or ""): repository
+        for repository in (source_repositories or [])
+        if isinstance(repository, dict)
+        and repository.get("repo_path")
+        and repository.get("common")
+    }
+    clone_targets = []
+    reused_repositories = []
+    for reference in references:
+        module_name = str(reference.get("moduleName") or "")
+        existing = source_by_name.get(module_name)
+        if existing:
+            reused = dict(existing)
+            reused["autoPulled"] = False
+            reused["referenceEvidence"] = [reference]
+            reused_repositories.append(reused)
+            continue
+        clone_targets.append({
+            "role": "common",
+            "moduleId": reference.get("moduleId") or f"common:{reference.get('moduleName')}",
+            "moduleName": reference.get("moduleName"),
+            "branchAddress": reference.get("branchAddress"),
+            "tagVersion": reference.get("tagVersion") or "",
+            "common": True,
+            "metadataOnly": False,
+            "autoPulled": True,
+            "workspaceId": str(task_id or "shared"),
+            "referenceEvidence": [reference],
+        })
+
+    clone_errors = {}
+
+    def clone_with_error_capture(address, tag_version, workspace_id=None):
+        """捕获单个公共组件拉取错误，保证后续主分析仍可继续。"""
+        repository = next(
+            (
+                item for item in clone_targets
+                if item.get("branchAddress") == address
+                and str(item.get("tagVersion") or "") == str(tag_version or "")
+            ),
+            None,
+        )
+        if repository is None:
+            return clone_func(address, tag_version, workspace_id=workspace_id)
+        try:
+            return clone_func(
+                address,
+                tag_version,
+                workspace_id=workspace_id,
+            )
+        except Exception as exc:
+            detail = _sanitize_git_error(str(exc))
+            reason = f"公共组件仓库拉取失败：{detail}" if detail else "公共组件仓库拉取失败"
+            clone_errors[str(repository.get("moduleName") or "")] = reason
+            logging.warning(
+                "公共组件联动拉取失败，已跳过：module=%s, repo=%s, reason=%s",
+                repository.get("moduleName"),
+                repository.get("branchAddress"),
+                reason,
+            )
+            return None
+
+    cloned_repositories = clone_analysis_repositories(
+        clone_targets,
+        clone_with_error_capture,
+        max_workers=max_workers,
+    )
+    cloned_repositories = reused_repositories + cloned_repositories
+    cloned_names = {str(item.get("moduleName") or "") for item in cloned_repositories}
+    for repository in cloned_repositories:
+        repository["autoPulled"] = True
+    for repository in reused_repositories:
+        repository["autoPulled"] = False
+    skipped = []
+    for reference in references:
+        module_name = str(reference.get("moduleName") or "")
+        if module_name in cloned_names:
+            continue
+        skipped_reference = dict(reference)
+        skipped_reference["reason"] = clone_errors.get(module_name) or "未拉取到公共组件仓库"
+        skipped.append(skipped_reference)
+    return {
+        "references": references,
+        "repositories": cloned_repositories,
+        "skipped": skipped,
+    }
+
+
 def get_available_modules_for_product(product_id):
     """读取并返回 get_available_modules_for_product 对应的业务数据，保持现有调用约定。"""
     if not product_id:
@@ -2909,7 +3153,7 @@ def build_code_findings(code_snippets):
 
 
 def build_common_component_reference_context(common_repositories):
-    """把已声明的公共组件整理成引用关系，避免把它们误当成需要 Tag 的可拉取仓库。"""
+    """把已发现并联动拉取的公共组件整理成可核验的引用上下文。"""
     components = []
     for repository in common_repositories or []:
         if not isinstance(repository, dict) or not repository.get("common"):
@@ -2918,7 +3162,18 @@ def build_common_component_reference_context(common_repositories):
         if not name:
             continue
         address = str(repository.get("branchAddress") or "").strip()
-        label = f"{name}（仓库：{address}）" if address else name
+        reference_parts = []
+        source_module = str(repository.get("sourceModuleName") or "").strip()
+        reference_file = str(repository.get("file") or "").strip()
+        reference_line = repository.get("line")
+        if source_module:
+            reference_parts.append(f"来源模块：{source_module}")
+        if reference_file:
+            reference_parts.append(
+                f"引用位置：{reference_file}:{reference_line}" if reference_line else f"引用位置：{reference_file}"
+            )
+        detail = "；".join(part for part in [f"仓库：{address}" if address else "", *reference_parts] if part)
+        label = f"{name}（{detail}）" if detail else name
         if label not in components:
             components.append(label)
     if not components:

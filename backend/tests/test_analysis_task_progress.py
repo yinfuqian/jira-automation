@@ -25,14 +25,30 @@ class FakeTask:
 
 
 def load_tasks_module():
+    app_stub = types.ModuleType("app")
+    config_stub = types.ModuleType("app.config")
+    config_stub.DEFAULT_REPO_CACHE_DIR = "/tmp/jira-automation-repos"
+    app_stub.config = config_stub
     extensions_stub = types.ModuleType("extensions")
     extensions_stub.celery = FakeCelery()
-    sys.modules["extensions"] = extensions_stub
-
-    spec = importlib.util.spec_from_file_location("analysis_tasks_under_test", TASKS_PATH)
-    module = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(module)
-    return module
+    stub_modules = {
+        "app": app_stub,
+        "app.config": config_stub,
+        "extensions": extensions_stub,
+    }
+    previous_modules = {name: sys.modules.get(name) for name in stub_modules}
+    try:
+        sys.modules.update(stub_modules)
+        spec = importlib.util.spec_from_file_location("analysis_tasks_under_test", TASKS_PATH)
+        module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(module)
+        return module
+    finally:
+        for name, previous in previous_modules.items():
+            if previous is None:
+                sys.modules.pop(name, None)
+            else:
+                sys.modules[name] = previous
 
 
 class AnalysisTaskProgressTests(unittest.TestCase):
@@ -241,6 +257,48 @@ class AnalysisTaskProgressTests(unittest.TestCase):
         self.assertEqual(evidence["related_code_module_count"], 1)
         self.assertEqual(evidence["code_context_modules"][1]["moduleName"], "see-dataset")
         self.assertEqual(evidence["selected_code_repositories"][1]["tagVersion"], "release-1")
+
+    def test_build_analysis_evidence_includes_auto_pulled_common_module_metadata(self):
+        module = load_tasks_module()
+        references = [{
+            "moduleName": "bot-common",
+            "branchAddress": "https://git.example/bot-common.git",
+            "matchedBy": "code",
+            "file": "pom.xml",
+            "line": 18,
+        }]
+        common_repositories = [{
+            "moduleName": "bot-common",
+            "branchAddress": "https://git.example/bot-common.git",
+            "role": "common",
+            "common": True,
+            "repo_path": "/repos/bot-common-default",
+            "autoPulled": True,
+        }]
+        skipped = [{
+            "moduleName": "wenben-filebeat",
+            "branchAddress": "https://git.example/wenben-filebeat.git",
+            "reason": "公共组件仓库拉取失败：network denied",
+        }]
+
+        evidence = module.build_analysis_evidence(
+            error_info=[],
+            resolved_errors=[],
+            code_snippets=[],
+            repositories=common_repositories,
+            common_module_references=references,
+            auto_pulled_common_modules=common_repositories,
+            common_pull_skipped=skipped,
+        )
+
+        self.assertEqual(evidence["common_module_reference_count"], 1)
+        self.assertEqual(evidence["common_module_references"], references)
+        self.assertEqual(evidence["auto_pulled_common_module_count"], 1)
+        self.assertEqual(evidence["auto_pulled_common_modules"], common_repositories)
+        self.assertEqual(evidence["common_pull_skipped_count"], 1)
+        self.assertEqual(evidence["common_pull_skipped"], skipped)
+        self.assertTrue(evidence["selected_code_repositories"][0]["common"])
+        self.assertTrue(evidence["selected_code_repositories"][0]["autoPulled"])
 
     def test_build_analysis_evidence_includes_group_language_and_ai_call_metadata(self):
         module = load_tasks_module()

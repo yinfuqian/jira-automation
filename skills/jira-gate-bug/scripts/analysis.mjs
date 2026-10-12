@@ -7,6 +7,7 @@
  */
 import { escapeHtml, renderAnalysisHtml } from "./report.mjs";
 import {
+  listConfiguredCommonModules,
   resolveGitTag,
   resolveModuleMapping,
   resolveProductMapping,
@@ -95,7 +96,13 @@ export async function selftest(options = {}) {
 export async function resolveProduct(value, options = {}) {
   const wanted = String(value || "").trim();
   if (!wanted) throw new Error("缺少产品（--product 产品名称或 id）");
-  if (/^\d+$/.test(wanted)) return { id: wanted, name: "" };
+  if (/^\d+$/.test(wanted)) {
+    const data = await apiRequest("GET", "/product/get", options);
+    const products = (data && data.products) || [];
+    const exact = products.find((item) => String(item.id) === wanted);
+    if (!exact) throw new Error("故障分析工具中没有找到产品 ID：" + wanted);
+    return { id: wanted, name: String(exact.name || "") };
+  }
   const data = await apiRequest("GET", "/product/get?name=" + encodeURIComponent(wanted), options);
   const products = (data && data.products) || [];
   const exact = products.find((item) => String(item.name || "").trim().toLowerCase() === wanted.toLowerCase())
@@ -134,8 +141,8 @@ async function resolveScopeEntry(input = {}, options = {}, resolvedProduct = nul
   let configuredCommon = false;
   let configError = null;
   try {
-    const productMapping = resolveProductMapping(input.product, null, options.configPath);
-    const moduleMapping = resolveModuleMapping(productMapping, input.module);
+    const productMapping = resolveProductMapping(product.name || input.product, null, options.configPath);
+    const moduleMapping = resolveModuleMapping(productMapping, module.name || input.module);
     configuredRepo = moduleMapping.repoUrl;
     configuredCommon = Boolean(moduleMapping.value.common);
     if (input.version) {
@@ -172,6 +179,11 @@ async function resolveScopeEntry(input = {}, options = {}, resolvedProduct = nul
 export async function resolveScope(input = {}, options = {}) {
   const product = await resolveProduct(input.product, options);
   const primary = await resolveScopeEntry(input, options, product);
+  const commonModules = listConfiguredCommonModules(
+    product.name || input.product,
+    null,
+    options.configPath,
+  );
   const relatedModules = [];
   const seen = new Set([String(primary.moduleId)]);
   for (const item of input.related || []) {
@@ -187,7 +199,7 @@ export async function resolveScope(input = {}, options = {}) {
     if (related.common) relatedEntry.common = true;
     relatedModules.push(relatedEntry);
   }
-  return { ...primary, relatedModules };
+  return { ...primary, relatedModules, commonModules };
 }
 
 /**
@@ -378,6 +390,7 @@ export async function analyzeDirectory(dir, input = {}, options = {}) {
       branchAddress: scope.branchAddress,
       tagVersion: scope.tagVersion,
       relatedModules: scope.relatedModules || [],
+      commonModules: scope.commonModules || [],
       source_type: "file",
       log_ids: upload.log_ids,
       file_path: upload.file_paths[0],
@@ -392,6 +405,7 @@ export async function analyzeDirectory(dir, input = {}, options = {}) {
       branchAddress: scope.branchAddress,
       tagVersion: scope.tagVersion,
       relatedModules: scope.relatedModules || [],
+      commonModules: scope.commonModules || [],
       source_type: "image",
       image_tag: upload.image_tag,
       image_description: upload.image_description,

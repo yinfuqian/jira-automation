@@ -129,7 +129,7 @@ async function main() {
         related: parseRelatedOptions(options),
       }, callArgs);
       await analysis.validateScopeTags(scope, callArgs);
-      console.log(`[analysis] 分析范围：产品=${scope.productName || scope.productId} 模块=${scope.moduleName || scope.moduleId} Tag=${scope.tagVersion} 关联模块=${(scope.relatedModules || []).length}`);
+      console.log(`[analysis] 分析范围：产品=${scope.productName || scope.productId} 模块=${scope.moduleName || scope.moduleId} Tag=${scope.tagVersion} 关联模块=${(scope.relatedModules || []).length} 公共组件候选=${(scope.commonModules || []).length}`);
 
       const payload = await analysis.analyzeDirectory(options.dir, { scope }, {
         ...callArgs,

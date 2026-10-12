@@ -482,6 +482,60 @@ console.log(JSON.stringify(resolved));
         }])
 
     @unittest.skipIf(NODE_BIN is None, "需要 node 运行时才能执行技能脚本")
+    def test_scope_resolution_accepts_numeric_product_id_and_loads_common_candidates(self):
+        """通过产品 ID 调用时，也必须解析出产品名并把公共组件候选提交给分析服务。"""
+        analysis_url = (SKILL_DIR / "scripts" / "analysis.mjs").as_uri()
+        with tempfile.TemporaryDirectory() as temp_dir:
+            config_path = Path(temp_dir) / "scope-mapping.json"
+            config_path.write_text(json.dumps({
+                "versionRules": [{"name": "exact-tag", "pattern": "^.+$", "ref": "{version}"}],
+                "products": {
+                    "see": {
+                        "modules": {
+                            "see-task": {"repoUrl": "https://code.in.wezhuiyi.com/see/see-task.git"},
+                            "see-common-util": {
+                                "repoUrl": "https://code.in.wezhuiyi.com/see/see-common-util.git",
+                                "common": True,
+                            },
+                        }
+                    }
+                },
+            }, ensure_ascii=False), encoding="utf-8")
+            driver = """
+process.env.ANALYSIS_API_TOKEN = "test-token";
+globalThis.fetch = async (url) => {
+  const target = String(url);
+  let payload = {};
+  if (target.includes("/product/get")) payload = { products: [{ id: 1, name: "see" }] };
+  else if (target.includes("/module/get")) payload = { modules: [{ module_id: 2, module_name: "see-task" }] };
+  else return { ok: false, status: 404, text: async () => JSON.stringify({ error: target }) };
+  return { ok: true, status: 200, text: async () => JSON.stringify(payload) };
+};
+const { resolveScope } = await import("__ANALYSIS__");
+const resolved = await resolveScope({
+  product: "1",
+  module: "2",
+  version: "v1.2.3",
+}, { configPath: process.argv[1] });
+console.log(JSON.stringify(resolved));
+""".replace("__ANALYSIS__", analysis_url)
+
+            output = self.run_node(driver, str(config_path))
+
+        payload = json.loads(output.strip().splitlines()[-1])
+        self.assertEqual(payload["productId"], "1")
+        self.assertEqual(payload["productName"], "see")
+        self.assertEqual(payload["moduleName"], "see-task")
+        self.assertEqual(payload["commonModules"], [{
+            "moduleId": "common:see-common-util",
+            "moduleName": "see-common-util",
+            "branchAddress": "https://code.in.wezhuiyi.com/see/see-common-util.git",
+            "common": True,
+            "aliases": [],
+            "codePatterns": [],
+        }])
+
+    @unittest.skipIf(NODE_BIN is None, "需要 node 运行时才能执行技能脚本")
     def test_fault_scope_rejects_ambiguous_jira_values(self):
         """Jira 模块或版本有多个候选时必须返回候选，不能猜第一个。"""
         jira_url = (SKILL_DIR / "scripts" / "jira.mjs").as_uri()
