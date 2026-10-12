@@ -291,7 +291,9 @@ node <技能目录>/scripts/report-conclusion.mjs "reports/review-report-<时间
 - **产品原型初稿**：附件里的业务 HTML（如 `Prototype.html`）及其必要资源；压缩包里的 HTML 用 `__unpacked/` 下的实际路径。
 - 需求单的概要、描述、子任务、历史评论可作为补充证据，但不能替代 PRD 的业务事实。
 
-**产出落地**：报告写到 `<工作目录>/work/jira-gate/<KEY>/design/<KEY>-原型设计准入报告.html`，截图等中间产物放同目录下的 `evidence/`；**不要写进只读的技能目录**。
+**报告生成方式**：不要手写 HTML。先跑 `node <技能目录>/scripts/build-report.mjs --prd "<PRD路径>" --dump-index` 拿到 PRD 编号索引，再照 `<技能目录>/references/content-example.json` 的字段把结论、问题、映射填成一份内容 JSON，最后跑 `node <技能目录>/scripts/build-report.mjs --prd "<PRD路径>" --content "<内容JSON>" --out "<报告HTML>"` 合成自包含 HTML。脚本只用 Node 内置模块，**不需要 `npm install`**，也不要改模板的 `<style>`、`<script>`。
+
+**产出落地**：内容 JSON 与报告 HTML 都写到 `<工作目录>/work/jira-gate/<KEY>/design/`（如 `<KEY>-原型设计准入内容.json`、`<KEY>-原型设计准入报告.html`），截图等中间产物放同目录下的 `evidence/`；**不要写进只读的技能目录**。
 
 **结论口径**：退回补齐 / 有条件通过 / 通过 / 审核未完成（以 `review-jira-design` 的 `SKILL.md` §6 为准），在对话摘要里一并给出。
 

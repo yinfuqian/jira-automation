@@ -6,285 +6,427 @@
 <title>原型设计准入审核 · {{需求名称}}</title>
 <style>
 :root{
-  --bg:#ffffff;
-  --ink:#37352f;
-  --ink2:#4d4b45;
-  --muted:#7d7b75;
-  --faint:#9d9b94;
-  --line:#e8e7e4;
-  --line2:#f1f0ed;
-  --red:#bd4a41;
-  --amber:#a97a26;
-  --blue:#3a76a0;
-  --green:#4a8168;
+  --ink:#232220; --ink2:#454340; --muted:#75736d; --faint:#9c9a93;
+  --line:#e7e6e2; --line2:#f1f0ed; --wash:#faf9f7;
+  --red:#b8463d; --amber:#9d7222; --blue:#376f97; --green:#437a61;
   --mono:"SF Mono",ui-monospace,Consolas,"Cascadia Mono",monospace;
+  --s1:8px; --s2:16px; --s3:24px; --s4:32px; --s5:48px; --s6:72px;
 }
 *{box-sizing:border-box}
-body{
-  margin:0;background:var(--bg);color:var(--ink);
-  font:15px/1.7 -apple-system,BlinkMacSystemFont,"SF Pro Text","Segoe UI","PingFang SC","Hiragino Sans GB","Microsoft YaHei",sans-serif;
-  -webkit-font-smoothing:antialiased;text-rendering:optimizeLegibility;
-}
-main{max-width:1120px;margin:0 auto;padding:60px 48px 80px}
-code{font:12.5px/1.5 var(--mono);color:#a2504a;background:#f2f1ee;border-radius:3px;padding:1px 5px;word-break:break-word}
+body{margin:0;background:#fff;color:var(--ink);
+  font:15.5px/1.85 -apple-system,BlinkMacSystemFont,"SF Pro Text","Segoe UI","PingFang SC","Hiragino Sans GB","Microsoft YaHei",sans-serif;
+  -webkit-font-smoothing:antialiased;text-rendering:optimizeLegibility}
+main{max-width:1000px;margin:0 auto;padding:var(--s6) 44px 88px}
+p{margin:0}
+b,strong{font-weight:650}
+code{font:13px/1.5 var(--mono);color:#9d4a44;background:#f3f2ef;border-radius:3px;padding:1px 5px;word-break:break-word}
 
-/* 页头 */
-.top{display:flex;justify-content:space-between;align-items:flex-start;gap:56px;padding-bottom:26px;border-bottom:1px solid var(--line)}
-.eyebrow{color:var(--faint);font:600 11px/1.4 var(--mono);letter-spacing:.15em}
-.top h1{margin:12px 0 8px;font-size:30px;line-height:1.25;font-weight:650;letter-spacing:-.022em}
-.top .sub{margin:0;color:var(--muted);font-size:13.5px}
-.decision{flex:0 0 auto;min-width:196px;max-width:264px;text-align:right;padding-top:4px}
-.decision .lab{display:block;color:var(--faint);font-size:12px;letter-spacing:.02em}
-.decision strong{display:block;margin:5px 0 7px;font-size:21px;line-height:1.3;font-weight:650;letter-spacing:-.012em}
-.decision .why{display:block;color:var(--muted);font-size:12.5px;line-height:1.65}
-.decision.pass strong{color:var(--green)}
-.decision.conditional strong{color:var(--amber)}
-.decision.return strong{color:var(--red)}
-.decision.pending strong{color:var(--blue)}
+.eyebrow{color:var(--faint);font:600 11.5px/1.5 var(--mono);letter-spacing:.16em;text-transform:uppercase}
+.hero{padding-bottom:var(--s5)}
+.hero h1{margin:14px 0 10px;font-size:clamp(30px,4.2vw,40px);line-height:1.22;font-weight:650;letter-spacing:-.022em}
+.hero .sub{color:var(--muted);font-size:14px;line-height:1.75}
 
-/* 路径与指标：三列，仅用竖分隔线 */
-.meta,.metrics{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));border-bottom:1px solid var(--line)}
-.meta>div,.metric{padding:18px 26px 20px}
-.meta>div:first-child,.metric:first-child{padding-left:0}
-.meta>div:last-child,.metric:last-child{padding-right:0}
-.meta>div+div,.metric+.metric{border-left:1px solid var(--line2)}
-.meta b,.metric b{display:block;color:var(--faint);font-size:12px;font-weight:500;letter-spacing:.02em}
-.meta span{display:block;margin-top:5px;font-size:13px;line-height:1.62;color:var(--ink2);overflow-wrap:anywhere}
-.metric strong{display:block;margin:9px 0 5px;font-size:24px;line-height:1.2;font-weight:650;letter-spacing:-.015em}
-.metric p{margin:0;color:var(--muted);font-size:12.5px;line-height:1.62}
-.metric.is-bad strong{color:var(--red)}
-.metric.is-ok strong{color:var(--green)}
-.metric.is-warn strong{color:var(--amber)}
+.verdicts{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));border-top:1px solid var(--line);border-bottom:1px solid var(--line)}
+.vcell{padding:var(--s4) var(--s3) 34px}
+.vcell:first-child{padding-left:0}
+.vcell:last-child{padding-right:0}
+.vcell+.vcell{border-left:1px solid var(--line2);padding-left:34px}
+.vcell .k{display:block;color:var(--faint);font-size:12.5px;font-weight:500;letter-spacing:.02em}
+.vcell strong{display:block;margin:12px 0;font-size:27px;line-height:1.22;font-weight:650;letter-spacing:-.014em}
+.vcell p{color:var(--muted);font-size:14px;line-height:1.8}
+.vcell.return strong{color:var(--red)}
+.vcell.pass strong{color:var(--green)}
+.vcell.conditional strong{color:var(--amber)}
+.vpoints{margin:16px 0 0;padding:0;list-style:none}
+.vpoints>li{position:relative;padding:4px 0 4px 16px;color:var(--muted);font-size:13.5px;line-height:1.75}
+.vpoints>li:before{content:"";position:absolute;left:1px;top:13px;width:4px;height:4px;border-radius:50%;background:#d5d3ce}
+.vgrp{display:block;margin:18px 0 0;color:var(--faint);font-size:11.5px;font-weight:600;letter-spacing:.1em;text-transform:uppercase}
+.vgrp:first-child{margin-top:16px}
+.uitems{margin:9px 0 0;padding:0;list-style:none;column-count:2;column-gap:22px}
+.uitems li{position:relative;padding:2px 0 2px 15px;color:var(--muted);font-size:13.5px;line-height:1.75;break-inside:avoid}
+.uitems li:before{content:"";position:absolute;left:1px;top:11px;width:4px;height:4px;border-radius:50%;background:#d5d3ce}
+.ref{position:relative;border-bottom:1px dotted #cbc9c4;cursor:pointer;white-space:nowrap}
+.ref-id{font:600 12.5px/1.6 var(--mono);letter-spacing:.04em;color:#7a7871;background:#f3f2ef;border:1px solid #e7e6e2;border-bottom-color:#e7e6e2;border-radius:3px;padding:0 5px;margin:0 1px}
+.ref:hover{border-bottom-color:#9c9a93}
+.ref.is-open{color:var(--ink);border-bottom-color:#b9b7b2}
+.tipbox{position:fixed;left:0;top:0;z-index:60;width:max-content;min-width:240px;max-width:min(440px,calc(100vw - 32px));max-height:min(58vh,440px);overflow:auto;overscroll-behavior:contain;padding:14px 16px;background:#fff;color:var(--ink2);border:1px solid #e3e2de;border-radius:8px;font:400 12.5px/1.72 -apple-system,BlinkMacSystemFont,"PingFang SC","Microsoft YaHei",sans-serif;letter-spacing:0;text-transform:none;white-space:normal;box-shadow:0 10px 28px rgba(35,34,32,.12),0 2px 6px rgba(35,34,32,.06);opacity:0;visibility:hidden;transform:translateY(3px);transition:opacity .13s,transform .13s,visibility .13s;pointer-events:none;scrollbar-width:thin;scrollbar-color:#dcdad5 transparent}
+.tipbox.is-open{opacity:1;visibility:visible;transform:translateY(0);pointer-events:auto}
+.tipbox::-webkit-scrollbar{width:9px;height:9px}
+.tipbox::-webkit-scrollbar-track{background:transparent;margin:8px 0}
+.tipbox::-webkit-scrollbar-thumb{background:#e0ded9;border-radius:999px;border:3px solid #fff;background-clip:padding-box}
+.tipbox::-webkit-scrollbar-thumb:hover{background:#cbc9c4;border:3px solid #fff;background-clip:padding-box}
+.tipbox::-webkit-scrollbar-corner{background:transparent}
+.tipbox b{display:block;margin:0 0 10px;padding-bottom:9px;border-bottom:1px solid var(--line2);color:var(--faint);font:600 11px/1.6 var(--mono);letter-spacing:.06em;text-transform:none}
+.tipbox .tp{margin:0;color:var(--ink2);font-size:12.5px;line-height:1.75}
+.tipbox .tp+.tp{margin-top:8px}
+.tipbox .tlist{margin:0;padding:0;list-style:none}
+.tipbox .tlist>li{position:relative;padding:3px 0 3px 15px;color:var(--ink2);font-size:12.5px;line-height:1.75}
+.tipbox .tlist>li+li{margin-top:2px}
+.tipbox .tlist>li:before{content:"";position:absolute;left:2px;top:11px;width:4px;height:4px;border-radius:50%;background:#d5d3ce}
+.tipbox ol.tlist{counter-reset:tol}
+.tipbox ol.tlist>li{counter-increment:tol;padding-left:21px}
+.tipbox ol.tlist>li:before{content:counter(tol)".";left:0;top:3px;width:auto;height:auto;border-radius:0;background:none;color:var(--faint);font:600 11px/1.75 var(--mono)}
+.tipbox .lr{padding:5px 0}
+.tipbox .lr+.lr{border-top:1px solid var(--line2)}
+.tipbox .lk{display:block;margin-bottom:1px;color:var(--faint);font-weight:600;font-size:11.5px;letter-spacing:.02em}
+.tipbox .lv{display:block;color:var(--ink2);font-size:12.5px;line-height:1.75}
+.sr{position:absolute;width:1px;height:1px;overflow:hidden;clip:rect(0 0 0 0);white-space:nowrap}
+.total{display:flex;flex-wrap:wrap;gap:6px 22px;padding:20px 0 0;color:var(--muted);font-size:13px}
 
-/* 章节：靠分隔线分段，不做卡片 */
-.panel{padding:38px 0;border-bottom:1px solid var(--line)}
-.panel:last-of-type{border-bottom:0;padding-bottom:6px}
-.panel>h2{margin:0 0 16px;font-size:20px;line-height:1.38;font-weight:650;letter-spacing:-.016em}
-.lead{margin:0;font-size:15.5px;line-height:1.85;color:var(--ink2)}
+.block{margin-top:var(--s6)}
+.block-head h2{margin:10px 0 0;font-size:23px;line-height:1.35;font-weight:650;letter-spacing:-.018em}
 
-/* 需求映射表 */
-.map-wrap{overflow-x:auto}
-table.map{width:100%;min-width:780px;border-collapse:collapse;font-size:14px}
-table.map th{padding:0 18px 9px 0;border-bottom:1px solid var(--line);color:var(--faint);font-size:12px;font-weight:500;text-align:left;white-space:nowrap}
-table.map td{padding:12px 18px 12px 0;border-bottom:1px solid var(--line2);vertical-align:top;line-height:1.65}
-table.map tr:last-child td{border-bottom:0}
-table.map th:last-child,table.map td:last-child{padding-right:0}
-table.map td:first-child{font-weight:600;white-space:nowrap}
+.tools{display:flex;flex-wrap:wrap;align-items:center;gap:8px;margin:24px 0 6px}
+.tools button{font:inherit;font-size:13px;line-height:1;color:var(--muted);background:#fff;border:1px solid var(--line);border-radius:999px;padding:7px 14px;cursor:pointer;transition:color .15s,border-color .15s,background .15s}
+.tools button:hover{color:var(--ink);border-color:#d5d3ce}
+.tools button[aria-pressed="true"]{color:var(--ink);background:var(--wash);border-color:#d5d3ce}
+.tools .spacer{flex:1 1 auto}
+.tools .link{border:0;background:none;padding:7px 2px;text-decoration:underline;text-underline-offset:4px;text-decoration-color:#dcdad5;text-decoration-thickness:1px}
 
-/* 级别：小圆点 + 文字，不做胶囊底 */
-.level{display:inline-flex;align-items:center;gap:6px;font-size:12px;font-weight:600;white-space:nowrap;color:var(--muted)}
-.level::before{content:"";width:6px;height:6px;border-radius:50%;background:currentColor;flex:0 0 auto}
+.issue{position:relative;border-top:1px solid var(--line);padding:34px 0 38px}
+.issue:first-child{border-top:0;padding-top:6px}
+.issue.hidden{display:none}
+.issue-rail{position:absolute;left:-20px;top:36px;bottom:38px;width:2px;border-radius:2px;background:var(--line)}
+.issue.bad .issue-rail{background:#e3b9b4}
+.issue.warn .issue-rail{background:#e2cfa5}
+.issue.info .issue-rail{background:#bcd2e2}
+.issue-top{display:flex;align-items:center;gap:14px}
+.issue-id{font:600 12px/1.6 var(--mono);color:var(--faint);letter-spacing:.06em}
+.level{display:inline-flex;align-items:center;gap:7px;font-size:12.5px;font-weight:600;white-space:nowrap;color:var(--muted)}
+.level::before{content:"";width:7px;height:7px;border-radius:50%;background:currentColor;flex:0 0 auto}
 .level.bad{color:var(--red)}
 .level.warn{color:var(--amber)}
 .level.info{color:var(--blue)}
 .level.ok{color:var(--green)}
+.issue-title{margin:12px 0 0;font-size:18px;line-height:1.5;font-weight:650;letter-spacing:-.008em;max-width:64ch}
+.fact{margin-top:22px;max-width:66ch}
+.fact .k{display:block;color:var(--faint);font-size:11.5px;font-weight:600;letter-spacing:.14em;text-transform:uppercase}
+.fact p{margin-top:8px;color:var(--ink2);font-size:15.5px;line-height:1.85}
+.fact p.lead{color:var(--ink)}
+.fact p.soft{color:var(--muted);font-size:15px}
+.owner{display:inline-block;font-size:12.5px;line-height:1.6;padding:1px 8px;margin-right:6px;border-radius:3px;background:#eef3f7;color:#2f6389;font-weight:600;white-space:nowrap}
 
-/* 问题：一条一段，靠分隔线区隔 */
-.issue-list{display:block}
-.issue{border-top:1px solid var(--line);padding:24px 0 26px}
-.issue:first-child{border-top:0;padding-top:2px}
-.issue:last-child{padding-bottom:4px}
-.issue-head{display:flex;align-items:center;gap:14px;flex-wrap:wrap}
-.issue-id{font:600 12.5px/1.6 var(--mono);color:var(--faint);letter-spacing:.02em}
-.issue-title{margin:0;font-size:15.5px;line-height:1.5;font-weight:650;letter-spacing:-.006em}
-.issue-body{display:grid;grid-template-columns:minmax(0,1.08fr) minmax(0,1fr);column-gap:44px;margin-top:14px}
-.facts,.callouts{display:grid;grid-template-columns:max-content minmax(0,1fr);column-gap:22px;align-content:start}
-.callouts{border-left:1px solid var(--line2);padding-left:34px}
-.fact,.callout{display:contents}
-.fact .k,.callout .k{grid-column:1;padding:8px 0;color:var(--faint);font-size:14px;line-height:1.72;white-space:nowrap}
-.fact .v{grid-column:2;padding:8px 0;font-size:14px;line-height:1.72;color:var(--ink2)}
-.callout .k{font-weight:600}
-.callout p{grid-column:2;margin:0;padding:8px 0;font-size:14px;line-height:1.72;color:var(--ink2)}
-.callout.impact .k{color:var(--red)}
-.callout.action .k{color:var(--blue)}
-.callout.done .k{color:var(--green)}
-.owner{font-weight:650;color:var(--blue)}
-
-/* 证据：内联展开，PRD 与原型左右对照 */
-[hidden]{display:none!important}
-.evidence-toggle{appearance:none;background:none;border:0;margin-left:auto;padding:2px 0;color:var(--blue);font-family:inherit;font-size:12.5px;font-weight:600;line-height:1.6;cursor:pointer;white-space:nowrap;border-bottom:1px solid transparent;transition:border-color .15s,color .15s}
-.evidence-toggle:hover{color:#2a5d84;border-bottom-color:currentColor}
-.evidence-toggle::after{content:"↓";margin-left:5px;font-size:11px}
-.evidence-toggle[aria-expanded="true"]::after{content:"↑"}
-.evidence-inline{margin-top:18px;padding:16px 20px 18px;background:#fafaf9;border-left:2px solid #e4e3df;border-radius:0 4px 4px 0}
-.evidence-inline-head{display:flex;align-items:center;gap:12px;flex-wrap:wrap;margin-bottom:2px}
-.evidence-inline-head h4{margin:0;font-size:14.5px;line-height:1.5;font-weight:650;letter-spacing:-.004em}
-.evidence-inline .compare{margin-top:12px}
-.evidence-id{font:600 12.5px/1.6 var(--mono);color:var(--faint);letter-spacing:.02em}
-.evidence-ref{color:var(--faint);font-size:12.5px}
-.evidence-ref::before{content:"·";margin-right:7px}
-.compare{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1fr);margin-top:14px}
-.side{padding:0 36px}
-.side:first-child{padding-left:0}
-.side+.side{border-left:1px solid var(--line2)}
-.evidence-inline .side{padding:0 26px}
-.evidence-inline .side:first-child{padding-left:0}
-.evidence-inline .side:last-child{padding-right:0}
-.side .k{display:block;margin-bottom:7px;font-size:12px;font-weight:600;letter-spacing:.02em;color:var(--faint)}
+.evidence{margin-top:28px;border-top:1px dashed var(--line)}
+.evidence>summary{display:flex;align-items:center;gap:10px;padding:14px 0 2px;cursor:pointer;list-style:none;font-size:13px;color:var(--muted)}
+.evidence>summary::-webkit-details-marker{display:none}
+.evidence>summary:hover{color:var(--ink)}
+.chev{width:0;height:0;flex:0 0 auto;border-left:5px solid var(--faint);border-top:4.5px solid transparent;border-bottom:4.5px solid transparent;transition:transform .18s}
+.evidence[open] .chev{transform:rotate(90deg)}
+.ev-label{color:var(--ink2);font-weight:600;flex:0 0 auto}
+.ev-refs{display:flex;align-items:center;gap:8px;min-width:0;color:var(--faint);font-size:12.5px}
+.ev-refs .ref{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.ev-refs .arrow{color:#c9c7c2;flex:0 0 auto}
+.evidence-body{padding-top:20px}
+.compare{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1fr);gap:0 44px}
+.side+.side{border-left:1px solid var(--line2);padding-left:44px}
+.side .k{display:block;font-size:11.5px;font-weight:600;letter-spacing:.14em;text-transform:uppercase;margin-bottom:12px;color:var(--faint)}
 .side.prd .k{color:var(--green)}
 .side.proto .k{color:var(--red)}
-.side p{margin:0;font-size:14.5px;line-height:1.78;color:var(--ink2)}
-.shots{display:grid;grid-template-columns:repeat(auto-fit,minmax(280px,1fr));gap:18px;margin-top:18px}
-.shots figure{margin:0;max-width:760px}
-.shots img{display:block;width:auto;height:auto;max-width:100%;max-height:520px;border:1px solid var(--line);border-radius:4px;background:#fff}
-.shots figcaption{margin-top:7px;color:var(--faint);font-size:12px;line-height:1.6}
-.evidence-foot{display:flex;flex-wrap:wrap;gap:6px 30px;margin-top:16px;padding-top:11px;border-top:1px solid var(--line2);color:var(--muted);font-size:12.5px;line-height:1.65}
-.evidence-foot b{color:var(--faint);font-weight:500;margin-right:6px}
+.side p{color:var(--ink2);font-size:15px;line-height:1.85;overflow-wrap:break-word}
+.side .src{display:block;margin-top:14px;color:var(--faint);font-size:13px;line-height:1.75}
+.side .src:before{content:"— ";color:#d3d1cc}
+.shots{display:grid;gap:20px;margin-top:26px}
+.shots figure{margin:0;max-width:100%}
+.shots img{display:block;width:auto;height:auto;max-width:100%;max-height:460px;border:1px solid var(--line);border-radius:4px;background:#fff}
+.shots figcaption{margin-top:8px;color:var(--faint);font-size:12.5px}
+.tech{display:grid;grid-template-columns:78px minmax(0,1fr);gap:0 20px;margin-top:26px;padding-top:18px;border-top:1px solid var(--line2)}
+.tech .k{color:var(--faint);font-size:11.5px;font-weight:600;letter-spacing:.14em;text-transform:uppercase;line-height:2}
+.tech .v{color:#8d8b85;font:12.5px/1.85 var(--mono);overflow-wrap:anywhere}
+.ev-note{margin-top:20px;padding-top:16px;border-top:1px solid var(--line2);color:var(--faint);font-size:12.5px;line-height:1.75}
 
-/* 清单与说明 */
+.map-wrap{overflow-x:auto}
+table.map{width:100%;min-width:720px;border-collapse:collapse;font-size:14.5px}
+table.map th{padding:0 18px 12px 0;border-bottom:1px solid var(--line);color:var(--faint);font-size:11.5px;font-weight:600;letter-spacing:.1em;text-transform:uppercase;text-align:left;white-space:nowrap}
+table.map td{padding:14px 18px 14px 0;border-bottom:1px solid var(--line2);vertical-align:top;line-height:1.75;color:var(--ink2)}
+table.map tr:last-child td{border-bottom:0}
+table.map th:last-child,table.map td:last-child{padding-right:0}
+table.map td.req{font-weight:650;color:var(--ink);min-width:200px}
+table.map td.loc{min-width:180px;color:var(--muted)}
+table.map tr.hidden{display:none}
+
 ol.checklist{margin:0;padding:0;list-style:none;counter-reset:c}
-ol.checklist li{counter-increment:c;position:relative;padding:9px 0 9px 32px;border-bottom:1px solid var(--line2);font-size:14px;line-height:1.72}
+ol.checklist li{counter-increment:c;position:relative;padding:14px 0 14px 34px;border-bottom:1px solid var(--line2);color:var(--ink2);font-size:15px;line-height:1.82}
 ol.checklist li:last-child{border-bottom:0;padding-bottom:0}
-ol.checklist li::before{content:counter(c);position:absolute;left:0;top:9px;color:var(--faint);font:600 12.5px/1.72 var(--mono)}
-.note{margin:0;color:var(--ink2);font-size:14.5px;line-height:1.8}
-.foot{margin:34px 0 0;padding-top:16px;border-top:1px solid var(--line);color:var(--faint);font-size:12px;line-height:1.7}
+ol.checklist li::before{content:counter(c);position:absolute;left:0;top:14px;color:var(--faint);font:600 12.5px/1.82 var(--mono)}
+ul.note{margin:0;padding:0;list-style:none}
+ul.note li{position:relative;padding:16px 0 16px 22px;color:var(--ink2);font-size:15px;line-height:1.82}
+ul.note li+li{border-top:1px solid var(--line2)}
+ul.note li::before{content:"";position:absolute;left:2px;top:25px;width:5px;height:5px;border-radius:50%;background:#d8d6d1}
+
+ol.points{counter-reset:p;margin:0;padding:0;list-style:none}
+ol.points>li{counter-increment:p;position:relative;padding:20px 0 20px 54px;border-bottom:1px solid var(--line2)}
+ol.points>li:first-child{padding-top:0}
+ol.points>li:first-child:before{top:2px}
+ol.points>li:last-child{border-bottom:0;padding-bottom:0}
+ol.points>li:before{content:counter(p,decimal-leading-zero);position:absolute;left:0;top:22px;color:var(--faint);font:600 12px/1.7 var(--mono);letter-spacing:.06em}
+ol.points p{color:var(--ink);font-size:15.5px;line-height:1.9;max-width:66ch}
+ol.points ul{margin:12px 0 0;padding:0;list-style:none}
+ol.points ul li{position:relative;padding:6px 0 6px 22px;color:var(--ink2);font-size:15px;line-height:1.85;max-width:66ch}
+ol.points ul li:before{content:"";position:absolute;left:1px;top:15px;width:5px;height:5px;border-radius:50%;background:#d8d6d1}
+
+.folds{margin-top:var(--s5);border-top:1px solid var(--line)}
+.fold{border-bottom:1px solid var(--line)}
+.fold>summary{display:flex;align-items:baseline;gap:14px;padding:22px 0;cursor:pointer;list-style:none;font-size:15px;font-weight:600;color:var(--ink2)}
+.fold>summary::-webkit-details-marker{display:none}
+.fold>summary:hover{color:var(--ink)}
+.fold>summary::before{content:"";width:0;height:0;flex:0 0 auto;border-left:5px solid var(--faint);border-top:4.5px solid transparent;border-bottom:4.5px solid transparent;transform:translateY(-2px);transition:transform .18s}
+.fold[open]>summary::before{transform:rotate(90deg) translateX(2px)}
+.fold-hint{margin-left:auto;color:var(--faint);font-size:12.5px;font-weight:400}
+.fold-body{padding:0 0 34px}
+.kv>div{display:grid;grid-template-columns:110px minmax(0,1fr);gap:0 24px;padding:12px 0}
+.kv>div+div{border-top:1px solid var(--line2)}
+.kv dt{color:var(--faint);font-size:13px;line-height:1.8}
+.kv dd{margin:0;color:var(--ink2);font-size:14px;line-height:1.8;overflow-wrap:anywhere}
+.foot{margin-top:var(--s5);padding-top:22px;border-top:1px solid var(--line);color:var(--faint);font-size:12.5px;line-height:1.8}
 
 @media(max-width:880px){
-  main{padding:40px 24px 56px}
-  .top{display:block}
-  .decision{max-width:none;margin-top:18px;text-align:left}
-  .meta,.metrics{grid-template-columns:1fr}
-  .meta>div,.metric{padding:16px 0}
-  .meta>div+div,.metric+.metric{border-left:0;border-top:1px solid var(--line2)}
-  .facts,.callouts{grid-template-columns:1fr;column-gap:0}
-  .fact .k,.callout .k{grid-column:1;padding-bottom:0}
-  .fact .v,.callout p{grid-column:1;padding-top:2px;padding-bottom:10px}
-  .issue-body,.compare{grid-template-columns:1fr}
-  .callouts{border-left:0;padding-left:0;margin-top:8px;padding-top:8px;border-top:1px solid var(--line2)}
-  .side{padding:0}
-  .side+.side{border-left:0;margin-top:16px;padding-top:16px;border-top:1px solid var(--line2)}
+  main{padding:44px 22px 64px}
+  .verdicts{grid-template-columns:1fr}
+  .vcell{padding:26px 0}
+  .vcell+.vcell{border-left:0;border-top:1px solid var(--line2);padding-left:0}
+  .vcell strong{font-size:24px}
+  .compare{grid-template-columns:1fr;gap:0}
+  .side+.side{border-left:0;padding-left:0;margin-top:26px;padding-top:22px;border-top:1px solid var(--line2)}
+  .issue-rail{display:none}
+  .kv>div,.tech{grid-template-columns:1fr;gap:6px}
+  .fact,.issue-title{max-width:none}
+  ol.points>li{padding-left:40px}
 }
 @media print{
-  body{background:#fff}
   main{max-width:none;padding:0}
-  .panel,.issue,.evidence-inline{break-inside:avoid}
+  .tools{display:none}
+  .tipbox{display:none}
+  .ref{border-bottom:0}
+  .issue,.compare,.side{break-inside:avoid}
 }
 </style>
 </head>
 <body>
 <main>
 
-  <header class="top">
-    <div>
-      <div class="eyebrow">G1 · PROTOTYPE DESIGN ADMISSION</div>
-      <h1>原型设计准入审核</h1>
-      <p class="sub">{{需求名称}} · {{PRD版本}} · {{审核时间}}</p>
-    </div>
-    <div class="decision {{结论样式}}">
-      <span class="lab">审核结论</span>
-      <strong>{{结论}}</strong>
-      <span class="why">{{结论依据}}</span>
-    </div>
+  <!-- 页头：需求名 + 版本/日期 -->
+  <header class="hero">
+    <div class="eyebrow">G1 · 原型设计准入审核</div>
+    <h1>{{需求名称}}</h1>
+    <p class="sub">{{副标题}}</p>
   </header>
 
-  <section class="meta">
-    <div><b>PRD</b><span>{{PRD路径}}</span></div>
-    <div><b>产品原型初稿</b><span>{{原型路径}}</span></div>
-    <div><b>审核范围</b><span>{{审核范围}}</span></div>
+  <!-- 结论三格：审核结论 / PRD 审核结论 / 原型审核结论，同行等宽；
+       说明文字在正文里用可读名称，编号只进浮层；一致性格必须「不一致」在前、「一致」在后 -->
+  <section class="verdicts">
+{{结论格}}
   </section>
+  <p class="total">{{汇总条}}</p>
 
-  <section class="metrics">
-    <div class="metric is-ok"><b>PRD 完整性</b><strong>{{PRD完整性}}</strong><p>{{PRD完整性说明}}</p></div>
-    <div class="metric is-warn"><b>PRD—原型一致性</b><strong>{{一致性}}</strong><p>{{一致性说明}}</p></div>
-    <div class="metric is-bad"><b>问题分布</b><strong>{{阻断数}}</strong><p>{{需补齐数}} 项需补齐 · {{建议数}} 项建议</p></div>
-  </section>
-
-  <section class="panel">
-    <h2>结论摘要</h2>
-    <p class="lead">{{摘要}}</p>
-  </section>
-
-  <!-- 可选区块：没有需求映射时整段删除 -->
-  <section class="panel">
-    <h2>需求—页面映射</h2>
-    <div class="map-wrap">
-      <table class="map">
-        <thead><tr><th>需求</th><th>原型位置/路径</th><th>结论</th><th>说明</th></tr></thead>
-        <tbody>
-        <!-- 每行一条：<tr><td>FR-001 模板入口</td><td><code>.selector</code></td><td><span class="level ok">一致</span></td><td>说明。</td></tr> -->
-        {{映射行}}
-        </tbody>
-      </table>
+  <section class="block" id="issues">
+    <div class="block-head">
+      <div class="eyebrow">01 · 待处理</div>
+      <h2>问题与可执行建议</h2>
+      <div class="tools">
+        <button type="button" data-filter="all" aria-pressed="true">全部 {{问题数}}</button>
+        <button type="button" data-filter="bad" aria-pressed="false">阻断 {{阻断数}}</button>
+        <button type="button" data-filter="warn" aria-pressed="false">需补齐 {{需补齐数}}</button>
+        <span class="spacer"></span>
+        <button type="button" class="link" id="expand-all">展开全部对照</button>
+      </div>
+    </div>
+    <div class="issues" id="issue-list">
+{{问题列表}}
     </div>
   </section>
 
-  <section class="panel">
-    <h2>问题与可执行建议</h2>
-    <div class="issue-list">
-      <!--
-      每条问题一段，用分隔线区隔，按阻断 → 需补齐 → 建议排序；issue 的级别 class 取 bad / warn / info / ok。有对应证据时，在标题行末尾加 <button class="evidence-toggle" type="button" data-evidence="evidence-A-001" data-show="查看证据 E-001" data-hide="收起证据 E-001" aria-expanded="false" aria-controls="evidence-A-001">查看证据 E-001</button>；没有证据的问题不加此按钮。证据内容内联在该问题下方，默认隐藏：
-      <article class="issue bad">
-        <div class="issue-head"><span class="issue-id">A-001</span><span class="level bad">阻断</span><h3 class="issue-title">问题标题</h3><button class="evidence-toggle" type="button" data-evidence="evidence-A-001" data-show="查看证据 E-001" data-hide="收起证据 E-001" aria-expanded="false" aria-controls="evidence-A-001">查看证据 E-001</button></div>
-        <div class="issue-body">
-          <div class="facts">
-            <div class="fact"><span class="k">需求依据</span><div class="v">PRD §章节 / AC 编号</div></div>
-            <div class="fact"><span class="k">原型位置</span><div class="v"><code>.selector</code> 或行号 / 操作路径</div></div>
-            <div class="fact"><span class="k">实际差异</span><div class="v">原型与 PRD 的具体不一致</div></div>
+  <section class="block" id="unverified">
+    <div class="block-head">
+      <div class="eyebrow">02 · 边界</div>
+      <h2>未验证项</h2>
+      <p class="total" style="padding-top:12px">本轮资料无法判断，不计入问题。</p>
+    </div>
+    <ul class="note">
+{{未验证项}}
+    </ul>
+  </section>
+
+  <section class="block">
+    <div class="block-head">
+      <div class="eyebrow">03 · 附录</div>
+      <h2>审核明细</h2>
+    </div>
+    <div class="folds">
+
+      <details class="fold">
+        <summary>结论说明<span class="fold-hint">分点列示</span></summary>
+        <div class="fold-body">
+          <ol class="points">
+{{结论说明}}
+          </ol>
+        </div>
+      </details>
+
+      <details class="fold">
+        <summary>需求—页面映射<span class="fold-hint">{{映射统计}}</span></summary>
+        <div class="fold-body">
+          <div class="tools">
+            <button type="button" id="toggle-consistent" aria-pressed="false">显示全部 {{映射数}} 项（含 {{一致数}} 项一致）</button>
           </div>
-          <div class="callouts">
-            <div class="callout impact"><span class="k">影响</span><p>对设计、开发或验收的具体影响</p></div>
-            <div class="callout action"><span class="k">责任人和修改动作</span><p><span class="owner">产品 + 设计</span>具体修改动作</p></div>
-            <div class="callout done"><span class="k">完成标准</span><p>复核时的可验证结果</p></div>
+          <div class="map-wrap">
+            <table class="map">
+              <thead><tr><th>需求</th><th>原型位置/路径</th><th>结论</th><th>说明</th></tr></thead>
+              <tbody>
+{{映射行}}
+              </tbody>
+            </table>
           </div>
         </div>
-        <div class="evidence-inline" id="evidence-A-001" hidden>
-          <div class="evidence-inline-head">
-            <span class="evidence-id">E-001</span>
-            <span class="evidence-ref">对应 A-001</span>
-            <h4>证据标题</h4>
-            <button class="evidence-toggle" type="button" data-evidence="evidence-A-001" data-fixed="收起" aria-expanded="true" aria-controls="evidence-A-001">收起</button>
-          </div>
-          <div class="compare">
-            <div class="side prd"><span class="k">PRD 要求</span><p>最小必要原文摘录</p></div>
-            <div class="side proto"><span class="k">原型实际</span><p>截图中可确认的事实</p></div>
-          </div>
-          <div class="shots">
-            <figure><img alt="截图说明" src="data:image/png;base64,..."><figcaption>截图说明</figcaption></figure>
-          </div>
-          <div class="evidence-foot"><span><b>定位</b> <code>.selector</code> / 行号 / 操作路径</span><span><b>证据类型</b> PRD 证据 + 原型静态证据 / 运行截图</span></div>
+      </details>
+
+      <details class="fold">
+        <summary>修改清单<span class="fold-hint">{{清单数}} 项 · 可直接派发执行</span></summary>
+        <div class="fold-body">
+          <ol class="checklist">
+{{清单项}}
+          </ol>
         </div>
-      </article>
-      -->
-      {{问题卡片}}
+      </details>
+
+      <details class="fold">
+        <summary>审核对象与范围<span class="fold-hint">{{对象提示}}</span></summary>
+        <div class="fold-body">
+          <dl class="kv">
+{{对象行}}
+          </dl>
+        </div>
+      </details>
+
     </div>
   </section>
 
-
-  <section class="panel">
-    <h2>最小补齐清单</h2>
-    <!-- 有序列出必办项：<ol class="checklist"><li>补齐内容</li></ol> -->
-    {{补齐清单}}
-  </section>
-
-  <section class="panel">
-    <h2>未验证项</h2>
-    <!-- 无未验证项时写：<p class="note">本轮没有未验证项。</p> -->
-    {{未验证项}}
-  </section>
+  <!-- 浮层容器：必须放在 body 末尾、且独立于 .ref 锚点。
+       原因：多数锚点在 <h3>/<p> 内，这两个元素的内容模型不接受块级元素，
+       把 <ul>/<div> 直接写进锚点会被 HTML 解析器丢弃。 -->
+  <div class="tipbox" id="tipbox" role="dialog" aria-hidden="true"></div>
 
   <p class="foot">证据类型：PRD 证据 / 原型证据 / 运行证据 / 未验证。此报告只判断是否进入设计精修，不替代 G2/G3 验收。</p>
 </main>
 <script>
 (function () {
-  function sync(id, open) {
-    var panel = document.getElementById(id);
-    if (!panel) return;
-    panel.hidden = !open;
-    var btns = document.querySelectorAll('[data-evidence="' + id + '"]');
-    for (var i = 0; i < btns.length; i += 1) {
-      var b = btns[i];
-      b.setAttribute("aria-expanded", open ? "true" : "false");
-      if (b.getAttribute("data-fixed")) continue;
-      b.textContent = open ? (b.getAttribute("data-hide") || "收起") : (b.getAttribute("data-show") || "查看证据");
+  var list = document.getElementById('issue-list');
+  var issues = list ? [].slice.call(list.querySelectorAll('.issue')) : [];
+  var TOTAL = {{映射数}}, OKCOUNT = {{一致数}};
+
+  function applyFilter(level) {
+    issues.forEach(function (el) {
+      var show = level === 'all' || el.getAttribute('data-level') === level;
+      el.classList.toggle('hidden', !show);
+      if (!show) [].slice.call(el.querySelectorAll('details')).forEach(function (d) { d.open = false; });
+    });
+    [].slice.call(document.querySelectorAll('[data-filter]')).forEach(function (b) {
+      b.setAttribute('aria-pressed', String(b.getAttribute('data-filter') === level));
+    });
+  }
+  [].slice.call(document.querySelectorAll('[data-filter]')).forEach(function (b) {
+    b.addEventListener('click', function () { applyFilter(b.getAttribute('data-filter')); });
+  });
+
+  var all = document.getElementById('expand-all');
+  if (all) all.addEventListener('click', function () {
+    var open = all.getAttribute('data-open') !== 'true';
+    issues.forEach(function (el) {
+      if (el.classList.contains('hidden')) return;
+      [].slice.call(el.querySelectorAll('details')).forEach(function (d) { d.open = open; });
+    });
+    all.setAttribute('data-open', String(open));
+    all.textContent = open ? '收起全部对照' : '展开全部对照';
+  });
+
+  function okRows() { return [].slice.call(document.querySelectorAll('table.map tr.is-ok')); }
+  var showOk = false;
+  okRows().forEach(function (tr) { tr.classList.add('hidden'); });
+  var t = document.getElementById('toggle-consistent');
+  if (t) t.addEventListener('click', function () {
+    showOk = !showOk;
+    okRows().forEach(function (tr) { tr.classList.toggle('hidden', !showOk); });
+    t.setAttribute('aria-pressed', String(showOk));
+    t.textContent = showOk ? '只看不一致项' : ('显示全部 ' + TOTAL + ' 项（含 ' + OKCOUNT + ' 项一致）');
+  });
+
+  /* 浮层：点击展开，点击浮层外收起 */
+  var tipbox = document.getElementById('tipbox');
+  var curRef = null;
+  function hideTip() {
+    if (!tipbox) return;
+    tipbox.classList.remove('is-open');
+    tipbox.setAttribute('aria-hidden', 'true');
+    if (curRef) {
+      curRef.classList.remove('is-open');
+      curRef.setAttribute('aria-expanded', 'false');
+      curRef = null;
     }
   }
-  document.addEventListener("click", function (event) {
-    var btn = event.target && event.target.closest ? event.target.closest("[data-evidence]") : null;
-    if (!btn) return;
-    var id = btn.getAttribute("data-evidence");
-    var panel = document.getElementById(id);
-    if (!panel) return;
-    sync(id, panel.hidden);
+  function place(ref) {
+    if (!tipbox || !ref) return;
+    var r = ref.getBoundingClientRect();
+    var bw = tipbox.offsetWidth, bh = tipbox.offsetHeight;
+    var left = r.left;
+    if (left + bw > window.innerWidth - 12) left = window.innerWidth - 12 - bw;
+    if (left < 12) left = 12;
+    var top = r.top - bh - 10;
+    if (top < 12) top = r.bottom + 10;
+    if (top + bh > window.innerHeight - 12) top = Math.max(12, window.innerHeight - 12 - bh);
+    tipbox.style.left = Math.round(left) + 'px';
+    tipbox.style.top = Math.round(top) + 'px';
+  }
+  var justOpened = 0;
+  function showTip(ref) {
+    if (!tipbox) return;
+    var tpl = ref.querySelector('template.tip-tpl');
+    if (!tpl) return;
+    /* 先填充并在隐藏状态下完成测量与定位，再显示，避免出现左上角闪帧 */
+    tipbox.classList.remove('is-open');
+    tipbox.innerHTML = tpl.innerHTML;
+    tipbox.style.left = '0px';
+    tipbox.style.top = '0px';
+    place(ref);
+    justOpened = Date.now();
+    tipbox.classList.add('is-open');
+    tipbox.setAttribute('aria-hidden', 'false');
+    curRef = ref;
+    ref.classList.add('is-open');
+    ref.setAttribute('aria-expanded', 'true');
+  }
+  document.addEventListener('click', function (e) {
+    var el = e.target;
+    if (el && el.closest && el.closest('.tipbox')) return;   /* 点浮层内部：保持 */
+    var ref = el && el.closest ? el.closest('.ref') : null;
+    if (!ref) { hideTip(); return; }
+    if (ref === curRef) { hideTip(); return; }
+    showTip(ref);
+  });
+  document.addEventListener('keydown', function (e) {
+    if (e.key === 'Escape' || e.key === 'Esc') { hideTip(); return; }
+    var el = e.target;
+    if (!el || !el.classList || !el.classList.contains('ref')) return;
+    if (e.key === 'Enter' || e.key === ' ') {
+      e.preventDefault();
+      if (el === curRef) hideTip(); else showTip(el);
+    }
+  });
+  window.addEventListener('resize', hideTip);
+  window.addEventListener('scroll', function (e) {
+    var t = e.target;
+    if (t && t.closest && t.closest('.tipbox')) return;   /* 浮层内部滚动：保持 */
+    if (t === tipbox) return;
+    if (!curRef) return;
+    /* 点击引用会因聚焦触发一次页面滚动：此时跟随锚点重新定位，不关闭 */
+    if (Date.now() - justOpened < 400) { place(curRef); return; }
+    hideTip();
+  }, true);
+
+  window.addEventListener('beforeprint', function () {
+    [].slice.call(document.querySelectorAll('details')).forEach(function (d) { d.open = true; });
+    okRows().forEach(function (tr) { tr.classList.remove('hidden'); });
+  });
+  window.addEventListener('afterprint', function () {
+    okRows().forEach(function (tr) { tr.classList.toggle('hidden', !showOk); });
   });
 })();
 </script>

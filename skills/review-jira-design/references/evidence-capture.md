@@ -43,25 +43,26 @@ PRD 摘录：章节/稳定 ID + 最小原文
 
 差异影响和建议动作写在所属问题里，证据区不重复。
 
-在报告中，证据不单独成章，而是内联在对应问题下方并默认折叠。问题标题行放 `.evidence-toggle` 按钮（`data-evidence="evidence-A-00x"`），展开区的容器为 `.evidence-inline`（`id="evidence-A-00x"`，默认带 `hidden`）。展开区标题行显示证据编号、`对应 A-00x`、证据标题和“收起”按钮。没有证据的问题不渲染按钮和展开区。按以下对应关系填入 `references/report-template.html` 的 `{{问题卡片}}`：
+在报告中，证据内联在对应问题下方并默认折叠：
 
-```html
-<div class="evidence-inline" id="evidence-A-001" hidden>
-  <div class="evidence-inline-head"><span class="evidence-id">E-001</span><span class="evidence-ref">对应 A-001</span><h4>证据标题</h4><button class="evidence-toggle" type="button" data-evidence="evidence-A-001" data-fixed="收起" aria-expanded="true">收起</button></div>
-  <div class="compare">
-    <div class="side prd"><span class="k">PRD 要求</span><p>最小必要原文摘录</p></div>
-    <div class="side proto"><span class="k">原型实际</span><p>截图中可确认的事实</p></div>
-  </div>
-  <div class="shots"><figure><img alt="说明" src="data:image/png;base64,..."><figcaption>截图说明</figcaption></figure></div>
-  <div class="evidence-foot"><span><b>定位</b> <code>.selector</code></span><span><b>证据类型</b> PRD 证据 + 原型证据 + 运行截图</span></div>
-</div>
-```
+- 折叠行只写「PRD 要求 与 原型实际」，**不再挂 `E-00x` 徽标**（证据编号已并入问题编号体系，避免重复信息）。
+- 展开区固定为「左 PRD 要求 ‖ 右 原型实际」两栏，左栏下方给 PRD 出处、右栏下方给原型出处。
+- 代码定位（selector、行号、函数名）放在展开区最后一行「技术定位」，灰色等宽小字；正文里不允许出现。
+- 截图放在对照之后；无截图时整段移除，并在展开区末尾写明「未验证」及原因。
 
-左右两栏固定为“PRD 要求 → 原型实际”，中间只留一条竖向分隔线；`shots` 中按实际截图数量放一个或多个 `figure`，没有截图时整段移除并在页脚写明“运行截图未验证”及原因。PRD 摘录用 HTML 转义后展示，只保留能支撑结论的最小原文；截图以内嵌 `data:image/png;base64,...` 使用，压缩裁剪时不能删除问题所在区域。
+证据内容不需要手写 HTML，按 `references/content-example.json` 的字段填进内容 JSON 的 `问题[]` 即可：
 
-报告整体白底、细线分区；展开区用浅灰底（`background:#fafaf9`）加左侧细线标记范围。截图单张限宽 760px、最大高度 520px，多张自动并排；正文与对照文字保持 14～14.5px，页脚辅助信息 12.5px。
+| 字段 | 内容 |
+| --- | --- |
+| `PRD要求` | 最小必要原文摘录（保留编号，脚本会自动换成可读文案 + 浮层） |
+| `原型实际` | 截图中/源码中可确认的事实，写成可读结论，不写代码 |
+| `出处` | 缺省取 `需求依据`，形如 `PRD §3.3.4 BR-002、§5.2 状态—权限—操作矩阵、§4.3 AC-003` |
+| `原型出处` | 如 `原型 第 985-989 行（五按钮）、第 1310-1311 行（禁用条件）` |
+| `技术定位` | 如 `.batch-actions / agentExportHandleBatch · 行 985-989 … · :disabled="agentExportBatchDisabled"` |
+| `截图` | `[{ "说明": "截图说明", "data": "data:image/png;base64,..." }]`，无截图给空数组 |
+| `核对说明` | 数组，例如 `["未验证：原型依赖内网资源，评审环境不可达，页面未在超时内渲染"]` |
 
-标签列与正文列共用一个网格：容器设 `grid-template-columns:max-content minmax(0,1fr)`，每行用 `display:contents`，标签加 `white-space:nowrap`，确保同一组内标签和正文左边缘对齐。
+版式由模板与生成脚本统一控制，不要手写：白底 + 细线分区；对照区两栏之间只留一条竖向分隔线；截图单张限宽 720px、最高 460px，多张自动并排。
 
 ## 无法截取时
 
@@ -69,6 +70,4 @@ PRD 摘录：章节/稳定 ID + 最小原文
 - 改用精确的 HTML 路径、selector/行号、源码片段或操作路径，并说明缺少哪一步运行证据。
 - 不根据页面结构猜测渲染结果，也不把截图缺失自动判为 PRD 问题；结论按现有证据状态判定。
 
-报告整体白底、细线分区；展开区用浅灰底（`background:#fafaf9`）加左侧细线标记范围。截图单张限宽 760px、最大高度 520px，多张自动并排；正文与对照文字保持 14～14.5px，页脚辅助信息 12.5px。
 
-标签列与正文列共用一个网格：容器设 `grid-template-columns:max-content minmax(0,1fr)`，每行用 `display:contents`，标签加 `white-space:nowrap`，确保同一组内标签和正文左边缘对齐。
