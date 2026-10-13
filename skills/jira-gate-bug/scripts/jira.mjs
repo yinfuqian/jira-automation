@@ -681,13 +681,19 @@ export function renderIssueMarkdown(issue, options = {}) {
   }
 
   const logExemption = findLogRequirementExemption(issue);
+  lines.push("");
+  lines.push("## 日志/复现豁免");
+  lines.push("- 固定声明：明确缺陷不需要额外提供日志信息");
+  lines.push("- 判定条件：必须同时满足「本单判定为效果类缺陷」和「评论区包含上述固定原文」。");
   if (logExemption.found) {
     const source = logExemption.matches[logExemption.matches.length - 1];
-    lines.push("");
-    lines.push("## 日志/复现豁免");
-    lines.push("- 命中固定语句：明确缺陷不需要额外提供日志信息");
+    lines.push("- 当前结果：已命中固定声明，仍需门禁复核本单确为效果类缺陷。");
     lines.push("- 来源评论：" + (source.author || "未知") + " @ " + (source.created || "") + "（评论 #" + (source.commentId || "") + "）");
-    lines.push("- 使用前提：本单必须判定为效果类缺陷；其它缺陷仍按常规检查。");
+    lines.push("- 豁免范围：仅豁免日志与复现步骤；截图、录屏等效果证据仍按常规检查，其它 MUST 和全部 REDLINE 不豁免。");
+  } else {
+    lines.push("- 当前结果：未命中固定声明，暂不豁免日志与复现步骤。");
+    lines.push("- 处理要求：如本单确为效果类缺陷，请补充固定声明；否则按普通缺陷补日志和复现步骤。");
+    lines.push("- 豁免范围：即使后续豁免，也仅限日志与复现步骤，其它 MUST 和全部 REDLINE 不豁免。");
   }
 
   lines.push("");

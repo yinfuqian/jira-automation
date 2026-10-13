@@ -398,7 +398,7 @@ console.log(JSON.stringify(extractFaultAnalysisScope(issue)));
         """效果类缺陷只有命中固定语句，才能跳过日志/复现要求。"""
         jira_url = (SKILL_DIR / "scripts" / "jira.mjs").as_uri()
         driver = """
-const { normalizeIssue, findLogRequirementExemption } = await import("__JIRA__");
+const { normalizeIssue, findLogRequirementExemption, renderIssueMarkdown } = await import("__JIRA__");
 function issueWithComment(body) {
   return normalizeIssue({
     key: "KEY-6",
@@ -410,9 +410,13 @@ function issueWithComment(body) {
     },
   });
 }
+const exactIssue = issueWithComment("效果类缺陷。明确缺陷不需要额外提供日志信息");
+const missingIssue = issueWithComment("效果类缺陷，不需要日志");
 console.log(JSON.stringify({
-  exact: findLogRequirementExemption(issueWithComment("效果类缺陷。明确缺陷不需要额外提供日志信息")),
-  missing: findLogRequirementExemption(issueWithComment("效果类缺陷，不需要日志")),
+  exact: findLogRequirementExemption(exactIssue),
+  missing: findLogRequirementExemption(missingIssue),
+  exactMarkdown: renderIssueMarkdown(exactIssue),
+  missingMarkdown: renderIssueMarkdown(missingIssue),
 }));
 """.replace("__JIRA__", jira_url)
 
@@ -423,6 +427,11 @@ console.log(JSON.stringify({
         self.assertEqual(payload["exact"]["matches"][0]["commentId"], "13")
         self.assertEqual(payload["exact"]["phrase"], "明确缺陷不需要额外提供日志信息")
         self.assertFalse(payload["missing"]["found"])
+        self.assertIn("当前结果：已命中固定声明", payload["exactMarkdown"])
+        self.assertIn("仅豁免日志与复现步骤", payload["exactMarkdown"])
+        self.assertIn("其它 MUST 和全部 REDLINE 不豁免", payload["exactMarkdown"])
+        self.assertIn("当前结果：未命中固定声明", payload["missingMarkdown"])
+        self.assertIn("如本单确为效果类缺陷，请补充固定声明", payload["missingMarkdown"])
 
     @unittest.skipIf(NODE_BIN is None, "需要 node 运行时才能执行技能脚本")
     def test_scope_resolution_resolves_related_module_tag(self):
