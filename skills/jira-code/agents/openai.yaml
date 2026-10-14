@@ -1,4 +1,4 @@
 interface:
   display_name: "Jira 开发方案实现"
-  short_description: "读取 Jira 单上的开发方案，从基线分支拉出 feature/<KEY> 分支实现代码并推送，再按方案里的流水线地址做热更新；全程用一条自动刷新的评论汇报进度与异常"
-  default_prompt: "用 $jira-code 读取这个 Jira 单的开发方案，按方案在 feature/<KEY> 分支上实现代码并推送到远端，然后按方案里写的流水线环境地址做热更新；进度和异常都写进同一条评论里，中途不要停下来等确认。"
+  short_description: "读取 Jira 单上的开发方案，从基线分支拉出 feature/<KEY> 分支实现代码并推送，再按方案里的流水线地址做热更新；全程用一条自动刷新的评论汇报进度与异常，评论里固定渲染热更新结论（已完成/未执行/失败）"
+  default_prompt: "用 $jira-code 读取这个 Jira 单的开发方案，按方案在 feature/<KEY> 分支上实现代码并推送到远端，然后按方案里写的流水线环境地址做热更新；进度和异常都写进同一条评论里，中途不要停下来等确认。热更新结论必须用 progress.mjs --hotreload 上报，评论里固定渲染这一行，跳过或失败也要写清原因。"

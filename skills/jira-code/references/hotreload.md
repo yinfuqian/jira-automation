@@ -37,7 +37,8 @@ node <技能目录>/scripts/plan.mjs pipeline work/jira-code/<KEY>/plan.txt
 - 只认「同一条 URL 里既有 `/pipeline/project/<id>` 又有 `/env/<id>`」的写法：缺 `env` 就无法定位环境。
 - 方案里写了多个环境时**逐个处理**（每个环境各做一次热更新）；分不清哪个环境对应哪个模块时
   **记录候选并跳过**本次热更新，不要自己挑一个，也不要把任务判成失败。
-- `ok:false`（`pipeline-not-found`）表示方案里没有流水线地址：此时**跳过热更新**，在评论里写明原因，
+- `ok:false`（`pipeline-not-found`）表示方案里没有流水线地址：此时**跳过热更新**，用
+  `progress.mjs update --hotreload skipped --hotreload-reason "方案未提供流水线地址"` 上报，
   任务整体按「代码已推送、热更新未执行」收尾，**不算失败**（代码推送才是本技能的主交付物）。
 
 ## 2. 前置条件
@@ -109,25 +110,31 @@ node <技能目录>/scripts/plan.mjs pipeline work/jira-code/<KEY>/plan.txt
 
 热更新是**推送之后的附加阶段**，任何环节失败都不回滚已经推送的代码，也不把任务判成失败：
 
-| 情况 | 处理 |
+| 情况 | 上报与处理 |
 |---|---|
-| 方案里没有流水线地址 | 评论里写「方案未提供流水线地址，已跳过热更新」，结束 |
-| 缺少 `DEVOPS_MCP_TOKEN` / MCP 不可用 | 评论里写「未配置流水线凭据，已跳过热更新」，结束 |
-| `env_type = UAT` / `platform_type = binary` | 评论里写「该环境不支持热更新」，结束 |
-| 找不到可上传的制品 | 评论里写「未找到构建产物，已跳过热更新」并给出尝试过的路径，结束 |
-| 上传失败 | 按 devops 技能重试 1 次；仍失败则记录错误并结束，**不写更新记录** |
-| 只有唯一父组件候选 | **不跳过**：正常上传、热加载并写更新记录，记录挂在父组件下，评论与 `description` 里注明是父组件 |
-| 匹配到多个父组件候选 / 一个候选都没有 | 列出候选模块，请人指定后再重跑，结束 |
-| 部署文件缺失（找不到 `docker-compose.yml` / `deployments/kubernetes`） | 说明检出目录里没有部署文件，结束；不要凭空编目标环境 |
-| 模块不在运行（Pod 反复重启 / Deployment 不存在） | 先记录环境异常并跳过，提示先解决环境问题 |
-| `$HOME` 不可写导致上传工具下载失败 | 改下到工作区 `work/jira-code/<KEY>/bin/` 并用绝对路径调用 |
-| 连不上 `devops.ks1.wezhuiyi.com` / `pkg.in.wezhuiyi.com` | 属于部署网络问题，记录并跳过，不要改容器网络配置 |
-| 其他异常 | 如实记录失败环节与错误信息，结束 |
+| 方案里没有流水线地址 | `--hotreload skipped --hotreload-reason "方案未提供流水线地址"`，结束 |
+| 缺少 `DEVOPS_MCP_TOKEN` / MCP 不可用 | `--hotreload skipped --hotreload-reason "未配置流水线凭据"`，结束 |
+| `env_type = UAT` / `platform_type = binary` | `--hotreload skipped --hotreload-reason "该环境不支持热更新"`，结束 |
+| 找不到可上传的制品 | `--hotreload skipped --hotreload-reason "未找到构建产物（已尝试 <路径>）"`，结束 |
+| 上传失败 | 按 devops 技能重试 1 次；仍失败则 `--hotreload failed --hotreload-reason "<错误>"` 并结束，**不写更新记录** |
+| 只有唯一父组件候选 | **不跳过**：正常上传、热加载并写更新记录，记录挂在父组件下，`--hotreload succeeded` 的原因里注明是父组件 |
+| 匹配到多个父组件候选 / 一个候选都没有 | 列出候选模块，`--hotreload skipped --hotreload-reason "候选不唯一/无候选"`，结束 |
+| 部署文件缺失（找不到 `docker-compose.yml` / `deployments/kubernetes`） | `--hotreload skipped --hotreload-reason "检出目录没有部署文件"`，结束；不要凭空编目标环境 |
+| 模块不在运行（Pod 反复重启 / Deployment 不存在） | `--hotreload skipped --hotreload-reason "模块不在运行"`，提示先解决环境问题 |
+| `$HOME` 不可写导致上传工具下载失败 | 改下到工作区 `work/jira-code/<KEY>/bin/` 并用绝对路径调用；仍失败按 `--hotreload failed` 上报 |
+| 连不上 `devops.ks1.wezhuiyi.com` / `pkg.in.wezhuiyi.com` | 属于部署网络问题，`--hotreload skipped` 并记录，不要改容器网络配置 |
+| 其他异常 | `--hotreload failed --hotreload-reason "<失败环节与错误信息>"`，结束 |
 
-以上全部通过 `progress.mjs update/finish` 写进**同一条** Jira 评论（标记 `jira-code:progress:<KEY>`），
-不要为热更新新开评论。热更新发生在 §3.7 推送之后、§3.9 清理检出目录与收尾之前：
+以上结论统一用 `progress.mjs update --hotreload <succeeded|skipped|failed> --hotreload-reason "<原因>"`
+上报，写进**同一条** Jira 评论（标记 `jira-code:progress:<KEY>`），不要为热更新新开评论、也不要在评论正文里
+另起一行描述代替上报——评论里那一行「热更新」由脚本按上报结果固定渲染。热更新发生在 §3.7 推送之后、
+§3.9 清理检出目录与收尾之前：
 
-- 热更新成功 → `finish` 的说明里带上模块、环境、制品与更新记录，**并写明怎么关闭热加载**：
+- 热更新成功 → `--hotreload succeeded`，原因里带上模块、环境、制品与更新记录，`finish` 的说明里
+  **写明怎么关闭热加载**：
   PaaS 在流水线里用当前版本重新更新/部署一次；K8S 要点流水线界面的「重构」，普通重新部署不会移除热加载配置。
   这一步不能省，否则环境会一直挂在热加载状态。
-- 热更新跳过或失败 → 仍在 `finish` 的说明里写清「代码已推送，热更新未执行/失败」及原因（除非任务本身另有异常）。
+- 热更新跳过或失败 → `--hotreload skipped|failed` 并写明原因（除非任务本身另有异常）。
+
+漏报时 `finish` / `fail` 会把结论兜底成「未执行（未进入热更新阶段）」：这只是防漏报的保险，
+真实结果是成功却没上报，评论就会误报成「未执行」。

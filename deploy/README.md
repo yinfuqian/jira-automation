@@ -8,7 +8,8 @@ MySQL 和 Redis 必须在 `.env.production` 中填写宿主机可访问的真实
 
 ## 首次部署
 
-1. 将 `docker-compose-prod.yaml`、`.env.production.example`、`users.example.csv`、`restart-master.sh` 和本说明放在同一目录。
+1. 将 `docker-compose-prod.yaml`、`.env.production.example`、`users.example.csv`、`restart-master.sh` 和本说明放在同一目录；
+   解压部署包时 `config/maven/settings.xml` 要保持 `config/maven/` 相对路径不变（生产 Compose 按该路径挂载）。
 2. 将 `.env.production.example` 复制为 `.env.production`，填写镜像地址、MySQL、Redis、模型和第三方接口配置。
 3. 将 `users.example.csv` 复制为 `data/users.csv`（Compose 将它挂载到容器 `/users.csv`），修改默认密码并由管理员持续维护。
 4. 如需使用技能执行接口（`/skill`），把 `skills/` 目录上传到与 Compose 文件同级的位置（容器只读挂载为 `/data/skills`），技能所需的模型参数在 `.env.production` 中配置。
@@ -84,6 +85,26 @@ Java 21 项目用镜像内的 `jdk` 助手显式切换：
 ```bash
 docker compose --env-file .env.production -f docker-compose-prod.yaml exec worker sh -c "jdk list"
 docker compose --env-file .env.production -f docker-compose-prod.yaml exec worker sh -c "cd /tmp/<项目> && jdk 21 mvn -DskipTests package"
+```
+
+生产 Compose 还给 `worker` 挂了两处 Maven 路径，两者都要在宿主机准备好：
+
+- `config/maven/settings.xml` → `/root/.m2/settings.xml`（只读）：把 Maven 镜像指向内网 Nexus 聚合仓库。
+  业务仓库依赖的私有制品（`com.zhuiyi.prompt:llm-prompt-jar`、`com.cmos.dialogos:dialogos-api` 等）只有这个库里有，
+  镜像自带的 Maven 直连 Maven Central 必然解析失败，jira-code 的编译验证与热更新制品构建会整段跳过。
+  该文件不含任何凭据，随部署包分发的 `config/maven/` 就是它。若缺失，Docker 会把挂载点建成空目录，Maven 同样读不到配置。
+- `./data/m2/repository` → `/root/.m2/repository`：Maven 本地仓库缓存。需要先从开发机
+  `C:\Users\<用户>\.m2\repository`（约 3.8 GB）拷贝预热，之后容器重建不会丢。只拷私有依赖也能用，
+  但首次构建仍需联网补齐其余依赖。
+
+```bash
+# 首次部署：在部署机建目录，并从开发机拷入预热好的本地仓库
+mkdir -p data/m2/repository
+scp -r <开发机>:/c/Users/<用户>/.m2/repository/* data/m2/repository/
+
+# 自检：settings.xml 必须是文件（不是空目录），且本地仓库里已有依赖
+docker compose --env-file .env.production -f docker-compose-prod.yaml exec worker \
+  sh -c "ls -l /root/.m2/settings.xml && ls /root/.m2/repository | head"
 ```
 
 技能运行参数（模型、中转地址、请求协议、推理强度）由后端以 `codex exec -c ...` 传入，容器内不需要维护 `config.toml`；

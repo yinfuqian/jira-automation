@@ -6,8 +6,11 @@
  *   node scripts/progress.mjs start  --issue <KEY|URL> --state <state.json> [--stage 文本] [--summary 摘要]
  *                                    [--repo <检出目录>] [--repo-label <仓库名>] [--branch <分支>] [--interval 300]
  *   node scripts/progress.mjs update --state <state.json> [--stage 文本] [--step 文本] [--status running]
+ *                                    [--hotreload <pending|succeeded|skipped|failed>] [--hotreload-reason 文本]
  *   node scripts/progress.mjs finish --state <state.json> [--message 文本]
+ *                                    [--hotreload <...>] [--hotreload-reason 文本]
  *   node scripts/progress.mjs fail   --state <state.json> --message <中断/异常原因>
+ *                                    [--hotreload <...>] [--hotreload-reason 文本]
  *   node scripts/progress.mjs tick   --state <state.json>      # 立刻刷新一次（心跳内部也走这条路径）
  *   node scripts/progress.mjs stop   --state <state.json>      # 只停心跳，不改评论
  *   node scripts/progress.mjs show   --state <state.json>      # 打印状态文件，便于排查
@@ -19,6 +22,9 @@
  *      所以 agent 在长时间写代码时，Jira 上的进度也会自己往前走。
  *   3. 进度与异常都写进同一条评论；异常不会新开评论，而是把这条评论的「状态」改成已中断并追加原因。
  *   4. `finish` / `fail` 会同步发布最终状态并停掉心跳；写入失败时以退出码 1 告警（不要把失败说成成功）。
+ *   5. 「热更新结论」是评论里固定渲染的一行，任何收尾路径都不会省略：热更新阶段无论执行成功、跳过
+ *      还是失败，都要用 `--hotreload` 上报；`finish` / `fail` 时仍未上报的由脚本兜底成「未执行」，
+ *      避免评论看起来像「全部完成」而漏掉没做热更新这件事。
  */
 
 import { spawn } from "node:child_process";
@@ -36,6 +42,37 @@ const MARKER_PREFIX = "jira-code:progress:";
 const MAX_STEPS = 8;
 const MAX_STEP_CHARS = 200;
 const DEFAULT_INTERVAL_SECONDS = 300;
+// 热更新结论的状态枚举：pending 表示还没走到热更新阶段。
+const HOTRELOAD_STATUSES = ["pending", "succeeded", "skipped", "failed"];
+// 上报用词到标准状态的映射：agent 用中文或英文写都能识别，识别不了会直接报错而不是静默丢弃。
+const HOTRELOAD_ALIASES = {
+  pending: "pending",
+  待执行: "pending",
+  未开始: "pending",
+  succeeded: "succeeded",
+  success: "succeeded",
+  ok: "succeeded",
+  成功: "succeeded",
+  已完成: "succeeded",
+  skipped: "skipped",
+  skip: "skipped",
+  跳过: "skipped",
+  未执行: "skipped",
+  不适用: "skipped",
+  不涉及: "skipped",
+  failed: "failed",
+  fail: "failed",
+  error: "failed",
+  失败: "failed",
+  异常: "failed",
+};
+// 结论行里的展示文案。
+const HOTRELOAD_LABELS = { pending: "待执行", succeeded: "已完成", skipped: "未执行", failed: "失败" };
+// 收尾时仍未上报的兜底原因：宁可写成「未执行」，也不能让评论漏掉热更新。
+const HOTRELOAD_MISSING_REASON = {
+  finish: "未上报，视为未执行（未进入热更新阶段）",
+  fail: "未上报，视为未执行（任务中断，热更新未完成）",
+};
 // 心跳最长存活时间（分钟），超过就自动收尾退出，避免异常情况下留下永久后台进程。
 const DEFAULT_MAX_MINUTES = 180;
 const LOCK_STALE_MS = 120000;
@@ -175,6 +212,59 @@ async function withLock(path, handler) {
 }
 
 
+/** 把上报用词归一成标准状态；无法识别时抛错，避免结论被悄悄丢掉。 */
+function normalizeHotreload(value) {
+  const text = String(value || "").trim();
+  if (!text) return "";
+  const hit = HOTRELOAD_ALIASES[text] || HOTRELOAD_ALIASES[text.toLowerCase()];
+  if (!hit) {
+    throw new Error(`无法识别的热更新状态：${text}（可用值：${HOTRELOAD_STATUSES.join(" / ")}）`);
+  }
+  return hit;
+}
+
+
+/** 写入热更新结论；reason 留空时沿用上一次的原因。 */
+function setHotreload(state, status, reason) {
+  const normalized = normalizeHotreload(status);
+  if (!normalized) return false;
+  const text = String(reason || "").trim().slice(0, 200);
+  state.hotreload = {
+    status: normalized,
+    reason: text || (state.hotreload && state.hotreload.reason) || "",
+    at: now(),
+  };
+  return true;
+}
+
+
+/** 收尾兜底：热更新没有结论（或还停在 pending）时一律记为未执行，保证评论不漏报。 */
+function ensureHotreloadReported(state, finalStatus) {
+  const current = state.hotreload && HOTRELOAD_STATUSES.includes(state.hotreload.status) ? state.hotreload : null;
+  if (current && current.status !== "pending") {
+    if (!current.at) current.at = now();
+    return false;
+  }
+  state.hotreload = {
+    status: "skipped",
+    reason: HOTRELOAD_MISSING_REASON[finalStatus === "aborted" ? "fail" : "finish"],
+    at: now(),
+  };
+  return true;
+}
+
+
+/** 热更新结论行：进行中显示待执行，收尾后一定是明确结论。 */
+function hotreloadLine(state) {
+  const stored = state.hotreload && HOTRELOAD_STATUSES.includes(state.hotreload.status) ? state.hotreload : null;
+  const settled = state.status === "done" || state.status === "aborted";
+  const status = stored ? stored.status : settled ? "skipped" : "pending";
+  // 旧状态文件没有这个字段时，收尾态要补上未执行的原因，不能只写一个「未执行」。
+  const reason = (stored && stored.reason) || (!stored && settled ? HOTRELOAD_MISSING_REASON.finish : "");
+  return `* 热更新：*${HOTRELOAD_LABELS[status]}*${reason ? `｜${reason}` : ""}`;
+}
+
+
 /** 渲染评论正文：Jira wiki 标记，内容保持简短。 */
 export function renderBody(state) {
   const statusLabel = state.status === "done" ? "已完成" : state.status === "aborted" ? "已中断" : "进行中";
@@ -184,6 +274,8 @@ export function renderBody(state) {
   lines.push("");
   lines.push(`* 状态：*${statusLabel}*`);
   lines.push(`* 当前阶段：${state.stage || "准备中"}`);
+  // 热更新结论固定渲染：缺字段、跳过、失败都要在评论里一眼看到。
+  lines.push(hotreloadLine(state));
   if (state.repoLabel || state.branch) {
     lines.push(`* 代码分支：${state.branch || "（未创建）"}${state.repoLabel ? "（" + state.repoLabel + "）" : ""}`);
   }
@@ -385,6 +477,8 @@ async function main() {
         startedAt: now(),
         updatedAt: now(),
         steps: [],
+        // 热更新结论：新一次执行从「待执行」开始，收尾前必须被改成明确结论。
+        hotreload: { status: "pending", reason: "", at: null },
         // 复用上一次的评论 ID：同一张单重跑时仍然只更新那一条评论。
         commentId: previous && previous.commentId ? previous.commentId : null,
         publishCount: previous && previous.publishCount ? previous.publishCount : 0,
@@ -438,6 +532,9 @@ async function main() {
         }
         if (options.message) state.error = String(options.message).slice(0, 400);
         if (options.result) state.result = String(options.result).slice(0, 400);
+        if (options.hotreload || options["hotreload-reason"]) {
+          setHotreload(state, options.hotreload || (state.hotreload && state.hotreload.status) || "pending", options["hotreload-reason"]);
+        }
         if (options.step) {
           state.steps = Array.isArray(state.steps) ? state.steps : [];
           state.steps.push({ at: clock(), text: String(options.step).slice(0, MAX_STEP_CHARS) });
@@ -451,7 +548,7 @@ async function main() {
         recordPublishError(statePath, error);
         return { ok: false, reason: "publish-failed", message: String((error && error.message) || error) };
       });
-      process.stdout.write(JSON.stringify({ ...published, stage: result.stage, status: result.status, steps: (result.steps || []).length }, null, 2) + "\n");
+      process.stdout.write(JSON.stringify({ ...published, stage: result.stage, status: result.status, steps: (result.steps || []).length, hotreload: (result.hotreload && result.hotreload.status) || "pending" }, null, 2) + "\n");
       if (!published.ok) {
         process.stderr.write(`[进度评论写入失败] ${published.message || published.reason}\n`);
         process.exitCode = 1;
@@ -479,6 +576,11 @@ async function main() {
         } else if (message) {
           current.error = message.slice(0, 400);
         }
+        // 收尾允许在同一次调用里补报热更新结论，再对未上报的做兜底。
+        if (options.hotreload || options["hotreload-reason"]) {
+          setHotreload(current, options.hotreload || (current.hotreload && current.hotreload.status) || "pending", options["hotreload-reason"]);
+        }
+        ensureHotreloadReported(current, finalStatus);
         writeState(statePath, current);
       });
       let published;

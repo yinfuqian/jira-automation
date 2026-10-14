@@ -816,6 +816,78 @@ class ProgressCommentTests(unittest.TestCase):
         self.assertIn("第二次执行", comments[0]["body"])
         run_node("progress.mjs", "stop", "--state", second_state, env=self.env)
 
+    def test_hotreload_line_is_always_rendered_and_reported_state_is_used(self):
+        """热更新结论固定渲染：start 显示待执行，上报跳过后按上报内容呈现，且仍只有一条评论。"""
+        state = self.state_file("hotreload.json")
+        started = run_node(
+            "progress.mjs", "start", "--issue", "SHOP-203", "--state", state,
+            "--stage", "编写代码", "--interval", "60", env=self.env,
+        )
+        self.assertEqual(started.returncode, 0, started.stderr)
+        first = self.mock_comments("SHOP-203")
+        self.assertEqual(len(first), 1)
+        self.assertIn("热更新：*待执行*", first[0]["body"])
+
+        updated = run_node(
+            "progress.mjs", "update", "--state", state,
+            "--hotreload", "skipped", "--hotreload-reason", "未配置 DEVOPS_MCP_TOKEN，已跳过热更新",
+            env=self.env,
+        )
+        self.assertEqual(updated.returncode, 0, updated.stderr)
+        self.assertEqual(json.loads(updated.stdout)["hotreload"], "skipped")
+        second = self.mock_comments("SHOP-203")
+        self.assertEqual(len(second), 1, "上报热更新结论不应该新增评论")
+        self.assertEqual(second[0]["id"], first[0]["id"])
+        self.assertIn("热更新：*未执行*", second[0]["body"])
+        self.assertIn("未配置 DEVOPS_MCP_TOKEN", second[0]["body"])
+
+        # 无法识别的写法必须直接失败，而不是静默丢掉结论。
+        invalid = run_node("progress.mjs", "update", "--state", state, "--hotreload", "随便写", env=self.env)
+        self.assertEqual(invalid.returncode, 1)
+        self.assertIn("无法识别的热更新状态", invalid.stderr)
+        run_node("progress.mjs", "stop", "--state", state, env=self.env)
+
+    def test_finish_without_hotreload_report_falls_back_to_unexecuted(self):
+        """finish 时没人上报热更新结论，脚本兜底成未执行，评论不能看起来像全部完成。"""
+        state = self.state_file("hotreload-fallback.json")
+        run_node(
+            "progress.mjs", "start", "--issue", "SHOP-203", "--state", state,
+            "--stage", "编写代码", "--interval", "60", env=self.env,
+        )
+
+        finished = run_node(
+            "progress.mjs", "finish", "--state", state, "--message", "已推送 feature/SHOP-203",
+            env=self.env,
+        )
+
+        self.assertEqual(finished.returncode, 0, finished.stderr)
+        saved = json.loads(state.read_text(encoding="utf-8"))
+        self.assertEqual(saved["hotreload"]["status"], "skipped")
+        comments = self.mock_comments("SHOP-203")
+        self.assertEqual(len(comments), 1)
+        self.assertIn("热更新：*未执行*", comments[0]["body"])
+        self.assertIn("未进入热更新阶段", comments[0]["body"])
+
+    def test_hotreload_failure_is_kept_on_abort(self):
+        """中断路径同样渲染热更新结论：上报失败原因后评论里必须看得到。"""
+        state = self.state_file("hotreload-fail.json")
+        run_node(
+            "progress.mjs", "start", "--issue", "SHOP-203", "--state", state,
+            "--stage", "触发容器重载", "--interval", "60", env=self.env,
+        )
+
+        failed = run_node(
+            "progress.mjs", "fail", "--state", state,
+            "--message", "容器重载超时，已中断", "--hotreload", "failed",
+            "--hotreload-reason", "enable_hotreload 返回 500", env=self.env,
+        )
+
+        self.assertEqual(failed.returncode, 0, failed.stderr)
+        comments = self.mock_comments("SHOP-203")
+        self.assertEqual(len(comments), 1)
+        self.assertIn("热更新：*失败*", comments[0]["body"])
+        self.assertIn("enable_hotreload 返回 500", comments[0]["body"])
+
 
 if __name__ == "__main__":
     unittest.main()

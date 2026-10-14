@@ -206,11 +206,34 @@ node <技能目录>/scripts/plan.mjs pipeline work/jira-code/<KEY>/plan.txt
 - 强制顺序：上传 → `download_hotreload_tool_from_nexus` → `enable_hotreload` → `trigger_container_reload`
   → `create_hotreload_update_record`（即使已开启热加载，下载工具这步也不能省）。
 - 热更新是**推送之后的附加阶段**：方案没给地址、缺凭据、环境不支持、制品缺失、上传失败等任何情况，
-  **都不回滚已推送的代码、也不把任务判成失败**，在评论里如实写明「代码已推送，热更新未执行/失败」及原因即可。
+  **都不回滚已推送的代码、也不把任务判成失败**，但**结论必须显式上报**（见下面的 `--hotreload`），
+  不要只在对话里说，也不要把评论写成一片「已完成」。
 - **热更新成功后要在评论里写明怎么关掉热加载**（这一步必须做，否则环境会一直挂在热加载状态）：
   PaaS 环境在流水线里用当前版本重新更新/部署一次；K8S 环境要点流水线界面的「重构」，普通重新部署不会移除热加载配置。
 
 热更新前后各刷一次进度评论（`progress.mjs update --stage "热更新" --step "..."`），仍然只更新那一条评论。
+
+**热更新结论是强制上报项**：评论里固定渲染一行「热更新」，取值只有 `待执行` / `已完成` / `未执行` / `失败`，
+脚本不猜、也不从你写的文字里提取，只看你传的 `--hotreload`：
+
+```bash
+# 成功：走完上传 → download_hotreload_tool_from_nexus → enable_hotreload → trigger_container_reload
+#      → create_hotreload_update_record 之后
+node <技能目录>/scripts/progress.mjs update --state work/jira-code/<KEY>/progress.json \
+  --hotreload succeeded --hotreload-reason "环境 <env>、模块 <module> 已触发容器重载并登记更新记录"
+
+# 跳过：方案没给地址、缺凭据、环境不支持、制品缺失等
+node <技能目录>/scripts/progress.mjs update --state work/jira-code/<KEY>/progress.json \
+  --hotreload skipped --hotreload-reason "未配置 DEVOPS_MCP_TOKEN，已跳过热更新"
+
+# 失败：例如 enable_hotreload 或容器重载报错
+node <技能目录>/scripts/progress.mjs update --state work/jira-code/<KEY>/progress.json \
+  --hotreload failed --hotreload-reason "enable_hotreload 返回 500"
+```
+
+`--hotreload` 只接受 `pending` / `succeeded` / `skipped` / `failed`（`成功`、`跳过`、`失败` 等中文写法也认，
+写别的脚本会直接报错退出）。**热更新阶段结束（成功、跳过或失败）时必须上报一次**；一直不上报就 `finish` / `fail`，
+脚本会兜底把结论写成「未执行（未进入热更新阶段）」——兜底只是为了不漏报，不能当成可以不上报。
 
 ### 3.9 清理检出目录并收尾
 
@@ -230,7 +253,7 @@ node <技能目录>/scripts/git-flow.mjs cleanup --dir work/jira-code/<KEY>/<仓
 
 最后写收尾评论：
 
-成功：`finish`（写清分支、提交、仓库、本地已清理，以及热更新结果或跳过原因）；
+成功：`finish`（写清分支、提交、仓库、本地已清理，以及热更新的环境/模块等要点；结论本身由上面的 `--hotreload` 渲染）；
 异常：`fail`（写清失败环节与原因）。**两者都必须调用**，否则心跳会一直留在后台。
 异常中断时**不要**删检出目录，保留现场便于排查。
 
@@ -241,6 +264,9 @@ node <技能目录>/scripts/progress.mjs finish --state work/jira-code/<KEY>/pro
 node <技能目录>/scripts/progress.mjs fail --state work/jira-code/<KEY>/progress.json \
   --message "推送失败（auth-failed）：GitLab 令牌缺少写权限"
 ```
+
+§3.8 忘了上报时，`finish` / `fail` 也接受 `--hotreload <状态> --hotreload-reason "<原因>"`，在这里补上即可；
+但不要依赖兜底，兜底结果是「未执行」，会把真实成功的热更新误报成没做。
 
 `finish` / `fail` 的返回值里 `ok:false` 说明评论没写成功（退出码同时为 1），要在对话总结里如实说明，不要说成已完成。
 
@@ -265,6 +291,8 @@ node <技能目录>/scripts/progress.mjs update --state work/jira-code/<KEY>/pro
 - **异常写进同一条评论**：中途出错先在评论里留痕再继续修（`update --step "..."`），确认无法继续时用 `fail --message "<原因>"` 收尾；不要新开评论，也不要把错误咽下去。
 - 评论内容保持简短：阶段 + 最近几条明细 + 分支 + 时间 + 异常原因即可，不要贴大段代码或完整日志。
 - 评论用 Jira wiki 标记（`h5.` 标题、`*粗体*`），不要写 Markdown 表格。
+- 评论里有一行「热更新」是脚本固定渲染的（取值 `待执行` / `已完成` / `未执行` / `失败`），
+  只能通过 `--hotreload` / `--hotreload-reason` 控制；不要在 `--step` 或 `--message` 里重复描述热更新结论。
 
 ## 5. 编码要求
 
@@ -278,7 +306,8 @@ node <技能目录>/scripts/progress.mjs update --state work/jira-code/<KEY>/pro
 
 ## 6. 交付物与对话总结
 
-完成后用简洁中文总结：单号、仓库、分支（`feature/<KEY>`）、提交（短 SHA + 摘要）、推送结果、评论状态（评论 ID 与当前状态）、以及没做到的部分与原因。
+完成后用简洁中文总结：单号、仓库、分支（`feature/<KEY>`）、提交（短 SHA + 摘要）、推送结果、
+**热更新结论**（已完成／未执行／失败，以及原因）、评论状态（评论 ID 与当前状态）、以及没做到的部分与原因。
 
 ## 7. 自检清单
 
@@ -289,6 +318,7 @@ node <技能目录>/scripts/progress.mjs update --state work/jira-code/<KEY>/pro
 - [ ] `git-flow.mjs push` 返回 `ok:true`，且没有使用 `--force`。
 - [ ] 方案里给了流水线地址时已按 §3.8 处理热更新；地址缺失/环境不支持/凭据缺失时已在评论里写明跳过原因。
 - [ ] 热更新是在检出目录还在的时候做的（制品与部署文件都取自检出目录），没有出现「先删目录再热更新」。
+- [ ] 热更新结论已用 `--hotreload` 上报（成功 / 未执行 / 失败），评论里那一行「热更新」不是兜底出来的「未执行」。
 - [ ] 热更新成功后已在评论里写明怎么关闭热加载（PaaS 重新部署 / K8S 点「重构」）。
 - [ ] 热更新只用了方案里的地址，没有自己拼项目 id 或环境 id。
 - [ ] 热更新处理完后已用 `cleanup --verify-remote` 删除本地检出目录，工作区没有留下代码副本。
@@ -320,5 +350,7 @@ node <技能目录>/scripts/progress.mjs update --state work/jira-code/<KEY>/pro
 | `devops-hotreload-uploader` 不存在 | 从 devops-mcp-invoker 文档里的 Nexus 地址下载到 `~/.devops-hotreload/bin/`；下载失败就跳过 |
 | 目标环境是 UAT 或 binary | 这两类环境不支持热更新，直接记录并跳过 |
 | `progress.mjs` 报「进度评论写入失败」 | Jira 不可达或令牌无评论权限；检查 `selftest` 结果，把失败写进对话总结，不要谎报成功 |
+| `progress.mjs` 报「无法识别的热更新状态」 | `--hotreload` 只认 `pending`/`succeeded`/`skipped`/`failed`（及少量中文同义词）；用标准值重跑 |
+| 评论里「热更新」显示兜底的「未执行（未进入热更新阶段）」 | 忘记上报：热更新阶段结束时用 `update --hotreload <状态> --hotreload-reason "<原因>"` 补一次 |
 | 评论里出现两条进度评论 | 只应发生在历史遗留数据上；以带标记的最新一条为准继续更新，不要删评论 |
 | 心跳进程没有停 | `finish`/`fail` 未调用，或进程被强杀；用 `progress.mjs stop --state <文件>` 手动收尾 |

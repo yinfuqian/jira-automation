@@ -281,6 +281,31 @@ docker compose -f docker-compose-dev.yaml exec worker sh -c "cd /tmp/<项目> &&
 声明 `1.8`／`1.7` 的用 `jdk 8`。默认固定在 JDK 8，是因为容器内要编译的业务仓库绝大多数是 Java 8，而且
 老项目依赖的 lombok 1.16~1.18 在 JDK 21 下会直接报编译错误——用错版本会把依赖不兼容伪装成代码缺陷。
 
+### Maven 本地仓库
+
+镜像内 Maven 默认没有任何镜像配置，只会访问 Maven Central；业务仓库依赖公司内网私有制品
+（如 `com.zhuiyi.prompt:llm-prompt-jar`、`com.cmos.dialogos:dialogos-api`），在容器里必然解析失败，
+jira-code 的编译验证与热更新制品构建就只能整段跳过。所以 Compose 给 `worker` 额外挂了两个路径：
+
+- `config/maven/settings.xml` → `/root/.m2/settings.xml`（只读）：把 `mirrorOf=*` 指向内网 Nexus
+  聚合仓库 `http://pkg.in.wezhuiyi.com/repository/maven-public/`。该仓库匿名可读，文件里不含任何凭据，
+  可以随仓库与部署包分发。
+- `./data/m2/repository` → `/root/.m2/repository`：Maven 本地仓库缓存。放在宿主机 `data` 目录下，
+  容器重建不会丢，也已被 `.gitignore` 忽略。
+
+本地仓库首次需要预热：把开发机 `C:\Users\86183\.m2\repository` 的内容拷到部署机 `./data/m2/repository`，
+业务仓库的私有依赖才能离线命中（整份缓存约 3.8 GB）。只拷私有依赖也能用，但首次构建仍需联网补齐其余依赖。
+
+```powershell
+# 开发机执行，目录内容拷到部署机相同相对位置
+scp -r C:\Users\86183\.m2\repository user@server:/srv/jira-automation/data/m2/
+```
+
+```bash
+# 部署机上确认挂载与缓存都已生效
+docker compose -f docker-compose-dev.yaml exec worker sh -c "ls -l /root/.m2/settings.xml && ls /root/.m2/repository | head"
+```
+
 ### 生成精简生产部署包
 
 首次部署或生产 Compose、配置模板发生变化时生成部署包：
@@ -296,6 +321,11 @@ powershell -ExecutionPolicy Bypass -File scripts\package_production_deploy.ps1 -
 - `.env.production.example`
 - `users.example.csv`
 - `README.md`
+- `config/maven/settings.xml`
+
+`config/maven/settings.xml` 必须随包分发：生产 Compose 把它挂载为 `/root/.m2/settings.xml`，
+缺少该文件时 Docker 会把挂载点建成空目录，Maven 反而读不到镜像配置。它不含任何凭据，可以安全分发。
+Maven 本地仓库（`./data/m2/repository`）体积大且不随包发布，需要按「Maven 本地仓库」一节单独拷贝。
 
 部署包不包含 `backend`、`frontend`、`windows-client` 或其他源码目录。
 

@@ -1,0 +1,28 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  jira-automation 容器内 Maven 用户配置：由 docker-compose 挂载到 /root/.m2/settings.xml。
+
+  为什么需要它：技能要在容器里用 mvn 编译业务仓库（jira-code 的编译验证与热更新制品构建），
+  业务仓库依赖公司内网私有制品（如 com.zhuiyi.prompt:llm-prompt-jar、com.cmos.dialogos:dialogos-api）。
+  镜像自带的 Maven 没有任何镜像配置，会直接访问 Maven Central，私有依赖必然解析失败，
+  导致 jira-code 既不能编译验证、也做不出热更新制品，只能整段跳过。
+
+  本文件只写镜像、不含任何凭据：内网 Nexus 的 maven-public 聚合仓库匿名可读。
+  需要发布制品或访问受限仓库时，请在容器外另建 settings-security.xml 并单独挂载，不要把账号密码提交进仓库。
+-->
+<settings xmlns="http://maven.apache.org/SETTINGS/1.0.0"
+          xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+          xsi:schemaLocation="http://maven.apache.org/SETTINGS/1.0.0 http://maven.apache.org/xsd/settings-1.0.0.xsd">
+  <!-- 与 compose 挂载的宿主机缓存目录一致：预热好的依赖只有放在这里，离线构建（mvn -o）才能命中。 -->
+  <localRepository>/root/.m2/repository</localRepository>
+
+  <mirrors>
+    <!-- 内网 Nexus 聚合仓库：mirrorOf=* 覆盖 POM 里声明的所有仓库，私有与公开依赖都从这一处取。 -->
+    <mirror>
+      <id>wezhuiyi-nexus</id>
+      <name>wezhuiyi nexus maven-public</name>
+      <mirrorOf>*</mirrorOf>
+      <url>http://pkg.in.wezhuiyi.com/repository/maven-public/</url>
+    </mirror>
+  </mirrors>
+</settings>

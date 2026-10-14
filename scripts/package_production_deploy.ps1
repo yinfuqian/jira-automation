@@ -33,6 +33,13 @@ Copy-Item -LiteralPath (Join-Path $projectRoot "deploy/.env.production.example")
 Copy-Item -LiteralPath (Join-Path $projectRoot "deploy/users.example.csv") -Destination $staging
 Copy-Item -LiteralPath (Join-Path $projectRoot "deploy/README.md") -Destination $staging
 
+# Maven 设置随包分发：生产 Compose 把它挂载为 /root/.m2/settings.xml（只含内网镜像地址，无凭据）。
+# 缺少该文件时 Docker 会把挂载点建成空目录，Maven 读不到镜像配置。
+$mavenConfigSource = Join-Path $projectRoot "config/maven/settings.xml"
+$mavenConfigTarget = Join-Path $staging "config/maven"
+New-Item -ItemType Directory -Force -Path $mavenConfigTarget | Out-Null
+Copy-Item -LiteralPath $mavenConfigSource -Destination $mavenConfigTarget
+
 # 技能定义随部署包一起发布；技能令牌等本地文件不打包。
 Copy-Item -LiteralPath (Join-Path $projectRoot "skills") -Destination $staging -Recurse
 

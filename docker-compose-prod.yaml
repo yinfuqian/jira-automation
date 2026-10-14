@@ -124,6 +124,12 @@ services:
       # CODEX_HOME 独立挂载：Codex 状态库（state/logs/goals 等）落在 data 目录，不污染仓库。
       - ./data/codex:/data/codex
       - ./data/skill-workspace:/data/skill-workspace
+      # Maven：settings.xml 指向内网 Nexus 镜像，本地仓库用宿主机缓存目录。
+      # 技能（jira-code）在容器里编译业务仓库时，私有依赖只能从内网 Nexus 取；
+      # 预热好的本地仓库让 `mvn -o` 离线构建能直接命中，不必每次联网拉取。
+      # 两个路径都要先在宿主机准备好：settings.xml 随仓库分发，repository 见 README「Maven 本地仓库」。
+      - ./config/maven/settings.xml:/root/.m2/settings.xml:ro
+      - ./data/m2/repository:/root/.m2/repository
     restart: unless-stopped
     depends_on:
       - api
