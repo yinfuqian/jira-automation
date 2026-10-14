@@ -7,6 +7,8 @@
  */
 import { escapeHtml, renderAnalysisHtml } from "./report.mjs";
 import {
+  ScopeResolutionError,
+  SCOPE_ERROR_REASONS,
   listConfiguredCommonModules,
   resolveGitTag,
   resolveModuleMapping,
@@ -135,32 +137,68 @@ export async function resolveModule(productId, value, options = {}) {
  */
 async function resolveScopeEntry(input = {}, options = {}, resolvedProduct = null, allowCommonWithoutTag = false) {
   const product = resolvedProduct || await resolveProduct(input.product, options);
-  const module = await resolveModule(product.id, input.module, options);
-  let configuredRepo = "";
-  let configuredRef = "";
-  let configuredCommon = false;
-  let configError = null;
-  try {
-    const productMapping = resolveProductMapping(product.name || input.product, null, options.configPath);
-    const moduleMapping = resolveModuleMapping(productMapping, module.name || input.module);
-    configuredRepo = moduleMapping.repoUrl;
-    configuredCommon = Boolean(moduleMapping.value.common);
-    if (input.version) {
-      configuredRef = resolveGitTag(productMapping, moduleMapping, input.version, null, options.configPath).gitTag;
-    }
-  } catch (error) {
-    configError = error;
-  }
   const explicitFullScope = Boolean(input.branch && (input.ref || input.version));
-  if (configError && !explicitFullScope) {
-    throw new Error("分析范围映射失败：" + configError.message + "；如确需人工指定，请同时传 --branch 与 --version");
+  const inspectConfiguredScope = (moduleValue = input.module) => {
+    const result = {
+      configuredRepo: "",
+      configuredRef: "",
+      configuredCommon: false,
+      error: null,
+    };
+    try {
+      const productMapping = resolveProductMapping(product.name || input.product, null, options.configPath);
+      const moduleMapping = resolveModuleMapping(productMapping, moduleValue);
+      result.configuredRepo = moduleMapping.repoUrl;
+      result.configuredCommon = Boolean(moduleMapping.value.common);
+      if (input.version) {
+        result.configuredRef = resolveGitTag(productMapping, moduleMapping, input.version, null, options.configPath).gitTag;
+      }
+    } catch (error) {
+      result.error = error;
+    }
+    return result;
+  };
+  const wrapMappingError = (error) => {
+    const wrapped = new Error("分析范围映射失败：" + error.message + "；如确需人工指定，请同时传 --branch 与 --version");
+    if (error && error.reason) wrapped.reason = error.reason;
+    if (error && error.code) wrapped.code = error.code;
+    const details = {
+      product: product.name || input.product || "",
+      module: input.module || "",
+      version: input.version || "",
+      ...((error && error.details) || {}),
+    };
+    if (!Array.isArray(details.missing) || !details.missing.length) {
+      details.missing = [String((error && error.message) || "分析范围映射缺失")];
+    }
+    wrapped.details = details;
+    return wrapped;
+  };
+
+  const moduleInput = String(input.module || "").trim();
+  const inspectBeforeModule = moduleInput && !/^\d+$/.test(moduleInput);
+  let configured = inspectBeforeModule ? inspectConfiguredScope(moduleInput) : null;
+  if (configured && configured.error && !explicitFullScope) {
+    throw wrapMappingError(configured.error);
   }
-  const branchAddress = String(input.branch || configuredRepo || "").trim();
-  const tagVersion = String(input.ref || configuredRef || input.version || "").trim();
-  const commonWithoutTag = configuredCommon && allowCommonWithoutTag && !tagVersion;
+
+  const module = await resolveModule(product.id, input.module, options);
+  if (!configured) {
+    configured = inspectConfiguredScope(module.name || input.module);
+    if (configured.error && !explicitFullScope) {
+      throw wrapMappingError(configured.error);
+    }
+  }
+  const branchAddress = String(input.branch || configured.configuredRepo || "").trim();
+  const tagVersion = String(input.ref || configured.configuredRef || input.version || "").trim();
+  const commonWithoutTag = configured.configuredCommon && allowCommonWithoutTag && !tagVersion;
   if (!branchAddress || (!tagVersion && !commonWithoutTag)) {
-    const detail = configError ? "；映射配置错误：" + configError.message : "";
-    throw new Error("缺少代码仓库地址或 Tag：请从 Jira 读取产品、模块与 Tag 版本，或用 --branch / --version 指定（模块：" + module.name + "）" + detail);
+    const detail = configured.error ? "；映射配置错误：" + configured.error.message : "";
+    throw new ScopeResolutionError(
+      "缺少代码仓库地址或 Tag：请从 Jira 读取产品、模块与 Tag 版本，或用 --branch / --version 指定（模块：" + module.name + "）" + detail,
+      SCOPE_ERROR_REASONS.INPUT_MISSING,
+      { product: product.name || input.product, module: module.name || input.module, version: input.version || "" },
+    );
   }
   return {
     productId: product.id,
@@ -169,7 +207,7 @@ async function resolveScopeEntry(input = {}, options = {}, resolvedProduct = nul
     moduleName: module.name,
     branchAddress,
     tagVersion,
-    common: configuredCommon,
+    common: configured.configuredCommon,
   };
 }
 

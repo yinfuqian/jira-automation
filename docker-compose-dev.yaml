@@ -4,7 +4,7 @@ services:
     image: ${BACKEND_IMAGE}
     network_mode: "host"
     env_file:
-      - .env
+      - ${ENV_FILE:-.env}
     environment:
       FLASK_APP: app.py
       PYTHONUNBUFFERED: "1"
@@ -70,7 +70,7 @@ services:
     image: ${BACKEND_IMAGE}
     network_mode: "host"
     env_file:
-      - .env
+      - ${ENV_FILE:-.env}
     environment:
       PYTHONUNBUFFERED: "1"
       # 技能执行（Codex Agent）相关配置。CODEX_BASE_URL/CODEX_API_KEY 为空时回退到 OPENAI_URL/OPENAI_KEY。
@@ -132,7 +132,7 @@ services:
     image: ${BACKEND_IMAGE}
     network_mode: "host"
     env_file:
-      - .env
+      - ${ENV_FILE:-.env}
     environment:
       FLASK_APP: app.py
       PYTHONUNBUFFERED: "1"

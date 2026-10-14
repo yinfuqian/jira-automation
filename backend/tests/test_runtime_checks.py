@@ -18,14 +18,35 @@ class RuntimeChecksTests(unittest.TestCase):
             application_checker=lambda: None,
             celery_checker=lambda: None,
             git_checker=lambda: None,
+            java_checker=lambda: None,
             ocr_checker=lambda: None,
         )
 
         self.assertEqual(
             set(checks),
-            {"python", "dependencies", "application", "celery", "git", "ocr"},
+            {"python", "dependencies", "application", "celery", "git", "java", "ocr"},
         )
         self.assertTrue(all(item["ok"] for item in checks.values()))
+
+    def test_build_checks_surface_java_toolchain_failure(self):
+        """容器内缺少 JDK/Maven 时必须让构建检查失败，而不是等技能编译时才报错。"""
+        from app.runtime_checks import run_build_checks
+
+        def fail_java():
+            raise RuntimeError("JDK 8 版本不符合预期：javac 11.0.22")
+
+        checks = run_build_checks(
+            python_checker=lambda: None,
+            dependency_checker=lambda: None,
+            application_checker=lambda: None,
+            celery_checker=lambda: None,
+            git_checker=lambda: None,
+            java_checker=fail_java,
+            ocr_checker=lambda: None,
+        )
+
+        self.assertFalse(checks["java"]["ok"])
+        self.assertIn("JDK 8", checks["java"]["message"])
 
     def test_readiness_reports_each_failed_external_dependency(self):
         from app.runtime_checks import run_readiness_checks

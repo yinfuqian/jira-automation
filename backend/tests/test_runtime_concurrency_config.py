@@ -6,12 +6,11 @@ PROJECT_ROOT = Path(__file__).resolve().parents[2]
 
 
 class RuntimeConcurrencyConfigTests(unittest.TestCase):
-    def test_docker_compose_api_uses_threaded_gunicorn_settings(self):
-        compose = (PROJECT_ROOT / "docker-compose.yml").read_text(encoding="utf-8")
+    def test_online_compose_api_uses_configurable_gunicorn_settings(self):
+        compose = (PROJECT_ROOT / "docker-compose-dev.yaml").read_text(encoding="utf-8")
 
-        self.assertIn("${GUNICORN_WORKER_CLASS:-gthread}", compose)
-        self.assertIn("${WEB_THREADS:-8}", compose)
-        self.assertIn("${GUNICORN_TIMEOUT:-300}", compose)
+        self.assertIn("- ${WEB_CONCURRENCY}", compose)
+        self.assertIn("- gevent", compose)
 
     def test_backend_start_scripts_keep_upload_concurrency_tunable(self):
         start_sh = (PROJECT_ROOT / "backend" / "start.sh").read_text(encoding="utf-8")

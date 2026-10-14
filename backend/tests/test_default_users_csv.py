@@ -15,12 +15,9 @@ class DefaultUsersCsvTests(unittest.TestCase):
         self.assertIsNotNone(user)
         self.assertEqual(user.status, 1)
 
-        compose_text = (project_dir / "docker-compose.yml").read_text(encoding="utf-8")
-        # Compose 使用 YAML 锚点集中声明一次，再由 migrate、api、worker 三个服务复用。
-        self.assertEqual(compose_text.count("./users.csv:/data/users.csv:ro"), 1)
-        self.assertEqual(compose_text.count("AUTH_USERS_FILE: /data/users.csv"), 1)
-        self.assertEqual(compose_text.count("volumes: *backend-volumes"), 3)
-        self.assertEqual(compose_text.count("environment: *backend-environment"), 3)
+        compose_text = (project_dir / "docker-compose-dev.yaml").read_text(encoding="utf-8")
+        # 线上 API 使用宿主机 data 目录中的用户表。
+        self.assertEqual(compose_text.count("./data/users.csv:/users.csv"), 1)
 
 
 if __name__ == "__main__":

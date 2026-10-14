@@ -1,0 +1,187 @@
+version: '2'
+services:
+  api:
+    image: ${BACKEND_IMAGE}
+    network_mode: "host"
+    env_file:
+      - ${ENV_FILE:-.env}
+    environment:
+      FLASK_APP: app.py
+      PYTHONUNBUFFERED: "1"
+      # 技能执行（Codex Agent）相关配置。CODEX_BASE_URL/CODEX_API_KEY 为空时回退到 OPENAI_URL/OPENAI_KEY。
+      # 技能目录与 CODEX_HOME 分离：技能由宿主机 ./skills 只读挂载，CODEX_HOME 单独存放运行期状态。
+      SKILLS_DIR: ${SKILLS_DIR:-/data/skills}
+      SKILL_WORKSPACE_DIR: /data/skill-workspace
+      CODEX_HOME: /data/codex
+      # 外部调用令牌：默认值仅用于本地验证，生产环境请在 .env 中替换为随机强令牌。
+      SKILL_API_TOKEN: ${SKILL_API_TOKEN:-local-dev-token}
+      SKILL_URL_ALLOWED_HOSTS: ${SKILL_URL_ALLOWED_HOSTS:-jira.in.wezhuiyi.com}
+      CODEX_BIN: ${CODEX_BIN:-codex}
+      CODEX_MODEL: ${CODEX_MODEL:-codex/deepseek-flash}
+      CODEX_MODEL_PROVIDER: ${CODEX_MODEL_PROVIDER:-skillrun}
+      CODEX_BASE_URL: ${CODEX_BASE_URL:-https://newapi.in.wezhuiyi.com/v1}
+      CODEX_API_KEY: ${CODEX_API_KEY:-}
+      CODEX_API_KEY_ENV: ${CODEX_API_KEY_ENV:-CODEX_SKILL_API_KEY}
+      CODEX_WIRE_API: ${CODEX_WIRE_API:-responses}
+      CODEX_REASONING_EFFORT: ${CODEX_REASONING_EFFORT:-high}
+      CODEX_SANDBOX: ${CODEX_SANDBOX:-danger-full-access}
+      CODEX_EPHEMERAL: ${CODEX_EPHEMERAL:-true}
+      # 单次技能执行超时秒数：留空表示按技能自身 runtime.json 声明（jira-code 7200、jira-defect-gate 3600、其余 1800）。
+      CODEX_SKILL_TIMEOUT: ${CODEX_SKILL_TIMEOUT:-}
+      # 连续网络错误达到该次数即判定模型/Jira 不可达并提前终止，避免空转到超时。
+      CODEX_NETWORK_RETRY_LIMIT: ${CODEX_NETWORK_RETRY_LIMIT:-10}
+      # worker 启动时把上一次运行遗留的“执行中”任务标记为失败。
+      SKILL_RECOVER_ORPHANS: ${SKILL_RECOVER_ORPHANS:-true}
+      JIRA_TOKEN: ${JIRA_TOKEN:-}
+      JIRA_BASE_URL: ${JIRA_BASE_URL:-https://jira.in.wezhuiyi.com}
+      # jira-code 技能需要 GitLab 凭据来拉分支与推送（令牌需要写仓库权限）；留空时技能会跳过推送并如实上报。
+      GIT_BASE_URL: ${GIT_BASE_URL:-}
+      GIT_USER: ${GIT_USER:-}
+      GIT_PASSWORD: ${GIT_PASSWORD:-}
+      GITLAB_PRIVATE_TOKEN: ${GITLAB_PRIVATE_TOKEN:-}
+      # 流水线 MCP：jira-code 的热更新阶段通过 pipeline-integration-mcp 调用流水线平台接口。
+      # 令牌在流水线平台个人中心签发，只写进 CODEX_HOME 卷内的 config.toml；留空时不注册 MCP，热更新按跳过处理。
+      DEVOPS_MCP_URL: ${DEVOPS_MCP_URL:-https://devops.ks1.wezhuiyi.com/mcp}
+      DEVOPS_MCP_TOKEN: ${DEVOPS_MCP_TOKEN:-}
+    command:
+      - gunicorn
+      - -w
+      - ${WEB_CONCURRENCY}
+      - -k
+      - gevent
+      - --bind
+      - 0.0.0.0:5000
+      - app:create_app()
+    ports:
+      - "${API_PORT}:5000"
+    volumes:
+      - ./data/users.csv:/users.csv
+      - ./data/upload:/data/upload
+      - ./data/logs:/app/app/logs
+      - ./data/repos:/tmp/jira-automation-repos
+      # 技能目录只读挂载：Codex 运行时无法改动技能定义，也不会把内置技能写进业务技能目录。
+      - ./skills:/data/skills:ro
+      # CODEX_HOME 独立挂载：Codex 状态库（state/logs/goals 等）落在 data 目录，不污染仓库。
+      - ./data/codex:/data/codex
+      - ./data/skill-workspace:/data/skill-workspace
+    restart: unless-stopped
+
+  worker:
+    image: ${BACKEND_IMAGE}
+    network_mode: "host"
+    env_file:
+      - ${ENV_FILE:-.env}
+    environment:
+      PYTHONUNBUFFERED: "1"
+      # 技能执行（Codex Agent）相关配置。CODEX_BASE_URL/CODEX_API_KEY 为空时回退到 OPENAI_URL/OPENAI_KEY。
+      # 技能目录与 CODEX_HOME 分离：技能由宿主机 ./skills 只读挂载，CODEX_HOME 单独存放运行期状态。
+      SKILLS_DIR: ${SKILLS_DIR:-/data/skills}
+      SKILL_WORKSPACE_DIR: /data/skill-workspace
+      CODEX_HOME: /data/codex
+      # 外部调用令牌：默认值仅用于本地验证，生产环境请在 .env 中替换为随机强令牌。
+      SKILL_API_TOKEN: ${SKILL_API_TOKEN:-local-dev-token}
+      SKILL_URL_ALLOWED_HOSTS: ${SKILL_URL_ALLOWED_HOSTS:-jira.in.wezhuiyi.com}
+      CODEX_BIN: ${CODEX_BIN:-codex}
+      CODEX_MODEL: ${CODEX_MODEL:-codex/deepseek-flash}
+      CODEX_MODEL_PROVIDER: ${CODEX_MODEL_PROVIDER:-skillrun}
+      CODEX_BASE_URL: ${CODEX_BASE_URL:-https://newapi.in.wezhuiyi.com/v1}
+      CODEX_API_KEY: ${CODEX_API_KEY:-}
+      CODEX_API_KEY_ENV: ${CODEX_API_KEY_ENV:-CODEX_SKILL_API_KEY}
+      CODEX_WIRE_API: ${CODEX_WIRE_API:-responses}
+      CODEX_REASONING_EFFORT: ${CODEX_REASONING_EFFORT:-high}
+      CODEX_SANDBOX: ${CODEX_SANDBOX:-danger-full-access}
+      CODEX_EPHEMERAL: ${CODEX_EPHEMERAL:-true}
+      # 单次技能执行超时秒数：留空表示按技能自身 runtime.json 声明（jira-code 7200、jira-defect-gate 3600、其余 1800）。
+      CODEX_SKILL_TIMEOUT: ${CODEX_SKILL_TIMEOUT:-}
+      # 连续网络错误达到该次数即判定模型/Jira 不可达并提前终止，避免空转到超时。
+      CODEX_NETWORK_RETRY_LIMIT: ${CODEX_NETWORK_RETRY_LIMIT:-10}
+      # worker 启动时把上一次运行遗留的“执行中”任务标记为失败。
+      SKILL_RECOVER_ORPHANS: ${SKILL_RECOVER_ORPHANS:-true}
+      JIRA_TOKEN: ${JIRA_TOKEN:-}
+      JIRA_BASE_URL: ${JIRA_BASE_URL:-https://jira.in.wezhuiyi.com}
+      # jira-code 技能需要 GitLab 凭据来拉分支与推送（令牌需要写仓库权限）；留空时技能会跳过推送并如实上报。
+      GIT_BASE_URL: ${GIT_BASE_URL:-}
+      GIT_USER: ${GIT_USER:-}
+      GIT_PASSWORD: ${GIT_PASSWORD:-}
+      GITLAB_PRIVATE_TOKEN: ${GITLAB_PRIVATE_TOKEN:-}
+      # 流水线 MCP：jira-code 的热更新阶段通过 pipeline-integration-mcp 调用流水线平台接口。
+      # 令牌在流水线平台个人中心签发，只写进 CODEX_HOME 卷内的 config.toml；留空时不注册 MCP，热更新按跳过处理。
+      DEVOPS_MCP_URL: ${DEVOPS_MCP_URL:-https://devops.ks1.wezhuiyi.com/mcp}
+      DEVOPS_MCP_TOKEN: ${DEVOPS_MCP_TOKEN:-}
+    command:
+      - celery
+      - -A
+      - celery_worker.celery_app
+      - worker
+      - --loglevel=INFO
+      - --concurrency=${CELERY_WORKER_CONCURRENCY}
+    volumes:
+      - ./data/upload:/data/upload
+      - ./data/logs:/app/app/logs
+      - ./data/repos:/tmp/jira-automation-repos
+      # 技能目录只读挂载：Codex 运行时无法改动技能定义，也不会把内置技能写进业务技能目录。
+      - ./skills:/data/skills:ro
+      # CODEX_HOME 独立挂载：Codex 状态库（state/logs/goals 等）落在 data 目录，不污染仓库。
+      - ./data/codex:/data/codex
+      - ./data/skill-workspace:/data/skill-workspace
+    restart: unless-stopped
+    depends_on:
+      - api
+
+  migrate:
+    image: ${BACKEND_IMAGE}
+    network_mode: "host"
+    env_file:
+      - ${ENV_FILE:-.env}
+    environment:
+      FLASK_APP: app.py
+      PYTHONUNBUFFERED: "1"
+      # 技能执行（Codex Agent）相关配置。CODEX_BASE_URL/CODEX_API_KEY 为空时回退到 OPENAI_URL/OPENAI_KEY。
+      # 技能目录与 CODEX_HOME 分离：技能由宿主机 ./skills 只读挂载，CODEX_HOME 单独存放运行期状态。
+      SKILLS_DIR: ${SKILLS_DIR:-/data/skills}
+      SKILL_WORKSPACE_DIR: /data/skill-workspace
+      CODEX_HOME: /data/codex
+      # 外部调用令牌：默认值仅用于本地验证，生产环境请在 .env 中替换为随机强令牌。
+      SKILL_API_TOKEN: ${SKILL_API_TOKEN:-local-dev-token}
+      SKILL_URL_ALLOWED_HOSTS: ${SKILL_URL_ALLOWED_HOSTS:-jira.in.wezhuiyi.com}
+      CODEX_BIN: ${CODEX_BIN:-codex}
+      CODEX_MODEL: ${CODEX_MODEL:-codex/deepseek-flash}
+      CODEX_MODEL_PROVIDER: ${CODEX_MODEL_PROVIDER:-skillrun}
+      CODEX_BASE_URL: ${CODEX_BASE_URL:-https://newapi.in.wezhuiyi.com/v1}
+      CODEX_API_KEY: ${CODEX_API_KEY:-}
+      CODEX_API_KEY_ENV: ${CODEX_API_KEY_ENV:-CODEX_SKILL_API_KEY}
+      CODEX_WIRE_API: ${CODEX_WIRE_API:-responses}
+      CODEX_REASONING_EFFORT: ${CODEX_REASONING_EFFORT:-high}
+      CODEX_SANDBOX: ${CODEX_SANDBOX:-danger-full-access}
+      CODEX_EPHEMERAL: ${CODEX_EPHEMERAL:-true}
+      # 单次技能执行超时秒数：留空表示按技能自身 runtime.json 声明（jira-code 7200、jira-defect-gate 3600、其余 1800）。
+      CODEX_SKILL_TIMEOUT: ${CODEX_SKILL_TIMEOUT:-}
+      # 连续网络错误达到该次数即判定模型/Jira 不可达并提前终止，避免空转到超时。
+      CODEX_NETWORK_RETRY_LIMIT: ${CODEX_NETWORK_RETRY_LIMIT:-10}
+      # worker 启动时把上一次运行遗留的“执行中”任务标记为失败。
+      SKILL_RECOVER_ORPHANS: ${SKILL_RECOVER_ORPHANS:-true}
+      JIRA_TOKEN: ${JIRA_TOKEN:-}
+      JIRA_BASE_URL: ${JIRA_BASE_URL:-https://jira.in.wezhuiyi.com}
+      # jira-code 技能需要 GitLab 凭据来拉分支与推送（令牌需要写仓库权限）；留空时技能会跳过推送并如实上报。
+      GIT_BASE_URL: ${GIT_BASE_URL:-}
+      GIT_USER: ${GIT_USER:-}
+      GIT_PASSWORD: ${GIT_PASSWORD:-}
+      GITLAB_PRIVATE_TOKEN: ${GITLAB_PRIVATE_TOKEN:-}
+      # 流水线 MCP：jira-code 的热更新阶段通过 pipeline-integration-mcp 调用流水线平台接口。
+      # 令牌在流水线平台个人中心签发，只写进 CODEX_HOME 卷内的 config.toml；留空时不注册 MCP，热更新按跳过处理。
+      DEVOPS_MCP_URL: ${DEVOPS_MCP_URL:-https://devops.ks1.wezhuiyi.com/mcp}
+      DEVOPS_MCP_TOKEN: ${DEVOPS_MCP_TOKEN:-}
+    command:
+      - sh
+      - -c
+      - python init_database.py && (flask db upgrade || python bootstrap_schema.py)
+    volumes:
+      - ./data/upload:/data/upload
+      - ./data/logs:/app/app/logs
+      - ./data/repos:/tmp/jira-automation-repos
+      # 技能目录只读挂载：Codex 运行时无法改动技能定义，也不会把内置技能写进业务技能目录。
+      - ./skills:/data/skills:ro
+      # CODEX_HOME 独立挂载：Codex 状态库（state/logs/goals 等）落在 data 目录，不污染仓库。
+      - ./data/codex:/data/codex
+      - ./data/skill-workspace:/data/skill-workspace
+    restart: unless-stopped

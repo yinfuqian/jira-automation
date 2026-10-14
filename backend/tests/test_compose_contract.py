@@ -4,38 +4,42 @@ from pathlib import Path
 
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
-COMPOSE_PATH = PROJECT_ROOT / "docker-compose.yml"
+DEV_COMPOSE_PATH = PROJECT_ROOT / "docker-compose-dev.yaml"
+PROD_COMPOSE_PATH = PROJECT_ROOT / "docker-compose-prod.yaml"
 
 
 class ComposeContractTests(unittest.TestCase):
-    def test_compose_declares_complete_fault_analysis_service_graph(self):
-        source = COMPOSE_PATH.read_text(encoding="utf-8")
+    def test_online_compose_declares_expected_service_graph(self):
+        source = DEV_COMPOSE_PATH.read_text(encoding="utf-8")
 
-        for service in ("mysql", "redis", "migrate", "api", "worker", "frontend"):
+        for service in ("api", "worker", "migrate"):
             self.assertRegex(source, rf"(?m)^  {re.escape(service)}:\s*$")
+        self.assertNotRegex(source, r"(?m)^  (mysql|redis|frontend):\s*$")
 
-    def test_compose_uses_health_based_startup_dependencies(self):
-        source = COMPOSE_PATH.read_text(encoding="utf-8")
+    def test_online_compose_uses_prebuilt_backend_image_and_host_network(self):
+        source = DEV_COMPOSE_PATH.read_text(encoding="utf-8")
 
-        self.assertIn("condition: service_healthy", source)
-        self.assertIn("condition: service_completed_successfully", source)
-        self.assertGreaterEqual(source.count("healthcheck:"), 5)
+        self.assertNotIn("build:", source)
+        self.assertEqual(source.count("image: ${BACKEND_IMAGE}"), 3)
+        self.assertEqual(source.count('network_mode: "host"'), 3)
 
-    def test_compose_persists_database_redis_ocr_and_runtime_data(self):
-        source = COMPOSE_PATH.read_text(encoding="utf-8")
+    def test_online_compose_mounts_runtime_data_and_skills(self):
+        source = DEV_COMPOSE_PATH.read_text(encoding="utf-8")
 
-        for volume in (
-            "mysql-data",
-            "redis-data",
-            "ocr-models",
-            "uploads",
-            "runtime-logs",
-            "repo-cache",
+        self.assertEqual(source.count("env_file:\n      - ${ENV_FILE:-.env}"), 3)
+        for mount in (
+            "./data/users.csv:/users.csv",
+            "./data/upload:/data/upload",
+            "./data/logs:/app/app/logs",
+            "./data/repos:/tmp/jira-automation-repos",
+            "./skills:/data/skills:ro",
+            "./data/codex:/data/codex",
+            "./data/skill-workspace:/data/skill-workspace",
         ):
-            self.assertIn(f"{volume}:", source)
+            self.assertIn(mount, source)
 
-    def test_env_example_has_unique_local_build_defaults(self):
-        """示例配置不能用重复键意外覆盖本地可构建默认值。"""
+    def test_env_example_has_unique_runtime_defaults(self):
+        """示例配置不能用重复键意外覆盖运行镜像默认值。"""
         source = (PROJECT_ROOT / ".env.example").read_text(encoding="utf-8")
         keys = [
             line.split("=", 1)[0].strip()
@@ -44,20 +48,20 @@ class ComposeContractTests(unittest.TestCase):
         ]
 
         self.assertEqual(len(keys), len(set(keys)))
-        self.assertIn("PYTHON_BASE_IMAGE=docker.m.daocloud.io/library/python:3.10-slim-bookworm", source)
         self.assertIn("BACKEND_IMAGE=jira-automation-backend:latest", source)
-        self.assertIn("FRONTEND_IMAGE=jira-automation-frontend:latest", source)
+        self.assertIn("MYSQL_HOST=127.0.0.1", source)
+        self.assertIn("REDIS_HOST=127.0.0.1", source)
 
-    def test_local_database_and_redis_require_explicit_profile(self):
-        """外部依赖模式不应默认创建本地 MySQL 和 Redis 容器。"""
-        source = COMPOSE_PATH.read_text(encoding="utf-8")
-        migrate_source = source.split("  migrate:", 1)[1].split("  api:", 1)[0]
+    def test_readme_uses_online_compose_and_environment_specific_restart_scripts(self):
         readme = (PROJECT_ROOT / "README.md").read_text(encoding="utf-8")
 
-        self.assertEqual(source.count('profiles: ["local-deps"]'), 2)
-        self.assertEqual(migrate_source.count("required: false"), 2)
-        self.assertIn("docker compose --profile local-deps up -d --build", readme)
-        self.assertIn("docker compose up -d --build", readme)
+        self.assertEqual(DEV_COMPOSE_PATH.read_bytes(), PROD_COMPOSE_PATH.read_bytes())
+        self.assertIn("docker-compose-dev.yaml", readme)
+        self.assertIn("docker-compose-prod.yaml", readme)
+        self.assertIn("restart-dev.sh", readme)
+        self.assertIn("restart-master.sh", readme)
+        self.assertNotIn("docker-compose.prod.yml", readme)
+        self.assertNotIn("`docker-compose.yml`", readme)
 
 
 if __name__ == "__main__":

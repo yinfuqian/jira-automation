@@ -1,13 +1,10 @@
 #!/bin/bash
-# 构建镜像
-# docker compose --env-file .env build
-# 初始化数据库
-# docker compose --env-file .env --profile tools run --rm migrate
-docker compose --env-file .env up -d api worker
+set -euo pipefail
 
+# 开发环境启动：使用 docker-compose-dev.yaml 和 .env。
+COMPOSE_FILE="${COMPOSE_FILE:-docker-compose-dev.yaml}"
+ENV_FILE="${ENV_FILE:-.env}"
+export COMPOSE_FILE ENV_FILE
 
-
-# 第二版本启动
-
-#source .env
-#docker-compose up -d
+docker compose --env-file "${ENV_FILE}" -f "${COMPOSE_FILE}" up -d api worker
+docker compose --env-file "${ENV_FILE}" -f "${COMPOSE_FILE}" ps api worker

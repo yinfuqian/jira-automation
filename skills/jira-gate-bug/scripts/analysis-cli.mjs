@@ -15,6 +15,7 @@
 import { readFileSync } from "node:fs";
 
 import * as analysis from "./analysis.mjs";
+import { buildScopeFailurePayload } from "./scope.mjs";
 
 
 const USAGE = `用法：
@@ -187,6 +188,12 @@ async function main() {
 
 
 main().catch((error) => {
-  console.error(String((error && error.message) || error));
+  const { options } = parseArgs(process.argv.slice(2));
+  const failure = buildScopeFailurePayload(error, callOptions(options).configPath);
+  if (failure.skipped) {
+    console.log(JSON.stringify(failure, null, 2));
+    return;
+  }
+  console.error(failure.message);
   process.exit(1);
 });

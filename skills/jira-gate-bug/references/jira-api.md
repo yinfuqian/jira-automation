@@ -35,6 +35,7 @@
 | **附件上传** | `POST /rest/api/2/issue/{KEY}/attachments`，`multipart/form-data`，字段名 `file`，**必须带 `X-Atlassian-Token: no-check`** |
 | 可用流转 | `GET /rest/api/2/issue/{KEY}/transitions` |
 | 执行流转 | `POST /rest/api/2/issue/{KEY}/transitions`，Body `{"transition":{"id":"<id>"}}` |
+| 设置经办人 | `PUT /rest/api/2/issue/{KEY}/assignee`，Body `{"name":"<登录名>"}` |
 | 字段列表 | `GET /rest/api/2/field`（用于定位门禁字段） |
 | 写字段 | `PUT /rest/api/2/issue/{KEY}`，Body `{"fields":{...}}` |
 
@@ -63,6 +64,8 @@ node scripts/jira-cli.mjs transition <KEY|URL> --name 打回
 ```
 
 流转名必须与 Jira 中实际可用流转完全一致，脚本会先列出并匹配，找不到时报错并给出可用列表。
+
+打回时 `transitionIssue()` 会先记录流转前的原经办人；流转后再次读取工单，如果工作流 post-function 或其它规则把经办人改成了门禁账号，再调用 `PUT /assignee` 恢复原经办人。原经办人为空时跳过恢复。经办人恢复失败会抛错，执行结果不能当作打回成功。
 
 ## 6. 附件与报告
 

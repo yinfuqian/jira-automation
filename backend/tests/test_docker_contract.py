@@ -51,13 +51,11 @@ class DockerContractTests(unittest.TestCase):
         self.assertTrue((PROJECT_ROOT / "frontend" / "app" / "log-analyze" / "build" / "chunkName.js").is_file())
 
     def test_frontend_nginx_defers_api_resolution_to_container_dns(self):
-        """Nginx 配置检查不应依赖 Compose 网络已提前创建。"""
+        """Nginx 配置应通过模板变量支持宿主网络和容器网络两种上游。"""
         source = (PROJECT_ROOT / "frontend" / "nginx.conf").read_text(encoding="utf-8")
-        local_compose = (PROJECT_ROOT / "docker-compose.yml").read_text(encoding="utf-8")
 
         self.assertIn("resolver 127.0.0.11", source)
         self.assertIn("set $api_upstream ${API_UPSTREAM}", source)
-        self.assertIn("API_UPSTREAM: http://api:5000", local_compose)
         self.assertIn("rewrite ^/api/(.*)$ /$1 break", source)
         self.assertIn("proxy_pass $api_upstream", source)
 
@@ -86,6 +84,37 @@ class DockerContractTests(unittest.TestCase):
         # 构建期断言：镜像里必须真的能调用这几个命令，否则构建直接失败。
         self.assertIn("command -v bsdtar >/dev/null", dockerfile)
         self.assertIn("command -v unzip >/dev/null", dockerfile)
+
+    def test_backend_image_ships_jdk8_jdk21_and_maven_for_in_container_builds(self):
+        """技能要在容器内编译 Java 代码，运行镜像必须同时带 JDK 8、JDK 21 与 Maven 3.9.9。"""
+        dockerfile = (PROJECT_ROOT / "backend" / "Dockerfile").read_text(encoding="utf-8")
+
+        self.assertIn("ARG JDK8_VERSION=", dockerfile)
+        self.assertIn("ARG JDK21_VERSION=", dockerfile)
+        self.assertIn("ARG MAVEN_VERSION=3.9.9", dockerfile)
+        self.assertIn("JAVA8_HOME=/opt/java/jdk8", dockerfile)
+        self.assertIn("JAVA21_HOME=/opt/java/jdk21", dockerfile)
+        # 默认 JAVA_HOME 固定在 JDK 8：容器内要编译的业务仓库绝大多数是 Java 8。
+        self.assertIn("JAVA_HOME=/opt/java/jdk8", dockerfile)
+        self.assertIn("MAVEN_HOME=/opt/maven", dockerfile)
+        # javac 默认跟随 JVM 平台编码，环境缺少可用 LANG 时会退化成 ASCII，必须显式固定 UTF-8。
+        self.assertIn('MAVEN_OPTS="-Dfile.encoding=UTF-8"', dockerfile)
+        # JDK 切换助手必须随镜像发布，技能才能在同一镜像里显式选用 JDK 8 或 JDK 21。
+        self.assertIn("COPY docker/jdk.sh /usr/local/bin/jdk", dockerfile)
+        # 最终运行镜像阶段再断言一次工具真实可用，缺失就让镜像构建失败。
+        self.assertIn("command -v java >/dev/null", dockerfile)
+        self.assertIn("command -v mvn >/dev/null", dockerfile)
+        self.assertIn("jdk 8 javac -version", dockerfile)
+        self.assertIn("/opt/java/jdk21/bin/javac -version", dockerfile)
+
+        helper = PROJECT_ROOT / "backend" / "docker" / "jdk.sh"
+        data = helper.read_bytes()
+        self.assertTrue(data, f"缺少容器内 JDK 切换助手：{helper}")
+        self.assertNotIn(b"\r", data, "jdk.sh 必须使用 LF 行尾")
+        text = data.decode("utf-8")
+        self.assertIn("/opt/java/jdk8", text)
+        self.assertIn("/opt/java/jdk21", text)
+        self.assertIn("jdk home 8|21", text)
 
     def test_backend_image_installs_system_dependencies_from_offline_debs(self):
         """后端镜像必须优先使用仓库内离线 deb 包，避免内网构建时依赖 apt 源。"""

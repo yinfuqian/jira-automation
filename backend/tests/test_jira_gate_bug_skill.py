@@ -1,9 +1,11 @@
 """缺陷单门禁技能（jira-gate-bug）测试：覆盖技能发现、交付物契约与脚本行为（HTML 报告、自查结果判定）。"""
 import json
+import http.server
 import shutil
 import subprocess
 import sys
 import tempfile
+import threading
 import unittest
 from pathlib import Path
 
@@ -61,6 +63,10 @@ class DefectGateSkillDefinitionTests(unittest.TestCase):
 
         for required in (
             "完整性检查",
+            "完整性检查必须同时检查可辨认图片",
+            "模块映射丢失，已跳过检查",
+            "scope-mapping-missing",
+            "[~yinfuqian1193]",
             "打回",
             "自查结果检查",
             "自动故障分析",
@@ -80,8 +86,23 @@ class DefectGateSkillDefinitionTests(unittest.TestCase):
         self_check = (SKILL_DIR / "references" / "self-check.md").read_text(encoding="utf-8")
         jira_api = (SKILL_DIR / "references" / "jira-api.md").read_text(encoding="utf-8")
 
-        for required in ("MUST", "REDLINE", "效果类缺陷", "复现步骤", "时间信息", "日志", "明确缺陷不需要额外提供日志信息"):
+        for required in (
+            "MUST",
+            "REDLINE",
+            "效果类缺陷",
+            "复现步骤",
+            "时间信息",
+            "日志",
+            "明确缺陷不需要额外提供日志信息",
+            "可辨认图片",
+            "可辨认图片中的模块/组件",
+            "不要求修复版本",
+            "不要求环境入口或操作版本",
+            "mappingOwner",
+        ):
             self.assertIn(required, checklist)
+        self.assertNotIn("含时区", checklist)
+        self.assertNotIn("补入口、操作、数据", (SKILL_DIR / "SKILL.md").read_text(encoding="utf-8"))
         for required in ("自查", "结论", "证据", "selfCheckKeywords"):
             self.assertIn(required, self_check)
         for required in ("/rest/api/2/issue/{KEY}/comment", "/attachments", "transitions"):
@@ -96,6 +117,8 @@ class DefectGateSkillDefinitionTests(unittest.TestCase):
             self.assertIn('"' + command + '"', jira_cli)
         for option in ("--dir", "--out", "--product", "--module", "--json-summary"):
             self.assertIn(option, analysis_cli)
+        self.assertIn("buildScopeFailurePayload", analysis_cli)
+        self.assertNotIn("process.exit(3)", analysis_cli)
 
     def test_scope_mapping_covers_expected_products(self):
         """分析范围配置必须覆盖 Jira 问题发现产品的常用顶层组。"""
@@ -107,6 +130,9 @@ class DefectGateSkillDefinitionTests(unittest.TestCase):
             mapping["products"]["see"]["modules"]["see-task"]["repoUrl"],
             "https://code.in.wezhuiyi.com/see/see-task.git",
         )
+        self.assertEqual(mapping["mappingOwner"]["name"], "yinfuqian1193")
+        self.assertEqual(mapping["mappingOwner"]["displayName"], "尹甫乾")
+        self.assertEqual(mapping["mappingOwner"]["mention"], "[~yinfuqian1193]")
         common_modules = [
             (product, module)
             for product, config in mapping["products"].items()
@@ -235,6 +261,112 @@ console.log(JSON.stringify(resolveConfiguredScope(
         payload = json.loads(output.strip().splitlines()[-1])
         self.assertEqual(payload["gitTag"], "v6.1.15-CallZhaoshangzhengquan-rc33")
         self.assertEqual(payload["rule"], "version-map:6.1.15")
+
+    @unittest.skipIf(NODE_BIN is None, "需要 node 运行时才能执行技能脚本")
+    def test_missing_scope_mapping_skips_check_and_mentions_mapping_owner(self):
+        """工单已有模块但配置缺映射时，必须通知维护人并跳过检查，不能按缺参打回。"""
+        scope_url = (SKILL_DIR / "scripts" / "scope.mjs").as_uri()
+        with tempfile.TemporaryDirectory() as temp_dir:
+            config_path = Path(temp_dir) / "scope-mapping.json"
+            config_path.write_text(json.dumps({
+                "versionRules": [{"name": "exact-tag", "pattern": "^.+$", "ref": "{version}"}],
+                "products": {
+                    "see": {
+                        "modules": {
+                            "see-task": {"repoUrl": "https://code.in.wezhuiyi.com/see/see-task.git"}
+                        }
+                    }
+                },
+            }, ensure_ascii=False), encoding="utf-8")
+            driver = """
+const {
+  buildScopeFailurePayload,
+  resolveConfiguredScope,
+} = await import("__SCOPE__");
+let failure = null;
+try {
+  resolveConfiguredScope(
+    { product: "see", module: "operation-task", version: "v2.3.73-update" },
+    { configPath: process.argv[1] },
+  );
+} catch (error) {
+  failure = buildScopeFailurePayload(error, process.argv[1]);
+}
+console.log(JSON.stringify(failure));
+""".replace("__SCOPE__", scope_url)
+
+            output = self.run_node(driver, str(config_path))
+
+        payload = json.loads(output.strip().splitlines()[-1])
+        self.assertEqual(payload["reason"], "scope-mapping-missing")
+        self.assertTrue(payload["skipped"])
+        self.assertEqual(payload["gateResult"], "未检查")
+        self.assertEqual(payload["mappingOwner"]["mention"], "[~yinfuqian1193]")
+        self.assertIn("模块映射丢失，已跳过检查", payload["comment"])
+        self.assertIn("[~yinfuqian1193]", payload["comment"])
+        self.assertIn("补齐映射内容", payload["comment"])
+        self.assertIn("operation-task", payload["comment"])
+        self.assertNotIn("打回", payload["comment"])
+
+    @unittest.skipIf(NODE_BIN is None, "需要 node 运行时才能执行技能脚本")
+    def test_cli_mapping_gap_exits_zero_so_agent_can_post_comment(self):
+        """映射缺口是正常分流结果，CLI 必须退出 0，避免 Agent 停在失败状态而不写评论。"""
+        class FakeAnalysisHandler(http.server.BaseHTTPRequestHandler):
+            def do_GET(self):  # noqa: N802 - BaseHTTPRequestHandler 约定方法名
+                if self.path.startswith("/product/get"):
+                    body = json.dumps({"products": [{"id": 1, "name": "see"}]}).encode("utf-8")
+                    self.send_response(200)
+                    self.send_header("Content-Type", "application/json")
+                    self.send_header("Content-Length", str(len(body)))
+                    self.end_headers()
+                    self.wfile.write(body)
+                    return
+                self.send_response(404)
+                self.end_headers()
+
+            def log_message(self, format, *args):  # noqa: A002 - 基类签名固定
+                return
+
+        server = http.server.ThreadingHTTPServer(("127.0.0.1", 0), FakeAnalysisHandler)
+        thread = threading.Thread(target=server.serve_forever, daemon=True)
+        thread.start()
+        try:
+            with tempfile.TemporaryDirectory() as temp_dir:
+                config_path = Path(temp_dir) / "scope-mapping.json"
+                config_path.write_text(json.dumps({
+                    "versionRules": [{"name": "exact-tag", "pattern": "^.+$", "ref": "{version}"}],
+                    "products": {"see": {"modules": {}}},
+                }, ensure_ascii=False), encoding="utf-8")
+                result = subprocess.run(
+                    [
+                        NODE_BIN,
+                        str(SKILL_DIR / "scripts" / "analysis-cli.mjs"),
+                        "resolve",
+                        "--product", "see",
+                        "--module", "operation-task",
+                        "--version", "v2.3.73-update",
+                        "--config", str(config_path),
+                        "--base-url", f"http://127.0.0.1:{server.server_port}",
+                        "--token", "test-token",
+                    ],
+                    capture_output=True,
+                    text=True,
+                    encoding="utf-8",
+                    cwd=str(BACKEND_DIR.parent),
+                )
+        finally:
+            server.shutdown()
+            server.server_close()
+            thread.join(timeout=2)
+
+        self.assertEqual(result.returncode, 0, result.stderr)
+        payload = json.loads(result.stdout)
+        self.assertFalse(payload["ok"])
+        self.assertTrue(payload["skipped"])
+        self.assertEqual(payload["reason"], "scope-mapping-missing")
+        self.assertEqual(payload["gateResult"], "未检查")
+        self.assertIn("[~yinfuqian1193]", payload["comment"])
+        self.assertIn("operation-task", payload["comment"])
 
     @unittest.skipIf(NODE_BIN is None, "需要 node 运行时才能执行技能脚本")
     def test_scope_resolution_never_falls_back_to_module_branch(self):
@@ -575,6 +707,255 @@ console.log(JSON.stringify(extractFaultAnalysisScope(issue)));
         self.assertEqual(payload["candidates"]["module"], ["see-task", "see-common"])
         self.assertEqual(payload["candidates"]["version"], ["3.2.1", "3.2.2"])
         self.assertEqual(payload["missing"], ["product", "module", "version"])
+
+    @unittest.skipIf(NODE_BIN is None, "需要 node 运行时才能执行技能脚本")
+    def test_fault_scope_extracts_module_version_from_description(self):
+        """描述中的模块-版本号只作为版本值，不能把模块名一起交给 Tag 映射。"""
+        jira_url = (SKILL_DIR / "scripts" / "jira.mjs").as_uri()
+        driver = """
+const { normalizeIssue, extractFaultAnalysisScope } = await import("__JIRA__");
+const issue = normalizeIssue({
+  key: "KEY-7",
+  id: "7",
+  self: "https://jira.in.wezhuiyi.com/rest/api/2/issue/7",
+  names: { customfield_10010: "问题发现产品" },
+  fields: {
+    summary: "对话标签查询失败",
+    description: "bot-3.2 模块发布后，对话标签查询失败。",
+    customfield_10010: { value: "bot" },
+    components: [{ name: "bot-server" }],
+    comment: { total: 0, comments: [] },
+  },
+});
+console.log(JSON.stringify(extractFaultAnalysisScope(issue)));
+""".replace("__JIRA__", jira_url)
+
+        output = self.run_node(driver)
+        payload = json.loads(output.strip().splitlines()[-1])
+
+        self.assertEqual(payload["version"], "3.2")
+        self.assertEqual(payload["sources"]["version"], "Jira:描述")
+        self.assertEqual(payload["missing"], [])
+
+    @unittest.skipIf(NODE_BIN is None, "需要 node 运行时才能执行技能脚本")
+    def test_fault_scope_extracts_module_version_from_summary(self):
+        """概要中的模块-版本号同样属于工单内已有版本，可用于门禁通过。"""
+        jira_url = (SKILL_DIR / "scripts" / "jira.mjs").as_uri()
+        driver = """
+const { normalizeIssue, extractFaultAnalysisScope } = await import("__JIRA__");
+const issue = normalizeIssue({
+  key: "KEY-11",
+  id: "11",
+  self: "https://jira.in.wezhuiyi.com/rest/api/2/issue/11",
+  names: { customfield_10010: "问题发现产品" },
+  fields: {
+    summary: "bot-3.2 模块发布后，对话标签查询失败",
+    customfield_10010: { value: "bot" },
+    components: [{ name: "bot-server" }],
+    comment: { total: 0, comments: [] },
+  },
+});
+console.log(JSON.stringify(extractFaultAnalysisScope(issue)));
+""".replace("__JIRA__", jira_url)
+
+        output = self.run_node(driver)
+        payload = json.loads(output.strip().splitlines()[-1])
+
+        self.assertEqual(payload["version"], "3.2")
+        self.assertEqual(payload["sources"]["version"], "Jira:概要")
+        self.assertEqual(payload["missing"], [])
+
+    @unittest.skipIf(NODE_BIN is None, "需要 node 运行时才能执行技能脚本")
+    def test_fault_scope_does_not_use_fix_version_for_analysis(self):
+        """只填写修复版本不能满足影响的版本要求，也不能作为自动分析版本来源。"""
+        jira_url = (SKILL_DIR / "scripts" / "jira.mjs").as_uri()
+        driver = """
+const { normalizeIssue, extractFaultAnalysisScope } = await import("__JIRA__");
+const issue = normalizeIssue({
+  key: "KEY-8",
+  id: "8",
+  self: "https://jira.in.wezhuiyi.com/rest/api/2/issue/8",
+  names: { customfield_10010: "问题发现产品" },
+  fields: {
+    summary: "对话标签查询失败",
+    customfield_10010: { value: "bot" },
+    components: [{ name: "bot-server" }],
+    versions: [],
+    fixVersions: [{ name: "3.2" }],
+    comment: { total: 0, comments: [] },
+  },
+});
+console.log(JSON.stringify(extractFaultAnalysisScope(issue)));
+""".replace("__JIRA__", jira_url)
+
+        output = self.run_node(driver)
+        payload = json.loads(output.strip().splitlines()[-1])
+
+        self.assertEqual(payload["version"], "")
+        self.assertEqual(payload["missing"], ["version"])
+
+    @unittest.skipIf(NODE_BIN is None, "需要 node 运行时才能执行技能脚本")
+    def test_fault_scope_ignores_fix_version_text_for_analysis(self):
+        """描述中明确写出的修复版本也不能代替影响的模块版本。"""
+        jira_url = (SKILL_DIR / "scripts" / "jira.mjs").as_uri()
+        driver = """
+const { normalizeIssue, extractFaultAnalysisScope } = await import("__JIRA__");
+const issue = normalizeIssue({
+  key: "KEY-10",
+  id: "10",
+  self: "https://jira.in.wezhuiyi.com/rest/api/2/issue/10",
+  names: { customfield_10010: "问题发现产品" },
+  fields: {
+    summary: "对话标签查询失败",
+    description: "修复版本：bot-3.2",
+    customfield_10010: { value: "bot" },
+    components: [{ name: "bot-server" }],
+    comment: { total: 0, comments: [] },
+  },
+});
+console.log(JSON.stringify(extractFaultAnalysisScope(issue)));
+""".replace("__JIRA__", jira_url)
+
+        output = self.run_node(driver)
+        payload = json.loads(output.strip().splitlines()[-1])
+
+        self.assertEqual(payload["version"], "")
+        self.assertEqual(payload["missing"], ["version"])
+
+    @unittest.skipIf(NODE_BIN is None, "需要 node 运行时才能执行技能脚本")
+    def test_fault_scope_accepts_agent_recognized_image_version_override(self):
+        """图片中的模块版本经 Agent 识别后可作为调用方输入，无需额外交互确认。"""
+        jira_url = (SKILL_DIR / "scripts" / "jira.mjs").as_uri()
+        driver = """
+const { normalizeIssue, extractFaultAnalysisScope } = await import("__JIRA__");
+const issue = normalizeIssue({
+  key: "KEY-9",
+  id: "9",
+  self: "https://jira.in.wezhuiyi.com/rest/api/2/issue/9",
+  names: { customfield_10010: "问题发现产品" },
+  fields: {
+    summary: "对话标签查询失败",
+    customfield_10010: { value: "bot" },
+    components: [{ name: "bot-server" }],
+    comment: { total: 0, comments: [] },
+  },
+});
+console.log(JSON.stringify(extractFaultAnalysisScope(issue, { version: "3.2" })));
+""".replace("__JIRA__", jira_url)
+
+        output = self.run_node(driver)
+        payload = json.loads(output.strip().splitlines()[-1])
+
+        self.assertEqual(payload["version"], "3.2")
+        self.assertEqual(payload["sources"]["version"], "调用方输入")
+        self.assertEqual(payload["missing"], [])
+
+    @unittest.skipIf(NODE_BIN is None, "需要 node 运行时才能执行技能脚本")
+    def test_fault_scope_accepts_agent_recognized_image_module_overrides(self):
+        """图片中的模块名、主 Tag 和关联模块应由 Agent 识别后写入调用方输入。"""
+        jira_url = (SKILL_DIR / "scripts" / "jira.mjs").as_uri()
+        driver = """
+const { normalizeIssue, extractFaultAnalysisScope } = await import("__JIRA__");
+const issue = normalizeIssue({
+  key: "KEY-12",
+  id: "12",
+  self: "https://jira.in.wezhuiyi.com/rest/api/2/issue/12",
+  names: { customfield_10010: "问题发现产品" },
+  fields: {
+    summary: "模型发布后对话分片异常",
+    customfield_10010: { value: "bot" },
+    components: [],
+    comment: { total: 0, comments: [] },
+  },
+});
+console.log(JSON.stringify(extractFaultAnalysisScope(issue, {
+  module: "operation-task",
+  version: "v2.3.73-update",
+  relatedModules: [
+    { module: "operation-admin", version: "v2.3.68" },
+    { module: "dialogos", version: "v1.5.20" },
+  ],
+})));
+""".replace("__JIRA__", jira_url)
+
+        output = self.run_node(driver)
+        payload = json.loads(output.strip().splitlines()[-1])
+
+        self.assertEqual(payload["module"], "operation-task")
+        self.assertEqual(payload["version"], "v2.3.73-update")
+        self.assertEqual(payload["sources"]["module"], "调用方输入")
+        self.assertEqual(payload["sources"]["version"], "调用方输入")
+        self.assertEqual(payload["relatedModules"], [
+            {"module": "operation-admin", "version": "v2.3.68", "source": "调用方输入:可辨认图片"},
+            {"module": "dialogos", "version": "v1.5.20", "source": "调用方输入:可辨认图片"},
+        ])
+        self.assertEqual(payload["missing"], [])
+
+    @unittest.skipIf(NODE_BIN is None, "需要 node 运行时才能执行技能脚本")
+    def test_reject_transition_restores_original_assignee(self):
+        """打回流转后必须恢复原经办人，不能让门禁账号留在经办人字段。"""
+        jira_url = (SKILL_DIR / "scripts" / "jira.mjs").as_uri()
+        driver = """
+const { transitionIssue } = await import("__JIRA__");
+const calls = [];
+let issueReads = 0;
+function response(data, status = 200) {
+  return {
+    ok: status >= 200 && status < 300,
+    status,
+    async text() { return data === null ? "" : JSON.stringify(data); },
+  };
+}
+function issueRaw(assignee) {
+  return {
+    key: "KEY-20",
+    id: "20",
+    self: "https://jira.in.wezhuiyi.com/rest/api/2/issue/20",
+    fields: {
+      summary: "缺陷单信息不完整",
+      status: { name: "待处理" },
+      issuetype: { name: "缺陷" },
+      assignee,
+      reporter: { name: "reporter", displayName: "报告人" },
+      components: [{ name: "see-task" }],
+      subtasks: [{ key: "KEY-21", fields: { summary: "子任务" } }],
+      comment: { total: 0, comments: [] },
+    },
+  };
+}
+globalThis.fetch = async (url, init = {}) => {
+  const parsed = new URL(String(url));
+  const body = init.body ? JSON.parse(String(init.body)) : null;
+  calls.push({ method: init.method, path: parsed.pathname + parsed.search, body });
+  if (init.method === "GET" && parsed.pathname.endsWith("/issue/KEY-20")) {
+    issueReads += 1;
+    return response(issueRaw(issueReads === 1
+      ? { name: "zhangsan", displayName: "张三" }
+      : { name: "gate-bot", displayName: "门禁机器人" }));
+  }
+  if (init.method === "GET" && parsed.pathname.endsWith("/issue/KEY-20/transitions")) {
+    return response({ transitions: [{ id: "31", name: "打回", to: { name: "待补充" } }] });
+  }
+  if (init.method === "POST" && parsed.pathname.endsWith("/issue/KEY-20/transitions")) {
+    return response(null, 204);
+  }
+  if (init.method === "PUT" && parsed.pathname.endsWith("/issue/KEY-20/assignee")) {
+    return response(null, 204);
+  }
+  return response({ errorMessages: ["unexpected request: " + init.method + " " + parsed.pathname] }, 500);
+};
+const result = await transitionIssue("KEY-20", "打回");
+console.log(JSON.stringify({ calls, result }));
+""".replace("__JIRA__", jira_url)
+
+        output = self.run_node(driver)
+        payload = json.loads(output.strip().splitlines()[-1])
+        assignee_call = next(item for item in payload["calls"] if item["method"] == "PUT" and item["path"].endswith("/assignee"))
+
+        self.assertEqual(assignee_call["body"], {"name": "zhangsan"})
+        self.assertTrue(payload["result"]["assigneeRestore"]["ok"])
+        self.assertTrue(payload["result"]["assigneeRestore"]["restored"])
+        self.assertEqual(payload["result"]["assigneeRestore"]["assignee"]["name"], "zhangsan")
 
     @unittest.skipIf(NODE_BIN is None, "需要 node 运行时才能执行技能脚本")
     def test_report_renders_styled_html_and_escapes_model_output(self):

@@ -108,6 +108,36 @@ def _check_git():
         raise RuntimeError("Git 版本检查返回异常")
 
 
+def _check_java_toolchain():
+    """确认容器内置的 JDK 8、JDK 21 与 Maven 3.9.9 都可用，技能才能在容器内编译 Java 代码。"""
+    expectations = (
+        ("JDK 8", os.getenv("JAVA8_HOME", "/opt/java/jdk8"), "javac 1.8"),
+        ("JDK 21", os.getenv("JAVA21_HOME", "/opt/java/jdk21"), "javac 21."),
+    )
+    for label, home, expected_prefix in expectations:
+        completed = subprocess.run(
+            [os.path.join(home, "bin", "javac"), "-version"],
+            check=True,
+            capture_output=True,
+            text=True,
+            timeout=60,
+        )
+        version = (completed.stdout + completed.stderr).strip()
+        if not version.startswith(expected_prefix):
+            raise RuntimeError(f"{label} 版本不符合预期：{version}")
+
+    completed = subprocess.run(
+        [shutil.which("mvn") or "/opt/maven/bin/mvn", "-version"],
+        check=True,
+        capture_output=True,
+        text=True,
+        timeout=60,
+    )
+    output = (completed.stdout + completed.stderr).strip()
+    if "Apache Maven 3.9.9" not in output:
+        raise RuntimeError("Maven 版本不符合预期：" + (output.splitlines() or [""])[0])
+
+
 def _check_ocr():
     """初始化真实 PaddleOCR 模型并完成一次图片预测。"""
     from app.analysis.image_ocr import run_ocr_smoke_check
@@ -123,6 +153,7 @@ def run_build_checks(
     application_checker=None,
     celery_checker=None,
     git_checker=None,
+    java_checker=None,
     ocr_checker=None,
 ):
     """执行不依赖外部 MySQL/Redis 的镜像构建检查。"""
@@ -132,6 +163,7 @@ def run_build_checks(
         "application": (application_checker or _check_application, "Flask 应用和路由加载成功"),
         "celery": (celery_checker or _check_celery, "Celery 分析任务注册成功"),
         "git": (git_checker or _check_git, "Git 命令可用"),
+        "java": (java_checker or _check_java_toolchain, "JDK 8/JDK 21 与 Maven 3.9.9 可用"),
         "ocr": (ocr_checker or _check_ocr, "PaddleOCR 初始化和预测成功"),
     }
     return {

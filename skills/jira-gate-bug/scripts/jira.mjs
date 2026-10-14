@@ -327,6 +327,29 @@ function uniqueTextValues(value) {
 }
 
 
+/** 把 Agent 从图片识别的模块候选规范化为 { module, version, source }。 */
+function normalizeModulePairs(value, defaultSource) {
+  const source = Array.isArray(value) ? value : [value];
+  const result = [];
+  for (const item of source) {
+    if (!item) continue;
+    let module = "";
+    let version = "";
+    if (typeof item === "string") {
+      const match = String(item).trim().match(/^([^:]+)(?::(.+))?$/);
+      module = match ? match[1].trim() : "";
+      version = match && match[2] ? match[2].trim() : "";
+    } else if (typeof item === "object") {
+      module = String(item.module || item.name || "").trim();
+      version = String(item.version || item.tag || "").trim();
+    }
+    if (!module) continue;
+    result.push({ module, version, source: (item && item.source) || defaultSource });
+  }
+  return result;
+}
+
+
 /** 解析评论中的固定块：[FAULT_ANALYSIS] / [故障分析]。 */
 function parseFaultScopeBlock(body) {
   const aliases = Object.entries(FAULT_SCOPE_KEY_ALIASES).reduce((result, [key, names]) => {
@@ -386,15 +409,27 @@ export function extractFaultAnalysisBlock(issue) {
 }
 
 
-/** 提取环境文本中的明确版本号，供 Jira 版本字段缺失时兜底。 */
-function versionsFromEnvironment(value) {
-  const labelled = String(value || "")
+/** 提取工单文本中的明确模块版本号，供 Jira 版本字段缺失时兜底。 */
+function versionsFromText(value, moduleHints = []) {
+  const text = String(value || "");
+  const analysisLines = text
     .split(/\r?\n/)
+    .filter((line) => !/(?:修复版本|修复的版本|fixed\s+version|fix\s+version)/i.test(line));
+  const analysisText = analysisLines.join("\n");
+  const labelled = analysisLines
     .filter((line) => /(?:版本|version|tag|release)/i.test(line))
     .join(" ");
-  if (!labelled) return [];
-  const matches = labelled.match(/\bv?\d+(?:\.\d+){1,3}(?:[-+][A-Za-z0-9._-]+)*\b/gi) || [];
-  return uniqueTextValues(matches);
+  const matches = labelled ? (labelled.match(/\bv?\d+(?:\.\d+){1,3}(?:[-+][A-Za-z0-9._-]+)*\b/gi) || []) : [];
+  for (const hint of uniqueTextValues(moduleHints)) {
+    const escaped = String(hint).replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+    const modulePattern = new RegExp(
+      "\\b" + escaped + "(?:[-_ ]?v?|\\s*[:：]\\s*v?)(\\d+(?:\\.\\d+){1,3}(?:[-+][A-Za-z0-9._-]+)*)\\b",
+      "gi"
+    );
+    let match;
+    while ((match = modulePattern.exec(analysisText)) !== null) matches.push(match[1]);
+  }
+  return uniqueTextValues(matches.map((item) => String(item).trim()));
 }
 
 
@@ -403,7 +438,8 @@ function versionsFromEnvironment(value) {
  *
  * 产品：调用方覆盖 > Jira「问题发现产品」 > 评论固定块（兼容人工纠正）。
  * 模块：调用方覆盖 > 评论固定块 > Jira 组件（唯一值才自动采用）。
- * 版本：调用方覆盖 > 评论固定块 > 影响版本/修复版本/环境（多来源只接受唯一值）。
+ * 版本：调用方覆盖 > 评论固定块 > 影响版本/概要/环境/描述/评论/附件名（多来源只接受唯一值）。
+ * 修复版本不作为完整性依据，也不参与自动分析版本来源。
  * 分支：调用方覆盖 > 评论固定块；仓库地址与分支规则仍由 scope-mapping.json 维护。
  */
 export function extractFaultAnalysisScope(issue, overrides = {}) {
@@ -454,9 +490,19 @@ export function extractFaultAnalysisScope(issue, overrides = {}) {
   const addVersionSource = (source, values) => {
     for (const value of uniqueTextValues(values)) versionCandidates.push({ source, value });
   };
+  const moduleHints = uniqueTextValues([moduleValue, ...(issue.components || []), product]);
   addVersionSource("Jira:影响版本", issue && issue.affectedVersions);
-  addVersionSource("Jira:修复版本", issue && issue.fixVersions);
-  addVersionSource("Jira:环境", versionsFromEnvironment(issue && issue.environment));
+  addVersionSource("Jira:概要", versionsFromText(issue && issue.summary, moduleHints));
+  addVersionSource("Jira:环境", versionsFromText(issue && issue.environment, moduleHints));
+  addVersionSource("Jira:描述", versionsFromText(issue && issue.description, moduleHints));
+  addVersionSource(
+    "Jira:评论",
+    versionsFromText((issue.comments || []).map((comment) => comment.body || "").join("\n"), moduleHints)
+  );
+  addVersionSource(
+    "Jira:附件名",
+    versionsFromText((issue.attachments || []).map((attachment) => attachment.filename || "").join("\n"), moduleHints)
+  );
   const uniqueVersions = [...new Set(versionCandidates.map((item) => item.value))];
   let version = pick(overrides.version, block.values.version, primaryPair && primaryPair.tag);
   if (version) {
@@ -478,6 +524,11 @@ export function extractFaultAnalysisScope(issue, overrides = {}) {
   for (const entry of pairEntries) {
     if (entry.module === module && (!version || entry.tag === version)) continue;
     relatedModules.push({ module: entry.module, version: entry.tag, source: `评论:${block.commentId || ""}` });
+  }
+  for (const entry of normalizeModulePairs(overrides.relatedModules, "调用方输入:可辨认图片")) {
+    if (entry.module === module && (!version || entry.version === version)) continue;
+    if (relatedModules.some((item) => item.module === entry.module)) continue;
+    relatedModules.push(entry);
   }
 
   const missing = [];
@@ -650,7 +701,7 @@ export function renderIssueMarkdown(issue, options = {}) {
   kv("报告人", issue.reporter ? issue.reporter.displayName : "");
   kv("模块", (issue.components || []).join("、"));
   kv("影响版本", (issue.affectedVersions || []).join("、"));
-  kv("修复版本", (issue.fixVersions || []).join("、"));
+  // 修复版本不是门禁必填项，不在这里展示，避免误导提单人。
   kv("环境", issue.environment);
   kv("创建 / 更新", (issue.created || "") + " / " + (issue.updated || ""));
 
@@ -851,9 +902,39 @@ export async function listTransitions(keyOrUrl, options = {}) {
   return ((data && data.transitions) || []).map((t) => ({ id: t.id, name: t.name, to: t.to ? t.to.name : "" }));
 }
 
+/** 把字符串或 Jira 用户对象规范化为 Jira Server 的 { name } 引用。 */
+function assigneeRef(user) {
+  if (typeof user === "string") {
+    const name = user.trim();
+    return name ? { name } : null;
+  }
+  if (!user || typeof user !== "object") return null;
+  const name = String(user.name || user.username || "").trim();
+  if (!name) return null;
+  return {
+    name,
+    displayName: String(user.displayName || user.display || name),
+  };
+}
+
+/** 显式设置经办人；仅发送 Jira 所需的登录名，避免把展示名误当用户名。 */
+export async function setIssueAssignee(keyOrUrl, user, options = {}) {
+  const key = parseIssueKey(keyOrUrl);
+  assertLockedIssueInput(keyOrUrl);
+  if (!key) throw new Error("无法解析 Jira 问题 Key：" + keyOrUrl);
+  const target = assigneeRef(user);
+  if (!target) throw new Error("缺少经办人登录名");
+  await request("PUT", "/rest/api/2/issue/" + encodeURIComponent(key) + "/assignee", {
+    ...options,
+    body: { name: target.name },
+  });
+  return { ok: true, key, assignee: target };
+}
+
 /**
  * 执行一次流转，transition 可传流转名或 id。
- * 默认不调用：只有 jira-config.json 显式配置了打回流转名时，技能才会调用本函数。
+ * 默认保留流转前的经办人：打回后回读工单，必要时恢复原经办人，
+ * 避免工作流 post-function 把经办人改成门禁账号。
  */
 export async function transitionIssue(keyOrUrl, transition, options = {}) {
   const key = parseIssueKey(keyOrUrl);
@@ -861,6 +942,9 @@ export async function transitionIssue(keyOrUrl, transition, options = {}) {
   if (!key) throw new Error("无法解析 Jira 问题 Key：" + keyOrUrl);
   const wanted = String(transition || "").trim();
   if (!wanted) throw new Error("缺少流转名称或 id");
+  const preserveAssignee = options.restoreAssignee !== false;
+  const issue = options.issue || (preserveAssignee ? await getIssue(keyOrUrl, options) : null);
+  const originalAssignee = assigneeRef(issue && issue.assignee);
   const transitions = await listTransitions(key, options);
   const target = transitions.find((t) => t.name === wanted || t.id === wanted || t.to === wanted);
   if (!target) {
@@ -870,7 +954,23 @@ export async function transitionIssue(keyOrUrl, transition, options = {}) {
     ...options,
     body: { transition: { id: target.id } },
   });
-  return { ok: true, key, transition: target };
+
+  let assigneeRestore = {
+    ok: true,
+    skipped: !originalAssignee,
+    reason: originalAssignee ? "already-restored" : "no-original-assignee",
+  };
+  if (originalAssignee) {
+    const current = await getIssue(keyOrUrl, options);
+    const currentAssignee = assigneeRef(current && current.assignee);
+    if (!currentAssignee || currentAssignee.name !== originalAssignee.name) {
+      await setIssueAssignee(keyOrUrl, originalAssignee, options);
+      assigneeRestore = { ok: true, restored: true, assignee: originalAssignee };
+    } else {
+      assigneeRestore = { ok: true, restored: false, assignee: originalAssignee };
+    }
+  }
+  return { ok: true, key, transition: target, assigneeRestore };
 }
 
 /** 读取技能目录或 ~/.codex/jira/config.json，用于覆盖门禁字段名与打回流转 */

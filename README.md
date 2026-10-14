@@ -30,21 +30,27 @@
 
 环境要求：Docker Desktop 或 Docker Engine，且支持 Docker Compose v2。
 
-使用本地 MySQL、Redis 的完整开发环境：
+当前 dev 与 master 分别使用 `docker-compose-dev.yaml` 和 `docker-compose-prod.yaml`，两份文件内容相同；MySQL、Redis 使用外部地址：
 
 ```powershell
 Copy-Item .env.example .env
-docker compose --profile local-deps up -d --build
-docker compose ps -a
+docker compose --env-file .env -f docker-compose-dev.yaml up -d
+docker compose -f docker-compose-dev.yaml ps -a
 ```
 
-使用外部 MySQL、Redis 时，先填写 `.env` 中的 `COMPOSE_MYSQL_HOST` 和 `COMPOSE_REDIS_HOST`，然后直接启动；此模式不会创建本地数据库容器：
+开发环境重启 API 与 Celery Worker（不会重启数据库，也不会删除数据）：
 
-```powershell
-docker compose --profile local-deps down
-docker compose up -d --build
-docker compose ps -a
+```bash
+bash restart-dev.sh
 ```
+
+Master 生产环境使用 `docker-compose-prod.yaml` 与 `.env.production`：
+
+```bash
+bash restart-master.sh
+```
+
+两个脚本都支持传入 Compose 服务名，例如 `bash restart-dev.sh api` 或 `bash restart-master.sh worker`。如确需临时覆盖配置文件，可使用 `COMPOSE_FILE`、`ENV_FILE` 环境变量。
 
 首次生产启动前至少修改 `.env` 中的以下内容：
 
@@ -61,13 +67,13 @@ OPENAI_URL=https://你的兼容接口地址
 停止服务但保留数据：
 
 ```powershell
-docker compose down
+docker compose -f docker-compose-dev.yaml down
 ```
 
 仅在明确要删除数据库、Redis、OCR 模型和上传数据时才执行：
 
 ```powershell
-docker compose down -v
+docker compose -f docker-compose-dev.yaml down -v
 ```
 
 ## 用户登录与 users.csv
@@ -141,7 +147,7 @@ OPENAI_REASONING_EFFORT=high
 验证 OCR 运行环境：
 
 ```powershell
-docker compose exec api python verify_runtime.py --ocr
+docker compose -f docker-compose-dev.yaml exec api python verify_runtime.py --ocr
 ```
 
 关闭本地 OCR 后，若模型识别没有返回可用文字，结果中会明确说明“图片识别模型未返回可用结果”，并保留原图继续多模态分析。
@@ -158,13 +164,13 @@ flask db upgrade
 手工执行迁移：
 
 ```powershell
-docker compose run --rm migrate
+docker compose -f docker-compose-dev.yaml run --rm migrate
 ```
 
 查看当前迁移日志：
 
 ```powershell
-docker compose logs migrate
+docker compose -f docker-compose-dev.yaml logs migrate
 ```
 
 ## 健康检查与运行验证
@@ -176,8 +182,8 @@ docker compose logs migrate
 Invoke-WebRequest http://127.0.0.1:5000/health/live
 Invoke-WebRequest http://127.0.0.1:5000/health/ready
 Invoke-WebRequest http://127.0.0.1:8080/health
-docker compose exec api python verify_runtime.py --runtime
-docker compose exec worker celery -A celery_worker.celery_app inspect ping
+docker compose -f docker-compose-dev.yaml exec api python verify_runtime.py --runtime
+docker compose -f docker-compose-dev.yaml exec worker celery -A celery_worker.celery_app inspect ping
 ```
 
 构建期完整自检：
@@ -192,12 +198,11 @@ docker run --rm jira-automation-frontend:test nginx -t
 
 ## 本地开发与生产镜像发布
 
-本项目明确区分两套 Compose 流程：
+本项目明确区分本地构建与线上运行：
 
-- `docker-compose.yml` 用于本地开发和发布机构建，包含 `build`，源码修改后可执行 `docker compose up -d --build`。
-- `docker-compose.prod.yml` 只用于生产运行，不包含 `build`，生产服务器不需要也不应该保存源码仓库或完整源码包。镜像仍会包含程序运行所需的应用文件，因此镜像仓库权限必须严格控制；Docker 镜像本身不是加密或防反编译方案。
+- `docker-compose-dev.yaml` 和 `docker-compose-prod.yaml` 内容完全相同，分别用于 dev 和 master 生产环境；dev 默认读取 `.env`，生产默认读取 `.env.production`。生产服务器不需要也不应该保存源码仓库或完整源码包。镜像仍会包含程序运行所需的应用文件，因此镜像仓库权限必须严格控制；Docker 镜像本身不是加密或防反编译方案。
 
-生产 Compose 的四个服务统一使用 host 网络。API 直接监听宿主机 `5000`，前端直接监听宿主机 `8080`，因此生产文件不声明 `ports`。MySQL、Redis 必须配置为宿主机可访问的真实地址，不能使用 Compose 服务名；前端会把 `/api` 代理到宿主机 `127.0.0.1:5000`。
+这两份 Compose 的 `api`、`worker`、`migrate` 统一使用 host 网络，API 直接监听宿主机 `5000`。MySQL、Redis 必须配置为宿主机可访问的真实地址，不能使用 Compose 服务名。前端如单独部署，应把 `/api` 代理到宿主机 `127.0.0.1:5000`。
 
 ### 本地开发
 
@@ -205,13 +210,7 @@ docker run --rm jira-automation-frontend:test nginx -t
 
 ```powershell
 Copy-Item .env.example .env
-docker compose up -d --build
-```
-
-需要本地同时启动 MySQL、Redis 时：
-
-```powershell
-docker compose --profile local-deps up -d --build
+docker compose --env-file .env -f docker-compose-dev.yaml up -d
 ```
 
 ### 构建并推送发布镜像
@@ -249,6 +248,39 @@ powershell -ExecutionPolicy Bypass -File scripts\export_apt_offline_packages.ps1
 脚本会下载 deb 包并生成 `MANIFEST.tsv`、`SHA256SUMS`，最后在 `--network none` 的容器内做一次断网安装自检。
 ARM 服务器需要额外导出 `-Architecture arm64`。详细说明见 `backend/offline/apt/README.md`。
 
+### 容器内 JDK 与 Maven 编译环境
+
+技能需要在容器内编译 Java 代码，因此后端镜像内置两套 JDK 与一套 Maven，`migrate`、`api`、`worker`
+三个容器都能直接用：
+
+- JDK 8：`/opt/java/jdk8`（`JAVA8_HOME`，也是默认 `JAVA_HOME`）
+- JDK 21：`/opt/java/jdk21`（`JAVA21_HOME`）
+- Maven 3.9.9：`/opt/maven`（`MAVEN_HOME`，已加入 `PATH`）
+
+两个 JDK 都来自 Adoptium(Temurin) 官方 tarball，版本由构建参数 `JDK8_VERSION`、`JDK21_VERSION`、
+`MAVEN_VERSION` 固定；`amd64` 与 `arm64` 都支持。同一份代码只能用其中一个 JDK 编译，因此镜像内提供
+`jdk` 助手做显式切换，避免编译时悄悄用错版本：
+
+```bash
+docker compose -f docker-compose-dev.yaml exec worker sh -c "jdk list"
+
+# 技能执行 JDK 8 或 JDK 21 构建。
+docker compose -f docker-compose-dev.yaml exec worker sh -c "cd /tmp/<项目> && jdk 8 mvn -DskipTests package"
+docker compose -f docker-compose-dev.yaml exec worker sh -c "cd /tmp/<项目> && jdk 21 mvn -DskipTests package"
+
+# 等价写法，直接指定 JAVA_HOME。
+docker compose -f docker-compose-dev.yaml exec worker sh -c "cd /tmp/<项目> && JAVA_HOME=/opt/java/jdk8 mvn -DskipTests package"
+```
+
+`MAVEN_OPTS=-Dfile.encoding=UTF-8` 已内置：`javac` 默认跟随 JVM 平台编码，运行环境缺少可用 `LANG` 时会退化成
+`US-ASCII`，中文源码报 `unmappable character` 而编译失败（实测清空 `LANG` 后有无这层保险结果相反）。
+企业内网可以先用 `--build-arg ADOPTIUM_MIRRORS="..."`、`--build-arg MAVEN_URLS="..."`
+把内部制品库排在最前面，下载地址按顺序尝试、命中即用。
+
+选择哪个 JDK 看项目根 `pom.xml` 的 `<java.version>`（或 `maven.compiler.source`）：声明 `21` 的用 `jdk 21`，
+声明 `1.8`／`1.7` 的用 `jdk 8`。默认固定在 JDK 8，是因为容器内要编译的业务仓库绝大多数是 Java 8，而且
+老项目依赖的 lombok 1.16~1.18 在 JDK 21 下会直接报编译错误——用错版本会把依赖不兼容伪装成代码缺陷。
+
 ### 生成精简生产部署包
 
 首次部署或生产 Compose、配置模板发生变化时生成部署包：
@@ -259,7 +291,8 @@ powershell -ExecutionPolicy Bypass -File scripts\package_production_deploy.ps1 -
 
 生成的 ZIP 只包含：
 
-- `docker-compose.prod.yml`
+- `docker-compose-prod.yaml`
+- `restart-master.sh`
 - `.env.production.example`
 - `users.example.csv`
 - `README.md`
@@ -271,20 +304,18 @@ powershell -ExecutionPolicy Bypass -File scripts\package_production_deploy.ps1 -
 生产服务器首次部署时，把 `.env.production.example` 复制为 `.env.production`，把 `users.example.csv` 复制为 `config/users.csv`（该目录对应容器内 `/data/`，即 `AUTH_USERS_FILE=/data/users.csv`），填写真实配置后执行：
 
 ```bash
-docker compose --env-file .env.production -f docker-compose.prod.yml pull
-docker compose --env-file .env.production -f docker-compose.prod.yml up -d
+docker compose --env-file .env.production -f docker-compose-prod.yaml pull
+docker compose --env-file .env.production -f docker-compose-prod.yaml up -d
 ```
 
 以后正常更新不再复制源码包。只需修改 `.env.production` 中发生变化的镜像版本，然后拉取并重建对应容器：
 
 ```bash
 # 只更新后端；迁移、API 和 Worker 使用同一镜像一起更新。
-docker compose --env-file .env.production -f docker-compose.prod.yml pull migrate api worker
-docker compose --env-file .env.production -f docker-compose.prod.yml up -d migrate api worker
+docker compose --env-file .env.production -f docker-compose-prod.yaml pull migrate api worker
+docker compose --env-file .env.production -f docker-compose-prod.yaml up -d migrate api worker
 
-# 只更新前端。
-docker compose --env-file .env.production -f docker-compose.prod.yml pull frontend
-docker compose --env-file .env.production -f docker-compose.prod.yml up -d frontend
+# 前端镜像不由这份生产 Compose 管理；如单独部署前端，请在其部署目录执行对应更新。
 ```
 
 离线生产环境可以逐个导出发生变化的镜像：
@@ -392,7 +423,7 @@ curl -H "X-API-Token: <SKILL_API_TOKEN>" http://127.0.0.1:5000/skill/task/SKL-8F
 
 ### 技能配置
 
-配置来源统一为**仓库根目录的 `.env`**（容器内由 `docker compose --env-file .env` 注入）。应用启动时先读 `backend/.env` 再读根 `.env`，因此根 `.env` 里配置过的键一律以根 `.env` 为准；`backend/.env` 只保留本地开发路径（`SKILLS_DIR`、`SKILL_WORKSPACE_DIR`、`CODEX_HOME`）。真实进程环境变量优先级最高，任何 `.env` 都不会覆盖它。
+配置来源统一为**仓库根目录的 `.env`**（容器内由 `docker compose -f docker-compose-dev.yaml --env-file .env` 注入）。应用启动时先读 `backend/.env` 再读根 `.env`，因此根 `.env` 里配置过的键一律以根 `.env` 为准；`backend/.env` 只保留本地开发路径（`SKILLS_DIR`、`SKILL_WORKSPACE_DIR`、`CODEX_HOME`）。真实进程环境变量优先级最高，任何 `.env` 都不会覆盖它。
 
 除 `CODEX_API_KEY`、`JIRA_TOKEN`、`JIRA_BASE_URL` 三项必须自行填写外，其余技能配置均已内置已验证可用的默认值，部署时无需在 `.env` 中重复填写。
 
@@ -440,15 +471,17 @@ Codex 自己生成的状态文件全部落在 `codex-home` 卷（本地运行对
 - 后端镜像已内置 Node.js 与 Codex CLI，构建参数为 `CODEX_CLI_VERSION` 与 `NPM_REGISTRY`。
 - 后端镜像已内置附件解压工具（`bsdtar`／`unzip`，以及按发行版可用的 7-Zip 系命令），技能执行时**不需要联网安装**；
   构建阶段会校验这些命令存在，缺失会导致镜像构建失败。
-- `docker compose up -d --build` 会自动挂载 `./skills:/data/skills:ro`，并创建 `codex-home`、`skill-workspace` 等命名卷。
+- 后端镜像已内置 JDK 8、JDK 21 与 Maven 3.9.9，技能可直接在容器内编译 Java 代码；默认 `JAVA_HOME` 为
+  JDK 8（业务仓库以 Java 8 为主），Java 21 项目用镜像内的 `jdk 21 <命令>` 显式切换。构建阶段会校验 JDK 8／JDK 21／Maven 三者可用，缺失会导致镜像构建失败。
+- `docker compose --env-file .env -f docker-compose-dev.yaml up -d` 会挂载 `./skills:/data/skills:ro`，并使用 `./data/codex`、`./data/skill-workspace` 等宿主机目录。
 - 首次部署后自检技能运行环境：
 
 ```bash
-docker compose exec worker node /data/skills/jira-gate-1/scripts/jira-cli.mjs selftest
+docker compose -f docker-compose-dev.yaml exec worker node /data/skills/jira-gate-1/scripts/jira-cli.mjs selftest
 # jira-code 额外自检 GitLab 凭据（只回显来源，不打印令牌）
-docker compose exec worker node /data/skills/jira-code/scripts/git-flow.mjs creds
+docker compose -f docker-compose-dev.yaml exec worker node /data/skills/jira-code/scripts/git-flow.mjs creds
 # 配了 DEVOPS_MCP_TOKEN 时确认 MCP 已注册（看不出内容说明令牌没写进去）
-docker compose exec worker sh -c 'grep -c pipeline-integration-mcp /data/codex/config.toml'
+docker compose -f docker-compose-dev.yaml exec worker sh -c 'grep -c pipeline-integration-mcp /data/codex/config.toml'
 ```
 
 - API 只负责提交任务，Codex 实际执行发生在 `worker` 容器，请确保 `worker` 能访问 Jira 与模型中转。
@@ -474,7 +507,7 @@ backend\.venv-win\Scripts\python.exe -m pip install -r backend\requirements-wind
 - 必填密钥：`JIRA_TOKEN`、`CODEX_API_KEY`。其余技能配置（含 `CODEX_MODEL`、`CODEX_BASE_URL`、`SKILL_API_TOKEN`、`JIRA_BASE_URL`）均已内置可用默认值。
 - 要跑 `jira-code` 才需要额外配置 `GITLAB_PRIVATE_TOKEN`（需仓库写权限）与 `GIT_BASE_URL`；不填也能启动服务，只是该技能会中断并说明缺少凭据。
 - `jira-code` 的热更新阶段需要 `DEVOPS_MCP_TOKEN`（流水线平台个人中心签发）；不填时热更新会跳过并在评论里说明，代码推送不受影响。`DEVOPS_MCP_URL` 有内置默认值，通常不用改。
-- 本地路径：把 `LOCAL_STORAGE_DIR`、`LOG_DIR` 改成本机可写目录，不要沿用容器内的 `/data/...` 路径；`SKILLS_DIR`、`SKILL_WORKSPACE_DIR`、`CODEX_HOME` 放在 `backend/.env`（根 `.env` 中不配置这三项，否则会被 docker compose 带进容器）。
+- 本地路径：把 `LOCAL_STORAGE_DIR`、`LOG_DIR` 改成本机可写目录，不要沿用容器内的 `/data/...` 路径；`SKILLS_DIR`、`SKILL_WORKSPACE_DIR`、`CODEX_HOME` 放在 `backend/.env`（根 `.env` 中不配置这三项，否则会被 docker compose -f docker-compose-dev.yaml 带进容器）。
 
 3. 建表（与生产同一套迁移）：
 
@@ -520,7 +553,7 @@ curl -H "X-API-Token: local-dev-token" http://127.0.0.1:5000/skill/list
 ```
 
 `jira-gate-bug` 的产品从 Jira「问题发现产品」读取；模块和版本优先取调用方输入，其次读取固定评论块
-`[FAULT_ANALYSIS]`，最后才使用唯一的 Jira 组件/版本字段。仓库地址和版本到 Git Tag 的规则统一维护在
+`[FAULT_ANALYSIS]`。版本也可取唯一的影响版本字段，或概要、描述、评论中的明确模块版本号；可辨认图片中显示的模块版本经 Agent 识别后可作为 `inputs.version`。修复版本不参与门禁和自动分析版本来源。仓库地址和版本到 Git Tag 的规则统一维护在
 `skills/jira-gate-bug/config/scope-mapping.json`，不要把仓库地址重复写进每条评论。
 
 模块与 Tag 的评论格式固定为（第一条是主模块，后续是关联模块）：
@@ -570,25 +603,19 @@ GIT_PASSWORD=
 GITLAB_PRIVATE_TOKEN=
 ```
 
-Compose 默认不启动本地 MySQL 和 Redis。使用外部服务时配置：
+这两份 Compose 不启动本地 MySQL 和 Redis。使用外部服务时配置：
 
 ```env
-COMPOSE_MYSQL_HOST=数据库地址
-COMPOSE_MYSQL_PORT=3306
-COMPOSE_REDIS_HOST=Redis地址
-COMPOSE_REDIS_PORT=6379
+MYSQL_HOST=数据库地址
+MYSQL_PORT=3306
+REDIS_HOST=Redis地址
+REDIS_PORT=6379
 ```
 
 外部依赖模式直接执行：
 
 ```powershell
-docker compose up -d --build
-```
-
-只有需要本地依赖时才执行：
-
-```powershell
-docker compose --profile local-deps up -d --build
+docker compose --env-file .env -f docker-compose-dev.yaml up -d
 ```
 
 ## Windows 客户端
@@ -665,26 +692,26 @@ powershell -ExecutionPolicy Bypass -File scripts\clean_generated.ps1 -KeepReleas
 检查 `users.csv` 的表头、编码和状态值，确认 API 能读取挂载文件：
 
 ```powershell
-docker compose exec api python verify_runtime.py --runtime
-docker compose logs api
+docker compose -f docker-compose-dev.yaml exec api python verify_runtime.py --runtime
+docker compose -f docker-compose-dev.yaml logs api
 ```
 
 ### 迁移提示 MySQL 认证失败
 
-当前依赖已使用 `PyMySQL[rsa]` 支持 MySQL 8 `caching_sha2_password`。确认使用最新后端镜像，并重新执行 `docker compose build api`。
+当前依赖已使用 `PyMySQL[rsa]` 支持 MySQL 8 `caching_sha2_password`。确认使用最新后端镜像，并重新拉取、重启 API：`docker compose --env-file .env -f docker-compose-dev.yaml pull api && docker compose --env-file .env -f docker-compose-dev.yaml up -d api`。
 
 ### 图片长时间停在分析中
 
 图片识别走多模态模型，长图或大图会明显更慢（默认本地 OCR 已停用）。先查看 Worker 日志确认当前阶段：
 
 ```powershell
-docker compose logs -f worker
+docker compose -f docker-compose-dev.yaml logs -f worker
 ```
 
 若确实需要本地 OCR 预检，再显式开启并检查运行环境：
 
 ```powershell
-docker compose exec api python verify_runtime.py --ocr
+docker compose -f docker-compose-dev.yaml exec api python verify_runtime.py --ocr
 ```
 
 ### 多张图片只看到一个问题
@@ -701,11 +728,11 @@ docker compose exec api python verify_runtime.py --ocr
 
 ```bash
 # 1. 查看 Codex 执行过程与错误输出
-docker compose logs -f worker
+docker compose -f docker-compose-dev.yaml logs -f worker
 # 2. 技能运行环境自检（令牌、连通性、账号）
-docker compose exec worker node /data/skills/jira-gate-1/scripts/jira-cli.mjs selftest
+docker compose -f docker-compose-dev.yaml exec worker node /data/skills/jira-gate-1/scripts/jira-cli.mjs selftest
 # 3. 确认镜像内 Codex CLI 可用
-docker compose exec worker codex --version
+docker compose -f docker-compose-dev.yaml exec worker codex --version
 ```
 
 常见原因：`worker` 无法访问 Jira 或模型中转地址；`JIRA_TOKEN` 未配置或已过期；

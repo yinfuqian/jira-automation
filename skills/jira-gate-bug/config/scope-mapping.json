@@ -1,4 +1,9 @@
 {
+  "mappingOwner": {
+    "name": "yinfuqian1193",
+    "displayName": "尹甫乾",
+    "mention": "[~yinfuqian1193]"
+  },
   "versionRules": [
     {
       "name": "exact-ref",
