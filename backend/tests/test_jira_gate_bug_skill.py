@@ -124,8 +124,16 @@ class DefectGateSkillDefinitionTests(unittest.TestCase):
         """分析范围配置必须覆盖 Jira 问题发现产品的常用顶层组。"""
         mapping = json.loads((SKILL_DIR / "config" / "scope-mapping.json").read_text(encoding="utf-8"))
 
-        for product in ("see", "pal", "bot", "yicall", "yibot", "eco", "hxk", "falcon"):
+        for product in ("see", "pal", "bot", "yicall", "yibot", "eco", "hxk", "falcon", "aiforce"):
             self.assertIn(product, mapping["products"])
+        self.assertEqual(
+            mapping["products"]["aiforce"]["modules"]["aiforce2"]["repoUrl"],
+            "https://code.in.wezhuiyi.com/aiforce/aiforce2.git",
+        )
+        self.assertIn(
+            "aiforce-authentication",
+            mapping["products"]["aiforce"]["modules"]["aiforce2"]["aliases"],
+        )
         self.assertEqual(
             mapping["products"]["see"]["modules"]["see-task"]["repoUrl"],
             "https://code.in.wezhuiyi.com/see/see-task.git",
@@ -485,6 +493,148 @@ console.log(JSON.stringify(extractFaultAnalysisScope(issue)));
             "module": "see-management",
             "version": "v1.2.3",
             "source": "评论:11",
+        }])
+        self.assertEqual(payload["missing"], [])
+
+    @unittest.skipIf(NODE_BIN is None, "需要 node 运行时才能执行技能脚本")
+    def test_fault_scope_reads_module_tag_pairs_from_description(self):
+        """描述里每条「模块:Tag」都要识别：首条为主模块，其余整体作为关联模块保留。"""
+        jira_url = (SKILL_DIR / "scripts" / "jira.mjs").as_uri()
+        driver = """
+const { normalizeIssue, extractFaultAnalysisScope } = await import("__JIRA__");
+const issue = normalizeIssue({
+  key: "KEY-13",
+  id: "13",
+  self: "https://jira.in.wezhuiyi.com/rest/api/2/issue/13",
+  names: { customfield_10010: "问题发现产品" },
+  fields: {
+    summary: "aiforce 认证失败",
+    description: "影响模块：aiforce-authentication\\n影响版本：v2.3_3-zhongyizaixian-20240425\\n影响模块：aiforce-model\\n影响版本：v2.3_3-zhongyizaixian-20240425",
+    customfield_10010: { value: "Aiforce" },
+    components: [{ name: "aiforce" }],
+    comment: { total: 0, comments: [] },
+  },
+});
+console.log(JSON.stringify(extractFaultAnalysisScope(issue)));
+""".replace("__JIRA__", jira_url)
+
+        output = self.run_node(driver)
+        payload = json.loads(output.strip().splitlines()[-1])
+
+        self.assertEqual(payload["product"], "Aiforce")
+        self.assertEqual(payload["module"], "aiforce-authentication")
+        self.assertEqual(payload["version"], "v2.3_3-zhongyizaixian-20240425")
+        self.assertEqual(payload["sources"]["module"], "Jira:描述")
+        self.assertEqual(payload["sources"]["version"], "Jira:描述")
+        self.assertEqual(payload["relatedModules"], [{
+            "module": "aiforce-model",
+            "version": "v2.3_3-zhongyizaixian-20240425",
+            "source": "Jira:描述",
+        }])
+        self.assertEqual(payload["missing"], [])
+
+    @unittest.skipIf(NODE_BIN is None, "需要 node 运行时才能执行技能脚本")
+    def test_fault_scope_product_echo_component_is_not_a_module(self):
+        """Jira 组件与产品同名时只是产品回声，不能被当成已识别的模块。"""
+        jira_url = (SKILL_DIR / "scripts" / "jira.mjs").as_uri()
+        driver = """
+const { normalizeIssue, extractFaultAnalysisScope } = await import("__JIRA__");
+const issue = normalizeIssue({
+  key: "KEY-14",
+  id: "14",
+  self: "https://jira.in.wezhuiyi.com/rest/api/2/issue/14",
+  names: { customfield_10010: "问题发现产品" },
+  fields: {
+    summary: "aiforce 认证失败",
+    customfield_10010: { value: "Aiforce" },
+    components: [{ name: "aiforce" }],
+    versions: [],
+    comment: { total: 0, comments: [] },
+  },
+});
+console.log(JSON.stringify(extractFaultAnalysisScope(issue)));
+""".replace("__JIRA__", jira_url)
+
+        output = self.run_node(driver)
+        payload = json.loads(output.strip().splitlines()[-1])
+
+        self.assertEqual(payload["product"], "Aiforce")
+        self.assertEqual(payload["module"], "")
+        self.assertEqual(payload["candidates"]["module"], [])
+        self.assertNotIn("module", payload["sources"])
+        self.assertEqual(payload["missing"], ["module", "version"])
+
+    @unittest.skipIf(NODE_BIN is None, "需要 node 运行时才能执行技能脚本")
+    def test_fault_scope_honours_explicit_module_named_like_product(self):
+        """显式声明的模块按原样使用：与产品同名时交给 scope-mapping 的别名解析，不能悄悄丢弃。"""
+        jira_url = (SKILL_DIR / "scripts" / "jira.mjs").as_uri()
+        driver = """
+const { normalizeIssue, extractFaultAnalysisScope } = await import("__JIRA__");
+const issue = normalizeIssue({
+  key: "KEY-16",
+  id: "16",
+  self: "https://jira.in.wezhuiyi.com/rest/api/2/issue/16",
+  names: { customfield_10010: "问题发现产品" },
+  fields: {
+    summary: "aiforce 认证失败",
+    customfield_10010: { value: "Aiforce" },
+    components: [{ name: "aiforce" }],
+    comment: { total: 1, comments: [{
+      id: "22",
+      author: { displayName: "李颖", name: "liying" },
+      created: "2026-09-20T09:40:00Z",
+      body: "[FAULT_ANALYSIS]\\naiforce:v5.1.1-zhongyizaixian-rc2"
+    }] },
+  },
+});
+console.log(JSON.stringify(extractFaultAnalysisScope(issue)));
+""".replace("__JIRA__", jira_url)
+
+        output = self.run_node(driver)
+        payload = json.loads(output.strip().splitlines()[-1])
+
+        self.assertEqual(payload["module"], "aiforce")
+        self.assertEqual(payload["version"], "v5.1.1-zhongyizaixian-rc2")
+        self.assertEqual(payload["sources"]["module"], "评论:22")
+        self.assertEqual(payload["missing"], [])
+
+    @unittest.skipIf(NODE_BIN is None, "需要 node 运行时才能执行技能脚本")
+    def test_fault_scope_comment_block_outranks_description_pairs(self):
+        """评论固定块是人工纠正入口，优先级高于描述里的模块:Tag，冲突项保留为关联模块。"""
+        jira_url = (SKILL_DIR / "scripts" / "jira.mjs").as_uri()
+        driver = """
+const { normalizeIssue, extractFaultAnalysisScope } = await import("__JIRA__");
+const issue = normalizeIssue({
+  key: "KEY-15",
+  id: "15",
+  self: "https://jira.in.wezhuiyi.com/rest/api/2/issue/15",
+  names: { customfield_10010: "问题发现产品" },
+  fields: {
+    summary: "aiforce 认证失败",
+    description: "影响模块：aiforce-authentication\\n影响版本：v1.0.0",
+    customfield_10010: { value: "Aiforce" },
+    components: [{ name: "aiforce" }],
+    comment: { total: 1, comments: [{
+      id: "21",
+      author: { displayName: "李颖", name: "liying" },
+      created: "2026-09-20T09:40:00Z",
+      body: "[FAULT_ANALYSIS]\\naiforce2:v5.1.1-zhongyizaixian-rc2"
+    }] },
+  },
+});
+console.log(JSON.stringify(extractFaultAnalysisScope(issue)));
+""".replace("__JIRA__", jira_url)
+
+        output = self.run_node(driver)
+        payload = json.loads(output.strip().splitlines()[-1])
+
+        self.assertEqual(payload["module"], "aiforce2")
+        self.assertEqual(payload["version"], "v5.1.1-zhongyizaixian-rc2")
+        self.assertEqual(payload["sources"]["module"], "评论:21")
+        self.assertEqual(payload["relatedModules"], [{
+            "module": "aiforce-authentication",
+            "version": "v1.0.0",
+            "source": "Jira:描述",
         }])
         self.assertEqual(payload["missing"], [])
 

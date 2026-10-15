@@ -92,6 +92,25 @@
         "fep": { "repoUrl": "https://code.in.wezhuiyi.com/falcon/fep.git" },
         "miniconda": { "repoUrl": "https://code.in.wezhuiyi.com/falcon/miniconda.git" }
       }
+    },
+    "aiforce": {
+      "modules": {
+        "aiforce2": {
+          "repoUrl": "https://code.in.wezhuiyi.com/aiforce/aiforce2.git",
+          "aliases": [
+            "aiforce",
+            "aiforce-provider-permission",
+            "aiforce-authentication",
+            "aiforce-common",
+            "aiforce-model",
+            "aiforce-database",
+            "aiforce-security",
+            "aiforce-unit-testing",
+            "sql-builder",
+            "jmongosql"
+          ]
+        }
+      }
     }
   }
 }

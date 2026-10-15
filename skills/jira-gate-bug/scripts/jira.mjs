@@ -41,6 +41,46 @@ const FAULT_SCOPE_KEY_ALIASES = {
   branch: ["branch", "branchaddress", "repo", "repourl", "repository", "分支", "仓库", "仓库地址"],
 };
 
+/**
+ * 版本号 token：至少一段 '.' 或 '_' 分隔的数字，可带 -/+ 后缀。
+ * 必须允许下划线——aiforce 的版本形如 v2.3_3-zhongyizaixian-20240425，只认点号的写法整条都匹配不到。
+ * 同时要求至少一段分隔符，避免把「20240425」这类纯数字当成版本号。
+ */
+const VERSION_TOKEN = String.raw`v?\d+(?:[._]\d+)+(?:[-+][A-Za-z0-9._-]+)*`;
+
+/** 任意文本里的版本号 token。 */
+const VERSION_TOKEN_RE = new RegExp("\\b" + VERSION_TOKEN + "\\b", "gi");
+
+/** 行首列表符：1. / 1、 / 1) / - / * 等。 */
+const LIST_PREFIX = "(?:[*\\-]\\s*|\\d+[.、)]\\s*)?";
+/** 标签允许写成 模块 / 【模块】 / **模块** / （影响模块）。 */
+const LABEL_OPEN = "(?:\\*{0,2})[【\\[（(]?";
+const LABEL_CLOSE = "[】\\]）)]?(?:\\*{0,2})";
+const MODULE_LABEL = LABEL_OPEN + "(?:影响)?(?:模块|组件|服务)" + LABEL_CLOSE;
+const VERSION_LABEL = LABEL_OPEN + "(?:影响)?(?:版本|version|tag|标签)" + LABEL_CLOSE;
+/** 模块名限定 ASCII；版本号后面必须是分隔符、括号或行尾。 */
+const MODULE_NAME = "([A-Za-z][A-Za-z0-9._-]{1,63})";
+const VERSION_TAIL = "(?=$|[\\s，。；,;、)】\\]（(【])";
+
+/** 单行「模块:Tag」。 */
+const MODULE_TAG_LINE_RE = new RegExp("^" + MODULE_NAME + "\\s*[:：]\\s*(" + VERSION_TOKEN + ")" + VERSION_TAIL);
+
+/** 一行里同时写了模块与版本标签：「影响模块：xxx 影响版本：yyy」。 */
+const INLINE_MODULE_VERSION_RE = new RegExp(
+  "^" + LIST_PREFIX + MODULE_LABEL + "\\s*[:：]?\\s*" + MODULE_NAME + "[\\s，,；;、/|]*" +
+    VERSION_LABEL + "\\s*[:：]?\\s*(" + VERSION_TOKEN + ")" + VERSION_TAIL,
+  "i"
+);
+
+/** 两行分写形式：「影响模块：xxx」+「影响版本：yyy」。 */
+const MODULE_LABEL_LINE_RE = new RegExp(
+  "^" + LIST_PREFIX + MODULE_LABEL + "\\s*[:：]?\\s*" + MODULE_NAME + VERSION_TAIL
+);
+const VERSION_LABEL_LINE_RE = new RegExp(
+  "^" + LIST_PREFIX + VERSION_LABEL + "\\s*[:：]?\\s*(" + VERSION_TOKEN + ")" + VERSION_TAIL,
+  "i"
+);
+
 /** 从任意输入中解析 Jira 问题 Key */
 export function parseIssueKey(input) {
   if (!input) return null;
@@ -327,6 +367,71 @@ function uniqueTextValues(value) {
 }
 
 
+/** 统一小写比较用的 token。 */
+function normalizeToken(value) {
+  return String(value || "").trim().toLowerCase();
+}
+
+
+/**
+ * 模块名启发式：全小写、或带 -/_ 分隔才认为像模块名。
+ * 用来挡掉日志正文里的 "ERROR: xxx"、"Caused: ..." 这类行——它们同样满足「词:值」的形状。
+ */
+function looksLikeModuleToken(value) {
+  const token = String(value || "").trim();
+  if (!/^[A-Za-z][A-Za-z0-9._-]{1,63}$/.test(token)) return false;
+  return token === token.toLowerCase() || token.includes("-") || token.includes("_");
+}
+
+
+/**
+ * 从工单正文（描述、环境、概要、评论）里提取显式的「模块:Tag」对，与评论固定块同一写法。
+ *
+ * 必须带冒号或模块/版本标签：这样描述里的 "bot-3.2 模块发布后" 仍然只当版本号来源，
+ * 不会被误判成模块版本对。支持三种写法：
+ *   1. see-task:v1.2.3 / 1. see-task：v1.2.3                （单行，可带 1. / - 等列表前缀）
+ *   2. 影响模块：see-task 影响版本：v1.2.3                    （同一行两个标签）
+ *   3. 影响模块：see-task + 影响版本：v1.2.3                  （两行分写，中间允许夹杂其它行）
+ * 标签可写成【影响模块】、**影响模块**、影响模块 等形式。
+ */
+function moduleTagPairsFromText(value) {
+  const lines = String(value || "")
+    .split(/\r?\n/)
+    .filter((line) => !/(?:修复版本|修复的版本|fixed\s+version|fix\s+version)/i.test(line))
+    .map((line) => line.replace(/^[*-]\s+/, "").replace(/^\d+[.、)]\s+/, "").trim())
+    .filter(Boolean);
+  const pairs = [];
+  const seen = new Set();
+  const push = (module, tag) => {
+    const key = module + "|" + tag;
+    if (seen.has(key)) return;
+    seen.add(key);
+    pairs.push({ module, tag });
+  };
+  for (let index = 0; index < lines.length; index += 1) {
+    const inline = lines[index].match(INLINE_MODULE_VERSION_RE);
+    if (inline && looksLikeModuleToken(inline[1])) {
+      push(inline[1].trim(), inline[2].trim());
+      continue;
+    }
+    const direct = lines[index].match(MODULE_TAG_LINE_RE);
+    if (direct && looksLikeModuleToken(direct[1])) {
+      push(direct[1].trim(), direct[2].trim());
+      continue;
+    }
+    const moduleLabel = lines[index].match(MODULE_LABEL_LINE_RE);
+    if (!moduleLabel || !looksLikeModuleToken(moduleLabel[1])) continue;
+    for (let offset = 1; offset <= 3 && index + offset < lines.length; offset += 1) {
+      const versionLabel = lines[index + offset].match(VERSION_LABEL_LINE_RE);
+      if (!versionLabel) continue;
+      push(moduleLabel[1].trim(), versionLabel[1].trim());
+      break;
+    }
+  }
+  return pairs;
+}
+
+
 /** 把 Agent 从图片识别的模块候选规范化为 { module, version, source }。 */
 function normalizeModulePairs(value, defaultSource) {
   const source = Array.isArray(value) ? value : [value];
@@ -419,11 +524,11 @@ function versionsFromText(value, moduleHints = []) {
   const labelled = analysisLines
     .filter((line) => /(?:版本|version|tag|release)/i.test(line))
     .join(" ");
-  const matches = labelled ? (labelled.match(/\bv?\d+(?:\.\d+){1,3}(?:[-+][A-Za-z0-9._-]+)*\b/gi) || []) : [];
+  const matches = labelled ? (labelled.match(VERSION_TOKEN_RE) || []) : [];
   for (const hint of uniqueTextValues(moduleHints)) {
     const escaped = String(hint).replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
     const modulePattern = new RegExp(
-      "\\b" + escaped + "(?:[-_ ]?v?|\\s*[:：]\\s*v?)(\\d+(?:\\.\\d+){1,3}(?:[-+][A-Za-z0-9._-]+)*)\\b",
+      "\\b" + escaped + "(?:[-_ ]?v?|\\s*[:：]\\s*v?)(" + VERSION_TOKEN + ")\\b",
       "gi"
     );
     let match;
@@ -449,7 +554,6 @@ export function extractFaultAnalysisScope(issue, overrides = {}) {
   const relatedModules = [];
   const pick = (...values) => values.map((item) => String(item || "").trim()).find((item) => item && !isEmptyValue(item)) || "";
   const pairEntries = Array.isArray(block.entries) ? block.entries : [];
-  const primaryPair = pairEntries[0] || null;
 
   const customFields = (issue && issue.customFields) || {};
   let jiraProduct = "";
@@ -471,14 +575,60 @@ export function extractFaultAnalysisScope(issue, overrides = {}) {
         : `评论:${block.commentId || ""}`;
   }
 
-  const moduleCandidates = uniqueTextValues(issue && issue.components);
-  const module = pick(overrides.module, block.values.module, primaryPair && primaryPair.module);
+  // Jira 的模块/组件字段在业务上是产品级的，只有一个值且与产品同名时（例如 aiforce），
+  // 它只是产品回声：自动采用会把「模块未识别」伪装成「模块=aiforce」，误报成映射缺口。
+  // 只对这条隐式来源生效；评论固定块、描述里显式写出的模块声明仍按原样使用。
+  const echoesProduct = (value) => {
+    const token = normalizeToken(value);
+    if (!token) return false;
+    return token === normalizeToken(product) || (jiraProduct && token === normalizeToken(jiraProduct));
+  };
+
+  // 工单正文里显式写的「模块:Tag」也算模块声明，优先级高于只有一个值时的 Jira 组件兜底。
+  const bodyPairs = [];
+  for (const [source, text] of [
+    ["Jira:描述", issue && issue.description],
+    ["Jira:环境", issue && issue.environment],
+    ["Jira:概要", issue && issue.summary],
+    ["Jira:评论", (issue && issue.comments || []).map((comment) => comment.body || "").join("\n")],
+  ]) {
+    for (const pair of moduleTagPairsFromText(text)) {
+      if (bodyPairs.some((item) => item.module === pair.module && item.tag === pair.tag)) continue;
+      bodyPairs.push({ ...pair, source });
+    }
+  }
+  // 显式声明的「模块:Tag」按 评论固定块 > 工单正文（描述/环境/概要/评论）顺序合并：
+  // 同一模块只保留一条，先出现的空 Tag 会被后面带 Tag 的声明补全。
+  const declared = [];
+  const declarePair = (entry) => {
+    const name = String((entry && entry.module) || "").trim();
+    if (!name) return;
+    const tag = String((entry && (entry.tag !== undefined ? entry.tag : entry.version)) || "").trim();
+    const source = String((entry && entry.source) || "");
+    const existing = declared.find((item) => item.module === name);
+    if (!existing) {
+      declared.push({ module: name, version: tag, source });
+    } else if (!existing.version && tag) {
+      existing.version = tag;
+      existing.source = source;
+    }
+  };
+  for (const entry of pairEntries) {
+    declarePair({ module: entry.module, tag: entry.tag, source: `评论:${block.commentId || ""}` });
+  }
+  for (const entry of bodyPairs) declarePair(entry);
+
+  const moduleCandidates = uniqueTextValues(issue && issue.components).filter((item) => !echoesProduct(item));
+  const overrideModule = overrides.module;
+  const declaredPrimary = declared[0] || null;
+  const module = pick(overrideModule, block.values.module, declaredPrimary && declaredPrimary.module);
+  const declaredForModule = declared.find((item) => item.module === module) || null;
   if (module) {
-    sources.module = overrides.module && module === String(overrides.module).trim()
+    sources.module = overrideModule && module === String(overrideModule).trim()
       ? "调用方输入"
       : block.values.module && module === block.values.module
         ? `评论:${block.commentId || ""}`
-        : `评论:${block.commentId || ""}:${module}`;
+        : (declaredForModule && declaredForModule.source) || `评论:${block.commentId || ""}:${module}`;
   } else if (moduleCandidates.length === 1) {
     sources.module = "Jira:模块/组件";
   } else if (moduleCandidates.length > 1) {
@@ -504,13 +654,17 @@ export function extractFaultAnalysisScope(issue, overrides = {}) {
     versionsFromText((issue.attachments || []).map((attachment) => attachment.filename || "").join("\n"), moduleHints)
   );
   const uniqueVersions = [...new Set(versionCandidates.map((item) => item.value))];
-  let version = pick(overrides.version, block.values.version, primaryPair && primaryPair.tag);
+  // 版本优先跟随主模块自己的 Tag 声明；描述里写出的第二条「模块:Tag」整体作为关联模块保留，
+  // 不会被「多来源只接受唯一值」的规则当成冲突丢掉。
+  const declaredTag = (declared.find((item) => item.module === module) || {}).version || "";
+  let version = pick(overrides.version, block.values.version, declaredTag);
   if (version) {
+    const matchedPair = declared.find((item) => item.module === module && item.version === version);
     sources.version = overrides.version && version === String(overrides.version).trim()
       ? "调用方输入"
       : block.values.version && version === block.values.version
         ? `评论:${block.commentId || ""}`
-        : `评论:${block.commentId || ""}:${version}`;
+        : (matchedPair && matchedPair.source) || `评论:${block.commentId || ""}:${version}`;
   } else if (uniqueVersions.length === 1) {
     version = uniqueVersions[0];
     sources.version = versionCandidates.find((item) => item.value === version).source;
@@ -521,9 +675,10 @@ export function extractFaultAnalysisScope(issue, overrides = {}) {
   const branch = pick(overrides.branch, block.values.branch);
   if (branch) sources.branch = overrides.branch && branch === String(overrides.branch).trim() ? "调用方输入" : `评论:${block.commentId || ""}`;
 
-  for (const entry of pairEntries) {
-    if (entry.module === module && (!version || entry.tag === version)) continue;
-    relatedModules.push({ module: entry.module, version: entry.tag, source: `评论:${block.commentId || ""}` });
+  for (const entry of declared) {
+    if (!entry.module || entry.module === module) continue;
+    if (relatedModules.some((item) => item.module === entry.module)) continue;
+    relatedModules.push(entry);
   }
   for (const entry of normalizeModulePairs(overrides.relatedModules, "调用方输入:可辨认图片")) {
     if (entry.module === module && (!version || entry.version === version)) continue;
