@@ -31,12 +31,15 @@ const escRe = (t) => String(t).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 const PUA0 = '\uE000', PUA1 = '\uE001';
 
 const CAT = { FR: '功能要求', BR: '业务规则', AC: '验收条件', D: '产品决策', G: '需求目标', IR: '交互规则' };
-const LEVEL_NAME = { bad: '阻断', warn: '需补齐', info: '建议', ok: '一致' };
+const LEVEL_NAME = { bad: '阻断', warn: '需补齐', info: '建议', ok: '一致', pending: '待判断' };
 const TONE = { pass: 'pass', conditional: 'conditional', return: 'return', pending: 'pending' };
 /* 映射表「结论」 → 级别（用于配色与默认过滤） */
-const MAP_LEVEL = { 一致: 'ok', 部分: 'warn', 冲突: 'bad', 缺失: 'bad', 未验证: 'info', 建议: 'info' };
+const MAP_LEVEL = { 一致: 'ok', 部分: 'warn', 冲突: 'bad', 缺失: 'bad', 未验证: 'info', 建议: 'info', 复用: 'reuse', 待判断: 'pending', 待确认: 'pending' };
 const mapLevel = (v) => {
   const t = String(v || '');
+  /* 复用项按 SKILL.md 3.1 不判：不进不一致，也不参与阻断/需补齐计数 */
+  if (t.includes('复用')) return t.includes('待') ? 'pending' : 'reuse';
+  if (t.includes('待判断') || t.includes('待确认')) return 'pending';
   if (t.includes('一致') && !t.includes('不一致')) return 'ok';
   if (t.includes('不一致') || t.includes('冲突')) return 'bad';
   if (t.includes('缺失')) return 'bad';
