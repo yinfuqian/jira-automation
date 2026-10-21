@@ -92,7 +92,7 @@ export function buildMappingOwnerComment(error, configPath) {
   } else {
     lines.push(`* 缺口：${reasonText}`);
   }
-  lines.push("* 处理方式：无需提单人重复补充模块；映射补齐后重新触发本技能即可自动检查，不要求额外确认。");
+  lines.push("* 处理方式：无需提单人重复补充模块；映射补齐后重新触发本技能即可自动检查，不要求额外确认。本单会转派给上述映射维护人，不改变工作流状态。");
   return lines.join("\n");
 }
 
@@ -234,6 +234,29 @@ export function resolveModuleMapping(productMapping, module) {
     );
   }
   return { ...matches[0], repoUrl };
+}
+
+
+/**
+ * 按模块名反查它配置在哪些产品下。
+ *
+ * Jira 的「产品归属」只能填一个，但一张缺陷单可以列多个来自不同产品的模块
+ * （例如产品归属 Aiforce，同时涉及 aiforce2 与 bot-portal）。关联模块不能一律
+ * 套用主产品，必须按这里的映射找到它自己的产品；找不到才回落到主产品。
+ */
+export function resolveModuleOwners(module, config, configPath) {
+  const wanted = normalize(module);
+  if (!wanted) return [];
+  const loaded = config || readConfig(configPath);
+  const owners = [];
+  for (const productMapping of productEntries(loaded)) {
+    const owned = moduleEntries(productMapping).some(({ key, value }) => {
+      const aliases = Array.isArray(value.aliases) ? value.aliases : [];
+      return normalize(key) === wanted || aliases.some((alias) => normalize(alias) === wanted);
+    });
+    if (owned) owners.push(productMapping);
+  }
+  return owners;
 }
 
 

@@ -10,5 +10,5 @@ gunicorn \
   -k "${GUNICORN_WORKER_CLASS:-gthread}" \
   --threads "${WEB_THREADS:-8}" \
   --timeout "${GUNICORN_TIMEOUT:-300}" \
-  --bind 0.0.0.0:5000 \
+  --bind "0.0.0.0:${API_PORT:-5000}" \
   'app:create_app()'

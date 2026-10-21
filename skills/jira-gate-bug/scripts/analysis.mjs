@@ -12,6 +12,7 @@ import {
   listConfiguredCommonModules,
   resolveGitTag,
   resolveModuleMapping,
+  resolveModuleOwners,
   resolveProductMapping,
 } from "./scope.mjs";
 
@@ -143,6 +144,7 @@ async function resolveScopeEntry(input = {}, options = {}, resolvedProduct = nul
       configuredRepo: "",
       configuredRef: "",
       configuredCommon: false,
+      configuredModuleName: "",
       error: null,
     };
     try {
@@ -150,6 +152,9 @@ async function resolveScopeEntry(input = {}, options = {}, resolvedProduct = nul
       const moduleMapping = resolveModuleMapping(productMapping, moduleValue);
       result.configuredRepo = moduleMapping.repoUrl;
       result.configuredCommon = Boolean(moduleMapping.value.common);
+      // Jira 模块名可能只是别名（aiforce -> aiforce2），分析服务只登记后者。
+      // analysisModule 可显式指定同一仓库下要交给分析服务的模块名。
+      result.configuredModuleName = String(moduleMapping.value.analysisModule || moduleMapping.key || "").trim();
       if (input.version) {
         result.configuredRef = resolveGitTag(productMapping, moduleMapping, input.version, null, options.configPath).gitTag;
       }
@@ -182,7 +187,17 @@ async function resolveScopeEntry(input = {}, options = {}, resolvedProduct = nul
     throw wrapMappingError(configured.error);
   }
 
-  const module = await resolveModule(product.id, input.module, options);
+  const requestedModule = String(input.module || "").trim();
+  const lookupModule = configured && configured.configuredModuleName
+    ? configured.configuredModuleName
+    : requestedModule;
+  let module;
+  try {
+    module = await resolveModule(product.id, lookupModule, options);
+  } catch (error) {
+    if (lookupModule === requestedModule) throw error;
+    module = await resolveModule(product.id, requestedModule, options);
+  }
   if (!configured) {
     configured = inspectConfiguredScope(module.name || input.module);
     if (configured.error && !explicitFullScope) {
@@ -212,20 +227,61 @@ async function resolveScopeEntry(input = {}, options = {}, resolvedProduct = nul
 }
 
 /**
- * 解析主模块与可选关联模块。关联模块共用主模块的产品。
+ * 解析主模块与可选关联模块。
+ *
+ * Jira「产品归属」只能填一个，但一张单可以涉及多个产品的模块。主模块使用产品归属；
+ * 关联模块先按 scope-mapping 反查自己的产品（例如 Aiforce 单里的 bot-portal 归 bot），
+ * 找不到映射时才回落到主产品，由后续映射缺口分支处理。
  */
 export async function resolveScope(input = {}, options = {}) {
-  const product = await resolveProduct(input.product, options);
-  const primary = await resolveScopeEntry(input, options, product);
-  const commonModules = listConfiguredCommonModules(
-    product.name || input.product,
-    null,
-    options.configPath,
-  );
+  const requestedProduct = String(input.product || "").trim();
+  const product = await resolveProduct(requestedProduct, options);
+  const selected = selectPrimaryInputForProduct(input, product, options);
+  const primary = await resolveScopeEntry(selected.input, options, product);
   const relatedModules = [];
   const seen = new Set([String(primary.moduleId)]);
-  for (const item of input.related || []) {
-    const related = await resolveScopeEntry({ ...item, product: input.product }, options, product, true);
+  const involvedProducts = [];
+  const involvedSeen = new Set();
+  const addInvolvedProduct = (name) => {
+    const key = String(name || "").trim().toLowerCase();
+    if (!key || involvedSeen.has(key)) return;
+    involvedSeen.add(key);
+    involvedProducts.push(name);
+  };
+  addInvolvedProduct(product.name || requestedProduct);
+
+  for (const item of selected.input.related || []) {
+    const moduleName = String((item && (item.module || item.name)) || "").trim();
+    let relatedProduct = product;
+    let relatedProductInput = product.name || requestedProduct;
+    const owners = moduleName ? resolveModuleOwners(moduleName, null, options.configPath) : [];
+    if (owners.length) {
+      const primaryKey = String(product.name || requestedProduct).trim().toLowerCase();
+      const primaryOwner = owners.find((owner) => String(owner.key).trim().toLowerCase() === primaryKey);
+      const owner = primaryOwner || (owners.length === 1 ? owners[0] : null);
+      if (!owner) {
+        throw new ScopeResolutionError(
+          `模块 ${moduleName} 同时配置在多个产品下：${owners.map((entry) => entry.key).join("、")}，无法唯一确定所属产品`,
+          SCOPE_ERROR_REASONS.MAPPING_AMBIGUOUS,
+          {
+            product: product.name || requestedProduct,
+            module: moduleName,
+            candidates: owners.map((entry) => entry.key),
+          },
+        );
+      }
+      if (!primaryOwner) {
+        relatedProductInput = owner.key;
+        relatedProduct = await resolveProduct(owner.key, options);
+      }
+    }
+    const related = await resolveScopeEntry(
+      { ...item, product: relatedProductInput },
+      options,
+      relatedProduct,
+      true,
+    );
+    addInvolvedProduct(relatedProduct.name || relatedProductInput);
     if (seen.has(String(related.moduleId))) continue;
     seen.add(String(related.moduleId));
     const relatedEntry = {
@@ -237,7 +293,64 @@ export async function resolveScope(input = {}, options = {}) {
     if (related.common) relatedEntry.common = true;
     relatedModules.push(relatedEntry);
   }
+
+  const commonModules = [];
+  const commonSeen = new Set();
+  for (const name of involvedProducts) {
+    for (const entry of listConfiguredCommonModules(name, null, options.configPath)) {
+      const key = String(entry.moduleId) + "|" + String(entry.branchAddress);
+      if (commonSeen.has(key)) continue;
+      commonSeen.add(key);
+      commonModules.push(entry);
+    }
+  }
   return { ...primary, relatedModules, commonModules };
+}
+
+
+/**
+ * 兼容旧的/不完整的评论固定块：固定块里可能只写了 bot-portal，
+ * 而工单描述已经写成 aiforce2 + bot-portal。若固定块主模块不属于 Jira 产品归属、
+ * 但关联模块里恰好只有一个属于该产品，则把它提升为主模块，避免误报映射缺失。
+ *
+ * 不猜多候选：关联模块里有两个以上属于该产品时保持原样，走映射缺口分流。
+ */
+function selectPrimaryInputForProduct(input, product, options) {
+  const primaryModule = String(input.module || "").trim();
+  if (!primaryModule) return { input, swapped: false };
+  let productMapping;
+  try {
+    productMapping = resolveProductMapping(product.name || input.product, null, options.configPath);
+  } catch (error) {
+    return { input, swapped: false };
+  }
+  const belongsToProduct = (name) => {
+    try {
+      resolveModuleMapping(productMapping, name);
+      return true;
+    } catch (error) {
+      return false;
+    }
+  };
+  if (belongsToProduct(primaryModule)) return { input, swapped: false };
+
+  const related = Array.isArray(input.related) ? input.related : [];
+  const owned = related.filter((item) => item && item.module && belongsToProduct(item.module));
+  if (owned.length !== 1) return { input, swapped: false };
+
+  const selected = owned[0];
+  const remaining = related.filter((item) => item !== selected);
+  remaining.push({ module: primaryModule, version: input.version || "" });
+  return {
+    input: {
+      ...input,
+      module: selected.module,
+      version: selected.version || "",
+      ref: selected.ref || undefined,
+      related: remaining,
+    },
+    swapped: true,
+  };
 }
 
 /**

@@ -2,9 +2,9 @@
 
 生产服务器只需要本目录中的部署文件和已发布镜像，不需要项目源码，也不要执行 `docker compose up --build`。
 
-生产 Compose 中的 `api`、`worker`、`migrate` 统一使用 Docker host 网络：API 直接监听宿主机 `5000`。启动前请确认该端口未被其他进程占用。
+生产 Compose 中的 `api`、`worker`、`migrate` 统一使用 Docker host 网络：API 直接监听宿主机 `${API_PORT:-5000}`。启动前请确认该端口未被其他进程占用。
 
-MySQL 和 Redis 必须在 `.env.production` 中填写宿主机可访问的真实 IP 或域名。不要填写 `mysql`、`redis`、`api` 等 Compose 服务名，因为 host 网络不提供 Compose DNS 名称解析。前端如单独部署，应把 `/api` 请求代理到宿主机 `127.0.0.1:5000`。
+MySQL 和 Redis 必须在 `.env.production` 中填写宿主机可访问的真实 IP 或域名。不要填写 `mysql`、`redis`、`api` 等 Compose 服务名，因为 host 网络不提供 Compose DNS 名称解析。前端如单独部署，应把 `/api` 请求代理到宿主机的 `API_PORT`。
 
 ## 首次部署
 
@@ -23,7 +23,17 @@ docker compose --env-file .env.production -f docker-compose-prod.yaml ps -a
 
 `migrate` 是一次性迁移容器，成功完成后显示为 `Exited (0)` 属于正常状态。`api` 和 `worker` 应保持运行。
 
-API 存活检查为 `http://服务器地址:5000/health/live`。前端如单独部署，再访问对应的前端地址。
+API 存活检查为 `http://服务器地址:${API_PORT:-5000}/health/live`。前端如单独部署，再访问对应的前端地址。
+
+### Jira 自动触发
+
+手动调用 `/skill/run` 成功但新建缺陷没有自动分析时，需要确认 Jira 侧是否配置了 webhook 或 Automation 规则。服务端入口为：
+
+```text
+POST http://<服务器地址>:${API_PORT:-5000}/skill/jira/events
+```
+
+Jira Automation 使用请求头 `X-API-Token: <SKILL_API_TOKEN>`；Jira 原生 webhook 使用 `.env.production` 中的 `JIRA_WEBHOOK_SECRET` 做 HMAC-SHA256 签名。接口默认只接收 `jira:issue_created`、只接收 `缺陷`/`Bug`，同一缺陷已有排队或执行中任务时自动去重。若 Jira 规则仍指向 `/skill/run`，必须把请求体改成 `skill_id`、`jira_url`、`inputs` 三个字段，或者改为调用上述专用 webhook 入口。
 
 ## 只更新后端
 
@@ -51,7 +61,7 @@ docker compose --env-file .env.production -f docker-compose-prod.yaml up -d
 bash restart-master.sh
 ```
 
-该脚本默认重启 `api` 和 `worker`，不会重启或删除数据库。需要指定服务时，可传入 Compose 服务名，例如 `bash restart-master.sh api`。
+该脚本默认用 `docker compose up -d --force-recreate` 重建 `api` 和 `worker`，会重新读取 `.env.production`，但不会重启或删除数据库。需要指定服务时，可传入 Compose 服务名，例如 `bash restart-master.sh api`。
 
 ## 离线导入镜像
 
@@ -153,9 +163,9 @@ docker compose --env-file .env.production -f docker-compose-prod.yaml exec worke
 # jira-code 额外自检 GitLab 凭据（只回显来源，不打印令牌）
 docker compose --env-file .env.production -f docker-compose-prod.yaml exec worker \
   node /data/skills/jira-code/scripts/git-flow.mjs creds
-# 配了 DEVOPS_MCP_TOKEN 时确认流水线 MCP 已写进 Codex 配置
+# 配了 DEVOPS_MCP_TOKEN 时确认流水线 MCP 已写进任务独立的 Codex 配置
 docker compose --env-file .env.production -f docker-compose-prod.yaml exec worker \
-  sh -c 'grep -c pipeline-integration-mcp /data/codex/config.toml'
+  sh -c 'for f in /data/codex/runs/*/config.toml; do grep -q pipeline-integration-mcp "$f" && echo "$f"; done'
 curl -H "X-API-Token: <SKILL_API_TOKEN>" http://127.0.0.1:5000/skill/list
 ```
 

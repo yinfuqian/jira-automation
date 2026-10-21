@@ -16,6 +16,7 @@
  *   node scripts/jira-cli.mjs gate-get <KEY|URL>              # 读取门禁字段
  *   node scripts/jira-cli.mjs gate-set <KEY|URL> --file <JSON> # 写入门禁字段
  *   node scripts/jira-cli.mjs transitions <KEY|URL>           # 列出可用流转
+ *   node scripts/jira-cli.mjs assign <KEY|URL> --user <登录名>  # 转派经办人（不改变状态）
  *   node scripts/jira-cli.mjs transition <KEY|URL> --name <流转名> # 打回时自动恢复原经办人
  *
  * 令牌来源：--token 参数、JIRA_TOKEN 环境变量，或 jira.mjs 默认查找的令牌文件。
@@ -45,6 +46,7 @@ const USAGE = `用法：
   node scripts/jira-cli.mjs gate-get <KEY|URL>
   node scripts/jira-cli.mjs gate-set <KEY|URL> --file <JSON文件>
   node scripts/jira-cli.mjs transitions <KEY|URL>
+  node scripts/jira-cli.mjs assign <KEY|URL> --user <登录名>  # 映射缺失时转派给 mappingOwner
   node scripts/jira-cli.mjs transition <KEY|URL> --name <流转名>  # 打回时自动恢复原经办人`;
 
 
@@ -240,6 +242,15 @@ async function main() {
     case "transitions": {
       requireArgs(positional, 1, "transitions <KEY|URL>");
       console.log(JSON.stringify(await jira.listTransitions(positional[0], callOptions), null, 2));
+      return;
+    }
+    case "assign": {
+      requireArgs(positional, 1, "assign <KEY|URL> --user <登录名>");
+      const user = typeof options.user === "string" ? options.user : options.name;
+      if (typeof user !== "string" || !user.trim()) {
+        throw new Error("缺少经办人：请使用 --user <登录名>，例如 --user yinfuqian1193");
+      }
+      console.log(JSON.stringify(await jira.setIssueAssignee(positional[0], user, callOptions), null, 2));
       return;
     }
     case "transition": {

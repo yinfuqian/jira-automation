@@ -109,6 +109,10 @@
             "sql-builder",
             "jmongosql"
           ]
+        },
+        "aiforce-web": {
+          "repoUrl": "https://code.in.wezhuiyi.com/aiforce/aiforce2.git",
+          "analysisModule": "aiforce2"
         }
       }
     }

@@ -21,6 +21,13 @@ BLOCK_END = "# <<< skillrun devops-mcp <<<"
 DEVOPS_MCP_SERVER_NAME = "pipeline-integration-mcp"
 # 流水线平台约定的鉴权请求头。
 DEVOPS_MCP_TOKEN_HEADER = "X-User-Tokens"
+# 只有确实需要流水线工具的技能才注入 MCP；缺陷门禁等技能不应看到流水线工具。
+DEVOPS_MCP_SKILL_IDS = frozenset({"jira-code", "devops-mcp-invoker"})
+
+
+def supports_devops_mcp(skill_id: str) -> bool:
+    """判断当前技能是否需要注册流水线 MCP server。"""
+    return str(skill_id or "").strip() in DEVOPS_MCP_SKILL_IDS
 
 
 def _toml_string(value: str) -> str:

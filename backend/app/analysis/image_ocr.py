@@ -12,6 +12,14 @@ from pathlib import Path
 _ENGINE = None
 _ENGINE_ERROR = None
 _ENGINE_LOCK = threading.Lock()
+DEFAULT_OCR_MAX_SIDE_LIMIT = 2400
+_OCR_MEMORY_ERROR_MARKERS = (
+    "resourceexhaustederror",
+    "fail to alloc memory",
+    "cannot allocate memory",
+    "out of memory",
+    "std::bad_alloc",
+)
 
 
 def ensure_supported_runtime(version_info=None):
@@ -62,7 +70,15 @@ def get_ocr_engine(engine_factory=None):
     return _ENGINE
 
 
-def preprocess_screenshot(image_path):
+def _configured_ocr_max_side_limit():
+    try:
+        configured = int(os.getenv("OCR_MAX_SIDE_LIMIT", DEFAULT_OCR_MAX_SIDE_LIMIT))
+    except (TypeError, ValueError):
+        return DEFAULT_OCR_MAX_SIDE_LIMIT
+    return configured if configured > 0 else DEFAULT_OCR_MAX_SIDE_LIMIT
+
+
+def preprocess_screenshot(image_path, max_side_limit=None):
     """处理 preprocess_screenshot 对应的业务步骤，并向调用方返回所需结果。"""
     try:
         import cv2
@@ -73,16 +89,23 @@ def preprocess_screenshot(image_path):
         if image is None:
             return image_path
         height, width = image.shape[:2]
+        scale = 1.0
         if width and width < 1600:
             scale = min(2.5, 1600.0 / width)
+        limit = int(max_side_limit or _configured_ocr_max_side_limit())
+        if limit > 0 and max(width, height) * scale > limit:
+            scale *= float(limit) / (max(width, height) * scale)
+        if scale != 1.0:
             image = cv2.resize(
                 image,
                 (int(width * scale), int(height * scale)),
-                interpolation=cv2.INTER_CUBIC,
+                interpolation=cv2.INTER_CUBIC if scale > 1.0 else cv2.INTER_AREA,
             )
         gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
         enhanced = cv2.createCLAHE(clipLimit=2.0, tileGridSize=(8, 8)).apply(gray)
         return cv2.cvtColor(enhanced, cv2.COLOR_GRAY2BGR)
+    except MemoryError:
+        raise
     except Exception:
         logging.debug("OCR image preprocessing unavailable: %s", image_path, exc_info=True)
         return image_path
@@ -241,11 +264,39 @@ def _write_cached_result(cache_dir, cache_key, payload):
         logging.debug("OCR cache write failed: %s", cache_key, exc_info=True)
 
 
+def _is_ocr_memory_error(exc):
+    pending = [exc]
+    seen = set()
+    while pending:
+        current = pending.pop()
+        if current is None or id(current) in seen:
+            continue
+        seen.add(id(current))
+        if isinstance(current, MemoryError):
+            return True
+        text = f"{type(current).__name__}: {current}".lower()
+        if any(marker in text for marker in _OCR_MEMORY_ERROR_MARKERS):
+            return True
+        pending.extend((getattr(current, "__cause__", None), getattr(current, "__context__", None)))
+    return False
+
+
 def _predict_with_fallback(engine, image_path, preprocess, warnings):
     preprocessed = preprocess(image_path)
     try:
         return _predict(engine, preprocessed)
     except Exception as exc:
+        if _is_ocr_memory_error(exc):
+            warnings.append(
+                f"preprocessed OCR failed for {os.path.basename(image_path)} because of memory exhaustion; "
+                f"skipped original image retry: {exc}"
+            )
+            logging.warning(
+                "Local OCR memory exhausted; skipping original image retry: %s: %s",
+                image_path,
+                exc,
+            )
+            raise
         if _same_prediction_input(preprocessed, image_path):
             raise
         warnings.append(

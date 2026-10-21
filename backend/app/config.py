@@ -152,6 +152,16 @@ def _resolve_codex_api_key():
     return os.getenv("CODEX_API_KEY") or os.getenv("OPENAI_KEY", "")
 
 
+def _resolve_openai_api_key():
+    """解析故障分析模型密钥，兼容常见的 OPENAI_API_KEY 与仅配置 CODEX_API_KEY 的部署。"""
+    return (
+        os.getenv("OPENAI_KEY")
+        or os.getenv("OPENAI_API_KEY")
+        or os.getenv("CODEX_API_KEY")
+        or ""
+    )
+
+
 class Config:
     """Config 类封装该领域对象的状态、依赖与相关行为。"""
     MAX_CONTENT_LENGTH = int(os.getenv("MAX_CONTENT_LENGTH", str(120 * 1024 * 1024)))
@@ -239,7 +249,7 @@ class Config:
     GITLAB_SYNC_SKIP_EXISTING_REPOS = os.getenv("GITLAB_SYNC_SKIP_EXISTING_REPOS", "true").lower() == "true"
 
     # AI 模型与深度推理配置。所有文本和图片分析共用这一组参数。
-    OPENAI_KEY = os.getenv("OPENAI_KEY", "")
+    OPENAI_KEY = _resolve_openai_api_key()
     OPENAI_URL = os.getenv("OPENAI_URL", "https://api.deepseek.com")
     OPENAI_MODEL = os.getenv("OPENAI_MODEL", "gpt-5.6-sol")
     OPENAI_API_STYLE = os.getenv("OPENAI_API_STYLE", "chat").lower()
@@ -262,6 +272,16 @@ class Config:
     # Jira 站点地址不给内置默认值（猜错站点会把评论写到别的环境），必须由 .env 显式提供。
     JIRA_BASE_URL = os.getenv("JIRA_BASE_URL", "")
     JIRA_TOKEN = os.getenv("JIRA_TOKEN", "")
+    # Jira 自动触发：原生 webhook 可用 HMAC 密钥签名；Jira Automation 可直接使用 SKILL_API_TOKEN。
+    JIRA_WEBHOOK_SECRET = os.getenv("JIRA_WEBHOOK_SECRET", "")
+    JIRA_WEBHOOK_SKILL_ID = _env_or("JIRA_WEBHOOK_SKILL_ID", "jira-gate-bug")
+    JIRA_WEBHOOK_EVENTS = _env_or(
+        "JIRA_WEBHOOK_EVENTS", "jira:issue_created,issue_created"
+    )
+    # 空值表示不按问题类型过滤，事件过滤完全交给 Jira 规则；默认只接收缺陷/Bug。
+    JIRA_WEBHOOK_ISSUE_TYPES = os.getenv(
+        "JIRA_WEBHOOK_ISSUE_TYPES", "缺陷,Bug"
+    )
     CODEX_BIN = _env_or("CODEX_BIN", "codex")
     CODEX_HOME = _env_or("CODEX_HOME", DEFAULT_CODEX_HOME)
     CODEX_MODEL = _env_or("CODEX_MODEL", DEFAULT_CODEX_MODEL)
@@ -277,7 +297,7 @@ class Config:
     # 单次技能执行超时秒数：留空表示按技能自身 runtime.json 的 timeout_seconds 决定（未声明时 1800），
     # 显式配置则覆盖全部技能，便于运维统一收紧或放宽。jira-code 声明 7200，jira-defect-gate 声明 3600。
     CODEX_SKILL_TIMEOUT = _optional_int("CODEX_SKILL_TIMEOUT")
-    # 流水线 MCP：由后端写进 CODEX_HOME/config.toml 供热更新类技能调用；未配置令牌时不注册。
+# 流水线 MCP：由后端写进任务独立 CODEX_HOME 的 config.toml 供热更新类技能调用；未配置令牌时不注册。
     DEVOPS_MCP_URL = _env_or("DEVOPS_MCP_URL", DEFAULT_DEVOPS_MCP_URL)
     DEVOPS_MCP_TOKEN = os.getenv("DEVOPS_MCP_TOKEN", "")
     # 连续多少次网络错误后提前判定模型/Jira 不可达，避免空转到超时。

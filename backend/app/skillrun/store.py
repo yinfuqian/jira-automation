@@ -68,6 +68,21 @@ def list_records(limit: int = 20, skill_id: str = None, status: str = None) -> l
     return query.order_by(SkillRunRecord.id.desc()).limit(max(1, int(limit))).all()
 
 
+def find_active_record(skill_id: str, jira_url: str):
+    """查找同一缺陷尚未结束的同技能任务，用于 webhook 重试去重。"""
+    return (
+        SkillRunRecord.query.filter(
+            SkillRunRecord.skill_id == str(skill_id or ""),
+            SkillRunRecord.jira_url == str(jira_url or ""),
+            SkillRunRecord.status.in_(
+                (SkillRunRecord.STATUS_QUEUED, SkillRunRecord.STATUS_RUNNING)
+            ),
+        )
+        .order_by(SkillRunRecord.id.desc())
+        .first()
+    )
+
+
 def update_record(record: SkillRunRecord, **fields) -> SkillRunRecord:
     """更新记录字段并提交事务。"""
     for key, value in fields.items():

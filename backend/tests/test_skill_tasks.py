@@ -168,8 +168,26 @@ class SkillTaskTests(unittest.TestCase):
                 self.app.config["CODEX_SKILL_TIMEOUT"] = original
 
     def test_registers_devops_mcp_config_before_running(self):
-        """配置了 DEVOPS_MCP_TOKEN 时，任务开跑前会把流水线 MCP 写进 CODEX_HOME/config.toml。"""
+        """jira-code 需要流水线 MCP：配置写进任务独立 CODEX_HOME 的 config.toml。"""
         import tomllib
+
+        home = tempfile.TemporaryDirectory()
+        self.addCleanup(home.cleanup)
+        self.app.config["CODEX_HOME"] = home.name
+        self.app.config["DEVOPS_MCP_URL"] = "https://devops.ks1.wezhuiyi.com/mcp"
+        self.app.config["DEVOPS_MCP_TOKEN"] = "token-for-test-1234"
+        self.addCleanup(self.app.config.pop, "DEVOPS_MCP_TOKEN", None)
+
+        self.run_jira_code_task()
+
+        task_home = Path(home.name) / "runs" / self.record.task_id
+        document = tomllib.loads((task_home / "config.toml").read_text(encoding="utf-8"))
+        server = document["mcp_servers"]["pipeline-integration-mcp"]
+        self.assertEqual(server["url"], "https://devops.ks1.wezhuiyi.com/mcp")
+        self.assertEqual(server["http_headers"]["X-User-Tokens"], "token-for-test-1234")
+
+    def test_skips_devops_mcp_for_unrelated_skill(self):
+        """缺陷门禁等技能不应注册流水线 MCP，避免暴露与任务无关的工具。"""
         from app.skillrun.codex_runner import CodexRunResult
 
         home = tempfile.TemporaryDirectory()
@@ -181,10 +199,8 @@ class SkillTaskTests(unittest.TestCase):
 
         self.run_task(CodexRunResult(exit_code=0, last_message="已完成", duration_ms=100))
 
-        document = tomllib.loads((Path(home.name) / "config.toml").read_text(encoding="utf-8"))
-        server = document["mcp_servers"]["pipeline-integration-mcp"]
-        self.assertEqual(server["url"], "https://devops.ks1.wezhuiyi.com/mcp")
-        self.assertEqual(server["http_headers"]["X-User-Tokens"], "token-for-test-1234")
+        task_home = Path(home.name) / "runs" / self.record.task_id
+        self.assertFalse((task_home / "config.toml").exists())
 
     def test_no_mcp_config_when_token_absent(self):
         """没配令牌时不写 MCP 配置，免得留下一个连不通的 server。"""
@@ -198,6 +214,25 @@ class SkillTaskTests(unittest.TestCase):
         self.run_task(CodexRunResult(exit_code=0, last_message="已完成", duration_ms=100))
 
         self.assertFalse((Path(home.name) / "config.toml").exists())
+        self.assertFalse((Path(home.name) / "runs" / self.record.task_id / "config.toml").exists())
+
+    def test_each_task_uses_isolated_codex_home_without_global_skills(self):
+        """共享 CODEX_HOME 里的 skills/ 不能进入任务目录，避免 Codex 自动发现并误调用其它技能。"""
+        from app.skillrun.codex_runner import CodexRunResult
+
+        home = tempfile.TemporaryDirectory()
+        self.addCleanup(home.cleanup)
+        self.app.config["CODEX_HOME"] = home.name
+        global_skills = Path(home.name) / "skills" / "jira-code"
+        global_skills.mkdir(parents=True)
+        (global_skills / "SKILL.md").write_text("---\nname: jira-code\n---\n", encoding="utf-8")
+
+        _, runner = self.run_task(CodexRunResult(exit_code=0, last_message="已完成", duration_ms=100))
+
+        env = runner.call_args.kwargs["env"]
+        task_home = Path(env["CODEX_HOME"])
+        self.assertEqual(task_home, Path(home.name) / "runs" / self.record.task_id)
+        self.assertFalse((task_home / "skills").exists())
 
     def test_non_zero_exit_marks_record_as_failed(self):
         """Codex 非零退出时记录状态为失败。"""

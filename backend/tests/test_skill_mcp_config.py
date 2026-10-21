@@ -37,6 +37,13 @@ class McpConfigTests(unittest.TestCase):
         self.assertEqual(server["url"], "https://devops.ks1.wezhuiyi.com/mcp")
         self.assertEqual(server["http_headers"]["X-User-Tokens"], "token-abcdefgh")
 
+    def test_only_pipeline_skills_receive_mcp(self):
+        """流水线 MCP 只对明确需要它的技能开放，避免其它任务看到无关工具。"""
+        self.assertTrue(mcp_config.supports_devops_mcp("jira-code"))
+        self.assertTrue(mcp_config.supports_devops_mcp("devops-mcp-invoker"))
+        self.assertFalse(mcp_config.supports_devops_mcp("jira-gate-bug"))
+        self.assertFalse(mcp_config.supports_devops_mcp(""))
+
     def test_keeps_existing_config_untouched(self):
         """文件里原有的其它配置必须保持原样，只追加托管块。"""
         self.config_path.write_text("[other]\nkey = 1\n", encoding="utf-8")

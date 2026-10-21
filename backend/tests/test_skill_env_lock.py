@@ -216,9 +216,16 @@ class SkillTaskEnvLockTests(unittest.TestCase):
 
     def test_task_injects_locked_env_and_flag(self):
         """执行前用配置值覆盖子进程环境，并写入锁定标记。"""
+        from app.skillrun import store
         from app.skillrun.codex_runner import CodexRunResult
         from app.skillrun.tasks import run_skill_task
 
+        self.record = store.create_record(
+            skill_id="jira-code",
+            jira_url="https://jira.example.com/browse/CALL-1446",
+            inputs={},
+            requested_by="tester",
+        )
         with patch("app.skillrun.tasks.codex_runner.run_codex_skill") as runner:
             runner.return_value = CodexRunResult(exit_code=0, last_message="已完成", duration_ms=100)
             with patch.dict(
@@ -236,6 +243,20 @@ class SkillTaskEnvLockTests(unittest.TestCase):
         self.assertEqual(env["DEVOPS_MCP_URL"], "https://devops.example.com/mcp")
         self.assertEqual(env["DEVOPS_MCP_TOKEN"], "devops-token-from-env")
         self.assertEqual(env["SKILLRUN_ENV_LOCKED"], "1")
+
+    def test_non_pipeline_skill_does_not_receive_devops_credentials(self):
+        """缺陷门禁等非流水线技能不注入 MCP 地址与令牌。"""
+        from app.skillrun.codex_runner import CodexRunResult
+        from app.skillrun.tasks import run_skill_task
+
+        with patch("app.skillrun.tasks.codex_runner.run_codex_skill") as runner:
+            runner.return_value = CodexRunResult(exit_code=0, last_message="已完成", duration_ms=100)
+            run_skill_task.apply(args=[self.record.id]).get()
+            env = runner.call_args.kwargs["env"]
+
+        self.assertNotIn("DEVOPS_MCP_URL", env)
+        self.assertNotIn("DEVOPS_MCP_TOKEN", env)
+        self.assertEqual(env["JIRA_TOKEN"], "jira-token-from-env")
 
 
 if __name__ == "__main__":

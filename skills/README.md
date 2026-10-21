@@ -43,7 +43,9 @@ skills/
 
 同理由 `jira-code` 引用的 `devops-mcp-invoker` 也用绝对路径访问：`/data/skills/devops-mcp-invoker/SKILL.md` 与 `/data/skills/devops-mcp-invoker/references/REFERENCES-HOTRELOAD.md`。跨技能引用一律走 `/data/skills/<skill_id>`，不要用相对路径。
 
-`jira-code` 的脚本入口是 `scripts/jira-cli.mjs`（Jira 读写评论）、`scripts/plan.mjs`（从方案文本里提取仓库、分支与流水线环境地址）、`scripts/git-flow.mjs`（建分支、提交、推送，推送成功后 `cleanup` 删除本地检出）、`scripts/progress.mjs`（维护那一条进度评论）。它需要 `GITLAB_PRIVATE_TOKEN`（仓库写权限）以及可选的 `GIT_BASE_URL`、`GIT_USER`、`GIT_PASSWORD`；热更新阶段还需要 `DEVOPS_MCP_TOKEN`（流水线平台个人中心签发）。令牌只作为本次 git 命令的临时参数传入，不会写进 `.git/config`，也不会打印到输出里；`DEVOPS_MCP_TOKEN` 由后端写进 `CODEX_HOME/config.toml` 的 MCP 配置，不进命令行、不进仓库。
+每个技能任务使用独立的 `CODEX_HOME/runs/<task_id>`，因此 Codex 不会从共享目录自动发现并加载其它技能。跨技能组合只允许 `SKILL.md` 明写的依赖：`jira-gate-1` / `jira-gate-1-mock` → `review-jira-songlizhi`、`review-jira-design`，`jira-code` → `devops-mcp-invoker`。`jira-gate-bug` 是自包含技能，不应读取或调用其它技能。
+
+`jira-code` 的脚本入口是 `scripts/jira-cli.mjs`（Jira 读写评论）、`scripts/plan.mjs`（从方案文本里提取仓库、分支与流水线环境地址）、`scripts/git-flow.mjs`（建分支、提交、推送，推送成功后 `cleanup` 删除本地检出）、`scripts/progress.mjs`（维护那一条进度评论）。它需要 `GITLAB_PRIVATE_TOKEN`（仓库写权限）以及可选的 `GIT_BASE_URL`、`GIT_USER`、`GIT_PASSWORD`；热更新阶段还需要 `DEVOPS_MCP_TOKEN`（流水线平台个人中心签发）。令牌只作为本次 git 命令的临时参数传入，不会写进 `.git/config`，也不会打印到输出里；`DEVOPS_MCP_TOKEN` 由后端写进任务独立 `CODEX_HOME` 的 MCP 配置，不进命令行、不进仓库。
 
 技能所需的令牌（例如 Jira 访问令牌）不要提交到仓库，部署时通过环境变量注入：后端会在启动技能前锁定 `JIRA_BASE_URL`、`JIRA_TOKEN`、`DEVOPS_MCP_URL`、`DEVOPS_MCP_TOKEN`、`CODEX_MODEL`、`CODEX_MODEL_PROVIDER`、`CODEX_BASE_URL` 七项（见 `backend/app/skillrun/env_lock.py`），技能脚本只认环境变量，不再回落令牌文件与命令行入参。
 

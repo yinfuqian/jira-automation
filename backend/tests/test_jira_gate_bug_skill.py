@@ -56,6 +56,8 @@ class DefectGateSkillDefinitionTests(unittest.TestCase):
         self.assertEqual(skill.timeout_seconds, 3600)
         self.assertIn("analysis-cli.mjs", skill.prompt_template)
         self.assertIn("jira-cli.mjs", skill.prompt_template)
+        self.assertIn("必须且只能使用", skill.prompt_template)
+        self.assertIn("任何其它技能", skill.prompt_template)
 
     def test_skill_documents_the_whole_flow(self):
         """SKILL.md 必须覆盖完整流程，避免遗漏任一判定分支。"""
@@ -75,6 +77,7 @@ class DefectGateSkillDefinitionTests(unittest.TestCase):
             "HTML",
             "gate-set",
             "attach",
+            "jira-cli.mjs assign",
             "ANALYSIS_API_TOKEN",
             "rejectTransitionName",
         ):
@@ -113,7 +116,7 @@ class DefectGateSkillDefinitionTests(unittest.TestCase):
         jira_cli = (SKILL_DIR / "scripts" / "jira-cli.mjs").read_text(encoding="utf-8")
         analysis_cli = (SKILL_DIR / "scripts" / "analysis-cli.mjs").read_text(encoding="utf-8")
 
-        for command in ("selfcheck", "log-exemption", "scope", "attachments", "comment", "attach", "gate-set", "transitions"):
+        for command in ("selfcheck", "log-exemption", "scope", "attachments", "comment", "attach", "gate-set", "transitions", "assign"):
             self.assertIn('"' + command + '"', jira_cli)
         for option in ("--dir", "--out", "--product", "--module", "--json-summary"):
             self.assertIn(option, analysis_cli)
@@ -133,6 +136,10 @@ class DefectGateSkillDefinitionTests(unittest.TestCase):
         self.assertIn(
             "aiforce-authentication",
             mapping["products"]["aiforce"]["modules"]["aiforce2"]["aliases"],
+        )
+        self.assertEqual(
+            mapping["products"]["aiforce"]["modules"]["aiforce-web"]["repoUrl"],
+            "https://code.in.wezhuiyi.com/aiforce/aiforce2.git",
         )
         self.assertEqual(
             mapping["products"]["see"]["modules"]["see-task"]["repoUrl"],
@@ -314,6 +321,8 @@ console.log(JSON.stringify(failure));
         self.assertIn("[~yinfuqian1193]", payload["comment"])
         self.assertIn("补齐映射内容", payload["comment"])
         self.assertIn("operation-task", payload["comment"])
+        self.assertIn("本单会转派给上述映射维护人", payload["comment"])
+        self.assertIn("不改变工作流状态", payload["comment"])
         self.assertNotIn("打回", payload["comment"])
 
     @unittest.skipIf(NODE_BIN is None, "需要 node 运行时才能执行技能脚本")
@@ -529,6 +538,42 @@ console.log(JSON.stringify(extractFaultAnalysisScope(issue)));
         self.assertEqual(payload["relatedModules"], [{
             "module": "aiforce-model",
             "version": "v2.3_3-zhongyizaixian-20240425",
+            "source": "Jira:描述",
+        }])
+        self.assertEqual(payload["missing"], [])
+
+    @unittest.skipIf(NODE_BIN is None, "需要 node 运行时才能执行技能脚本")
+    def test_fault_scope_keeps_cross_product_related_modules(self):
+        """产品归属只填一个；描述里来自其它产品的模块及版本也要完整保留为关联模块。"""
+        jira_url = (SKILL_DIR / "scripts" / "jira.mjs").as_uri()
+        driver = """
+const { normalizeIssue, extractFaultAnalysisScope } = await import("__JIRA__");
+const issue = normalizeIssue({
+  key: "KEY-17",
+  id: "17",
+  self: "https://jira.in.wezhuiyi.com/rest/api/2/issue/17",
+  names: { customfield_10010: "产品归属" },
+  fields: {
+    summary: "aiforce 前台页面菜单打开空白",
+    description: "影响模块：aiforce\\n影响版本：v5.1.1-zhongyizaixian-rc2\\n影响模块：bot-portal\\n影响版本：v0.3.0-ZYKJ20230177-rc122",
+    customfield_10010: { value: "Aiforce" },
+    components: [{ name: "aiforce" }],
+    comment: { total: 0, comments: [] },
+  },
+});
+console.log(JSON.stringify(extractFaultAnalysisScope(issue)));
+""".replace("__JIRA__", jira_url)
+
+        output = self.run_node(driver)
+        payload = json.loads(output.strip().splitlines()[-1])
+
+        self.assertEqual(payload["product"], "Aiforce")
+        self.assertEqual(payload["sources"]["product"], "Jira:产品归属")
+        self.assertEqual(payload["module"], "aiforce")
+        self.assertEqual(payload["version"], "v5.1.1-zhongyizaixian-rc2")
+        self.assertEqual(payload["relatedModules"], [{
+            "module": "bot-portal",
+            "version": "v0.3.0-ZYKJ20230177-rc122",
             "source": "Jira:描述",
         }])
         self.assertEqual(payload["missing"], [])
@@ -770,6 +815,152 @@ console.log(JSON.stringify(resolved));
             "branchAddress": "https://code.in.wezhuiyi.com/see/see-common.git",
             "tagVersion": "",
             "common": True,
+        }])
+
+    @unittest.skipIf(NODE_BIN is None, "需要 node 运行时才能执行技能脚本")
+    def test_scope_resolution_finds_product_per_related_module(self):
+        """产品归属只有一个，但关联模块可以属于别的产品；按模块反查自己的产品与仓库。"""
+        analysis_url = (SKILL_DIR / "scripts" / "analysis.mjs").as_uri()
+        with tempfile.TemporaryDirectory() as temp_dir:
+            config_path = Path(temp_dir) / "scope-mapping.json"
+            config_path.write_text(json.dumps({
+                "versionRules": [{"name": "exact-tag", "pattern": "^.+$", "ref": "{version}"}],
+                "products": {
+                    "aiforce": {
+                        "modules": {
+                            "aiforce2": {
+                                "repoUrl": "https://code.in.wezhuiyi.com/aiforce/aiforce2.git",
+                                "aliases": ["aiforce"],
+                            },
+                            "aiforce-web": {
+                                "repoUrl": "https://code.in.wezhuiyi.com/aiforce/aiforce2.git",
+                            },
+                        }
+                    },
+                    "bot": {
+                        "modules": {
+                            "bot-portal": {
+                                "repoUrl": "https://code.in.wezhuiyi.com/bot/bot-portal.git",
+                            },
+                            "bot-common": {
+                                "repoUrl": "https://code.in.wezhuiyi.com/bot/bot-common.git",
+                                "common": True,
+                            },
+                        }
+                    },
+                },
+            }, ensure_ascii=False), encoding="utf-8")
+            driver = """
+process.env.ANALYSIS_API_TOKEN = "test-token";
+globalThis.fetch = async (url) => {
+  const target = String(url);
+  let payload = {};
+  if (target.includes("/product/get")) {
+    payload = { products: [{ id: 7, name: "aiforce" }, { id: 8, name: "bot" }] };
+  } else if (target.includes("/module/search")) {
+    const name = decodeURIComponent(new URL(target).searchParams.get("names"));
+    const known = { "aiforce2": 70, "bot-portal": 72 };
+    payload = { modules: known[name] ? [{ module_id: known[name], module_name: name, branch: null }] : [] };
+  } else return { ok: false, status: 404, text: async () => JSON.stringify({ error: target }) };
+  return { ok: true, status: 200, text: async () => JSON.stringify(payload) };
+};
+const { resolveScope } = await import("__ANALYSIS__");
+const resolved = await resolveScope({
+  product: "Aiforce",
+  module: "aiforce",
+  version: "v5.1.1-zhongyizaixian-rc2",
+  related: [{ module: "bot-portal", version: "v0.3.0-ZYKJ20230177-rc122" }],
+}, { configPath: process.argv[1] });
+console.log(JSON.stringify(resolved));
+""".replace("__ANALYSIS__", analysis_url)
+
+            output = self.run_node(driver, str(config_path))
+
+        payload = json.loads(output.strip().splitlines()[-1])
+        self.assertEqual(payload["productName"], "aiforce")
+        self.assertEqual(payload["moduleName"], "aiforce2")
+        self.assertEqual(payload["branchAddress"], "https://code.in.wezhuiyi.com/aiforce/aiforce2.git")
+        self.assertEqual(payload["tagVersion"], "v5.1.1-zhongyizaixian-rc2")
+        self.assertEqual(payload["relatedModules"], [{
+            "moduleId": "72",
+            "moduleName": "bot-portal",
+            "branchAddress": "https://code.in.wezhuiyi.com/bot/bot-portal.git",
+            "tagVersion": "v0.3.0-ZYKJ20230177-rc122",
+        }])
+        self.assertEqual(payload["commonModules"], [{
+            "moduleId": "common:bot-common",
+            "moduleName": "bot-common",
+            "branchAddress": "https://code.in.wezhuiyi.com/bot/bot-common.git",
+            "common": True,
+            "aliases": [],
+            "codePatterns": [],
+        }])
+
+    @unittest.skipIf(NODE_BIN is None, "需要 node 运行时才能执行技能脚本")
+    def test_scope_resolution_promotes_product_owned_module_over_stale_comment(self):
+        """旧固定块把 bot-portal 放在首位时，按产品归属纠偏为 aiforce2，并保留 bot-portal 关联。"""
+        analysis_url = (SKILL_DIR / "scripts" / "analysis.mjs").as_uri()
+        with tempfile.TemporaryDirectory() as temp_dir:
+            config_path = Path(temp_dir) / "scope-mapping.json"
+            config_path.write_text(json.dumps({
+                "versionRules": [{"name": "exact-tag", "pattern": "^.+$", "ref": "{version}"}],
+                "products": {
+                    "aiforce": {
+                        "modules": {
+                            "aiforce2": {
+                                "repoUrl": "https://code.in.wezhuiyi.com/aiforce/aiforce2.git",
+                                "aliases": ["aiforce"],
+                            },
+                            "aiforce-web": {
+                                "repoUrl": "https://code.in.wezhuiyi.com/aiforce/aiforce2.git",
+                                "analysisModule": "aiforce2",
+                            },
+                        }
+                    },
+                    "bot": {
+                        "modules": {
+                            "bot-portal": {
+                                "repoUrl": "https://code.in.wezhuiyi.com/bot/bot-portal.git",
+                            },
+                        }
+                    },
+                },
+            }, ensure_ascii=False), encoding="utf-8")
+            driver = """
+process.env.ANALYSIS_API_TOKEN = "test-token";
+globalThis.fetch = async (url) => {
+  const target = String(url);
+  let payload = {};
+  if (target.includes("/product/get")) {
+    payload = { products: [{ id: 7, name: "aiforce" }, { id: 8, name: "bot" }] };
+  } else if (target.includes("/module/search")) {
+    const name = decodeURIComponent(new URL(target).searchParams.get("names"));
+    const known = { "aiforce2": 70, "bot-portal": 72 };
+    payload = { modules: known[name] ? [{ module_id: known[name], module_name: name, branch: null }] : [] };
+  } else return { ok: false, status: 404, text: async () => JSON.stringify({ error: target }) };
+  return { ok: true, status: 200, text: async () => JSON.stringify(payload) };
+};
+const { resolveScope } = await import("__ANALYSIS__");
+const resolved = await resolveScope({
+  product: "Aiforce",
+  module: "bot-portal",
+  version: "v0.3.0-ZYKJ20230177-rc122",
+  related: [{ module: "aiforce2", version: "v2.3.3-zhongyizaixian-20240425" }],
+}, { configPath: process.argv[1] });
+console.log(JSON.stringify(resolved));
+""".replace("__ANALYSIS__", analysis_url)
+
+            output = self.run_node(driver, str(config_path))
+
+        payload = json.loads(output.strip().splitlines()[-1])
+        self.assertEqual(payload["moduleName"], "aiforce2")
+        self.assertEqual(payload["branchAddress"], "https://code.in.wezhuiyi.com/aiforce/aiforce2.git")
+        self.assertEqual(payload["tagVersion"], "v2.3.3-zhongyizaixian-20240425")
+        self.assertEqual(payload["relatedModules"], [{
+            "moduleId": "72",
+            "moduleName": "bot-portal",
+            "branchAddress": "https://code.in.wezhuiyi.com/bot/bot-portal.git",
+            "tagVersion": "v0.3.0-ZYKJ20230177-rc122",
         }])
 
     @unittest.skipIf(NODE_BIN is None, "需要 node 运行时才能执行技能脚本")
@@ -1106,6 +1297,43 @@ console.log(JSON.stringify({ calls, result }));
         self.assertTrue(payload["result"]["assigneeRestore"]["ok"])
         self.assertTrue(payload["result"]["assigneeRestore"]["restored"])
         self.assertEqual(payload["result"]["assigneeRestore"]["assignee"]["name"], "zhangsan")
+
+    @unittest.skipIf(NODE_BIN is None, "需要 node 运行时才能执行技能脚本")
+    def test_set_issue_assignee_uses_login_name(self):
+        """映射缺失转派时只能发送登录名，不能把中文展示名交给 Jira。"""
+        jira_url = (SKILL_DIR / "scripts" / "jira.mjs").as_uri()
+        driver = """
+const { setIssueAssignee } = await import("__JIRA__");
+const calls = [];
+function response(data, status = 200) {
+  return {
+    ok: status >= 200 && status < 300,
+    status,
+    async text() { return data === null ? "" : JSON.stringify(data); },
+  };
+}
+globalThis.fetch = async (url, init = {}) => {
+  const parsed = new URL(String(url));
+  const body = init.body ? JSON.parse(String(init.body)) : null;
+  calls.push({ method: init.method, path: parsed.pathname, body });
+  if (init.method === "PUT" && parsed.pathname.endsWith("/issue/KEY-30/assignee")) {
+    return response(null, 204);
+  }
+  return response({ errorMessages: ["unexpected request"] }, 500);
+};
+const result = await setIssueAssignee("KEY-30", { name: "yinfuqian1193", displayName: "尹甫乾" });
+console.log(JSON.stringify({ calls, result }));
+""".replace("__JIRA__", jira_url)
+
+        output = self.run_node(driver)
+        payload = json.loads(output.strip().splitlines()[-1])
+
+        self.assertEqual(payload["calls"], [{
+            "method": "PUT",
+            "path": "/rest/api/2/issue/KEY-30/assignee",
+            "body": {"name": "yinfuqian1193"},
+        }])
+        self.assertEqual(payload["result"]["assignee"]["name"], "yinfuqian1193")
 
     @unittest.skipIf(NODE_BIN is None, "需要 node 运行时才能执行技能脚本")
     def test_report_renders_styled_html_and_escapes_model_output(self):

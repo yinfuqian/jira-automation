@@ -4,7 +4,14 @@ import secrets
 from flask import g, jsonify, request
 
 
-ANONYMOUS_ENDPOINTS = {"auth.login", "auth.request_account", "health.live", "health.ready"}
+# Jira webhook 由路由自行校验 API Token 或 Jira 的 HMAC 签名，不能依赖登录会话。
+ANONYMOUS_ENDPOINTS = {
+    "auth.login",
+    "auth.request_account",
+    "health.live",
+    "health.ready",
+    "skill.jira_webhook",
+}
 
 # 允许用 ?ticket= 签名票据免请求头访问的路径前缀与校验函数，由业务模块在装配时注册。
 # 浏览器发起的下载（地址栏、超链接、<a download>）无法自定义请求头，只能靠这条通道兜住。

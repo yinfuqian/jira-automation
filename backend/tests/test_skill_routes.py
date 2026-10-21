@@ -1,4 +1,7 @@
 """技能接口测试：覆盖参数校验、任务提交、查询取消与外部令牌认证。"""
+import hashlib
+import hmac
+import json
 import sys
 import tempfile
 import unittest
@@ -30,6 +33,7 @@ def create_test_app(**overrides):
         "SQLALCHEMY_DATABASE_URI": "sqlite:///:memory:",
         "SKILLS_DIR": str(SKILLS_DIR),
         "SKILL_WORKSPACE_DIR": tempfile.gettempdir(),
+        "SKILL_API_TOKEN": "skill-secret",
         # 测试用例使用 jira.example.com 等外部域名，这里显式关闭白名单；
         # 白名单校验由 test_submit_rejects_non_http_url_or_host_outside_allowlist 单独覆盖。
         "SKILL_URL_ALLOWED_HOSTS": "",
@@ -110,7 +114,10 @@ class SkillRouteTests(unittest.TestCase):
             )
 
         self.assertEqual(blocked.status_code, 400)
-        self.assertIn("白名单", blocked.get_json()["error"])
+        message = blocked.get_json()["error"]
+        self.assertIn("白名单", message)
+        self.assertIn("jira.in.wezhuiyi.com", message)
+        self.assertIn("JIRA_BASE_URL=", message)
 
     def test_submit_creates_record_and_returns_status_url(self):
         """提交成功时创建排队记录并返回查询地址。"""
@@ -154,6 +161,104 @@ class SkillRouteTests(unittest.TestCase):
         record = store.find_record(response.get_json()["task_id"])
         self.assertEqual(record.status, "failed")
         self.assertIn("broker down", record.error_message)
+
+    def _jira_issue_created_payload(self, key="CALL-1446", issue_type="缺陷"):
+        """构造 Jira 原生 issue created webhook 的最小请求体。"""
+        return {
+            "webhookEvent": "jira:issue_created",
+            "issue": {
+                "key": key,
+                "fields": {"issuetype": {"name": issue_type}},
+            },
+        }
+
+    def test_jira_webhook_enqueues_bug_gate_with_api_token(self):
+        """Jira 事件携带接口令牌时自动提交 jira-gate-bug。"""
+        with patch("app.skillrun.routes.routes.run_skill_task") as task:
+            response = self.client.post(
+                "/skill/jira/events",
+                headers={"X-API-Token": "skill-secret"},
+                json=self._jira_issue_created_payload(),
+            )
+
+        self.assertEqual(response.status_code, 202)
+        payload = response.get_json()
+        self.assertEqual(payload["skill_id"], "jira-gate-bug")
+        self.assertEqual(payload["issue_key"], "CALL-1446")
+        self.assertFalse(payload["deduplicated"])
+        task.apply_async.assert_called_once()
+
+        from app.skillrun import store
+
+        record = store.find_record(payload["task_id"])
+        self.assertEqual(record.jira_url, "https://jira.example.com/browse/CALL-1446")
+        self.assertEqual(record.requested_by, "jira-webhook")
+
+    def test_jira_webhook_accepts_hmac_signature(self):
+        """Jira 原生 webhook 可用 HMAC-SHA256 签名完成鉴权。"""
+        self.app.config["JIRA_WEBHOOK_SECRET"] = "webhook-secret"
+        body = json.dumps(self._jira_issue_created_payload("CALL-1447")).encode("utf-8")
+        signature = hmac.new(b"webhook-secret", body, hashlib.sha256).hexdigest()
+
+        with patch("app.skillrun.routes.routes.run_skill_task"):
+            response = self.client.post(
+                "/skill/jira/events",
+                data=body,
+                content_type="application/json",
+                headers={"X-Hub-Signature-256": f"sha256={signature}"},
+            )
+
+        self.assertEqual(response.status_code, 202)
+        self.assertEqual(response.get_json()["issue_key"], "CALL-1447")
+
+    def test_jira_webhook_rejects_missing_or_wrong_credentials(self):
+        """没有令牌或签名时不得触发技能任务。"""
+        missing = self.client.post("/skill/jira/events", json=self._jira_issue_created_payload())
+        wrong = self.client.post(
+            "/skill/jira/events",
+            headers={"X-API-Token": "wrong"},
+            json=self._jira_issue_created_payload(),
+        )
+
+        self.assertEqual(missing.status_code, 401)
+        self.assertEqual(wrong.status_code, 401)
+
+    def test_jira_webhook_ignores_updates_and_non_bug_types(self):
+        """更新事件和非缺陷类型直接忽略，避免评论回写触发循环。"""
+        update_payload = self._jira_issue_created_payload()
+        update_payload["webhookEvent"] = "jira:issue_updated"
+        update = self.client.post(
+            "/skill/jira/events",
+            headers={"X-API-Token": "skill-secret"},
+            json=update_payload,
+        )
+        task = self.client.post(
+            "/skill/jira/events",
+            headers={"X-API-Token": "skill-secret"},
+            json=self._jira_issue_created_payload("CALL-1448", "任务"),
+        )
+
+        self.assertEqual(update.status_code, 202)
+        self.assertEqual(update.get_json()["reason"], "event_not_allowed")
+        self.assertEqual(task.status_code, 202)
+        self.assertEqual(task.get_json()["reason"], "issue_type_not_allowed")
+
+    def test_jira_webhook_deduplicates_active_issue(self):
+        """同一缺陷已有排队或执行中的任务时，webhook 重试返回原任务。"""
+        payload = self._jira_issue_created_payload("CALL-1449")
+        with patch("app.skillrun.routes.routes.run_skill_task") as task:
+            first = self.client.post(
+                "/skill/jira/events", headers={"X-API-Token": "skill-secret"}, json=payload
+            )
+            second = self.client.post(
+                "/skill/jira/events", headers={"X-API-Token": "skill-secret"}, json=payload
+            )
+
+        self.assertEqual(first.status_code, 202)
+        self.assertEqual(second.status_code, 202)
+        self.assertEqual(second.get_json()["task_id"], first.get_json()["task_id"])
+        self.assertTrue(second.get_json()["deduplicated"])
+        task.apply_async.assert_called_once()
 
     def test_get_task_returns_record_and_handles_missing(self):
         """查询接口返回任务详情，未知任务返回 404。"""

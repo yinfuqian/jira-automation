@@ -1,5 +1,5 @@
 {
-  "prompt_template": "请使用 {skill_id} 技能处理这张 Jira 缺陷单：{jira_url}\n\n技能目录：{skill_dir}\n额外输入：\n{inputs_lines}\n\n执行要求：\n1. 先完整阅读 {skill_dir}/SKILL.md、{skill_dir}/references/checklist.md 与 {skill_dir}/references/self-check.md，严格按其中的标准执行，不要自行发明判定规则。\n2. 本机是服务器容器，没有桌面工具：所有取数与写回都用 shell 执行技能自带脚本（node {skill_dir}/scripts/jira-cli.mjs ...、node {skill_dir}/scripts/analysis-cli.mjs ...）。\n3. 缺陷单信息不完整就打回；完整且评论区已有自查结果就放行；完整但没有自查结果时先解析分析范围，若仅因 scope-mapping.json 缺映射，则通知 mappingOwner 补齐并写“未检查”后跳过，不打回；其余情况才真实调用故障分析接口，把结果 HTML 报告上传为附件并在评论区格式化说明。\n4. 完成后用简洁中文总结：结论（打回 / 放行 / 已自动分析 / 映射缺失已跳过）、实际写入的评论与附件、关键依据。",
+  "prompt_template": "请使用 {skill_id} 技能处理这张 Jira 缺陷单：{jira_url}\n\n技能目录：{skill_dir}\n额外输入：\n{inputs_lines}\n\n执行要求：\n1. 本次必须且只能使用 {skill_id}，禁止调用、读取或切换到任何其它技能；只读本技能目录下的文件。\n2. 先完整阅读 {skill_dir}/SKILL.md、{skill_dir}/references/checklist.md 与 {skill_dir}/references/self-check.md，严格按其中的标准执行，不要自行发明判定规则。\n3. 本机是服务器容器，没有桌面工具：所有取数与写回都用 shell 执行技能自带脚本（node {skill_dir}/scripts/jira-cli.mjs ...、node {skill_dir}/scripts/analysis-cli.mjs ...）。\n4. 缺陷单信息不完整就打回；完整且评论区已有自查结果就放行；完整但没有自查结果时先解析分析范围，若仅因 scope-mapping.json 缺映射，则通知 mappingOwner 补齐并写“未检查”后跳过，不打回，同时用 jira-cli.mjs assign 把经办人转派给 mappingOwner；其余情况才真实调用故障分析接口，把结果 HTML 报告上传为附件并在评论区格式化说明。\n5. 完成后用简洁中文总结：结论（打回 / 放行 / 已自动分析 / 映射缺失已跳过并转派）、实际写入的评论与附件、经办人转派结果、关键依据。",
   "timeout_seconds": 3600,
   "required_inputs": ["jira_url"]
 }

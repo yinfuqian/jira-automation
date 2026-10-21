@@ -146,6 +146,58 @@ class ImageOcrTests(unittest.TestCase):
         self.assertEqual(len(processed.shape), 3)
         self.assertEqual(processed.shape[2], 3)
 
+    def test_preprocessed_screenshot_downscales_large_images_before_paddle(self):
+        try:
+            import cv2
+        except ModuleNotFoundError:
+            self.skipTest("cv2 is not available in this environment")
+        import numpy as np
+
+        preprocess_screenshot = load_image_ocr_module().preprocess_screenshot
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            path = Path(temp_dir) / "large-screen.png"
+            image = np.full((600, 1200, 3), 255, dtype=np.uint8)
+            self.assertTrue(cv2.imwrite(str(path), image))
+
+            processed = preprocess_screenshot(str(path), max_side_limit=600)
+
+        self.assertEqual(max(processed.shape[:2]), 600)
+        self.assertEqual(tuple(processed.shape[:2]), (300, 600))
+
+    def test_memory_error_during_preprocessed_ocr_does_not_retry_original_image(self):
+        extract_text_from_images = load_image_ocr_module().extract_text_from_images
+
+        class ResourceExhaustedError(RuntimeError):
+            pass
+
+        class MemoryExhaustedEngine:
+            def __init__(self):
+                self.calls = []
+
+            def predict(self, image):
+                self.calls.append(image)
+                if image == "preprocessed-image":
+                    raise ResourceExhaustedError(
+                        "Fail to alloc memory of 1010688000 size, error code is 12."
+                    )
+                return [{"rec_texts": ["should not be read"], "rec_scores": [0.99]}]
+
+        engine = MemoryExhaustedEngine()
+        with tempfile.TemporaryDirectory() as temp_dir:
+            path = Path(temp_dir) / "screen.jpg"
+            path.write_bytes(b"fake image content")
+            result = extract_text_from_images(
+                [str(path)],
+                engine=engine,
+                image_preprocessor=lambda _path: "preprocessed-image",
+            )
+
+        self.assertFalse(result["available"])
+        self.assertEqual(engine.calls, ["preprocessed-image"])
+        self.assertIn("memory exhaustion", result["warnings"][0])
+        self.assertNotIn("should not be read", result["extracted_text"])
+
     def test_combines_multiple_images_and_filters_low_confidence_lines(self):
         extract_text_from_images = load_image_ocr_module().extract_text_from_images
 

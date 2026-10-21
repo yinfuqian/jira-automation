@@ -31,7 +31,8 @@ export const SELF_CHECK_KEYWORDS = {
 export const LOG_REQUIREMENT_EXEMPTION_PHRASE = "明确缺陷不需要额外提供日志信息";
 
 /** Jira 中可能承载「问题发现产品」的字段名，按优先级排列。 */
-const PRODUCT_FIELD_NAMES = ["问题发现产品", "发现产品", "产品归属"];
+// 产品归属是当前 Jira 模板里唯一有值的产品字段；问题发现产品保留兼容旧单。
+const PRODUCT_FIELD_NAMES = ["产品归属", "问题发现产品", "发现产品"];
 
 /** 故障分析评论固定块的字段别名。 */
 const FAULT_SCOPE_KEY_ALIASES = {

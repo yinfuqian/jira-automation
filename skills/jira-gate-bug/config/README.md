@@ -3,7 +3,16 @@
 `scope-mapping.json` 把 Jira 信息解析成故障分析接口需要的仓库和 Git Tag：
 
 - Jira 提供产品：`问题发现产品`，例如 `see`、`pal`、`bot`。
-- Jira 组件、调用方输入或评论固定块提供模块，例如 `see-task`。
+- Jira 组件、调用方输入或评论固定块提供模块，例如 `see-task`。Jira「产品归属」只决定主模块；关联模块按模块名在本文件中反查自己的产品，因此一张 Aiforce 单可以同时带 `bot-portal`，并解析到 `bot/bot-portal`。
+
+  同一仓库内的 Jira 模块名与分析服务登记名不一致时，用 `analysisModule` 指定要交给服务的模块名。例如 Jira 写 `aiforce` 或 `aiforce-web`，仓库都是 `aiforce2`，分析服务只登记 `aiforce2`：
+
+  ```json
+  "aiforce-web": {
+    "repoUrl": "https://code.in.wezhuiyi.com/aiforce/aiforce2.git",
+    "analysisModule": "aiforce2"
+  }
+  ```
 - Jira 影响版本、概要、环境、描述、评论、可辨认图片，或调用方输入/评论固定块提供模块版本，例如 `3.2.1`、`v3.2.1` 或 `bot-3.2`（解析后只取 `3.2`）。不要求修复版本。
 - 本文件提供 `产品 -> 模块 -> 仓库地址` 与 `版本 -> Git Tag` 的规则。故障分析只关注 Tag，不使用 `master`、`feature/*` 等分支。
 
@@ -19,7 +28,7 @@
 }
 ```
 
-工单本身缺少模块或版本时仍要求提单人补充固定评论块；只有工单信息已明确、仅因本配置缺产品、模块、仓库地址或版本规则而无法解析时，才通知 `mappingOwner` 并写门禁结果 `未检查`，不执行打回流转，也不调用故障分析。
+工单本身缺少模块或版本时仍要求提单人补充固定评论块；只有工单信息已明确、仅因本配置缺产品、模块、仓库地址或版本规则而无法解析时，才通知 `mappingOwner` 并写门禁结果 `未检查`，不执行打回流转，也不调用故障分析。该分支还会用 `jira-cli.mjs assign --user <mappingOwner.name>` 把经办人转派给映射维护人；只改经办人，不改工作流状态。
 
 评论固定块只在 Jira 字段缺失或存在多个候选时使用，格式固定为：
 

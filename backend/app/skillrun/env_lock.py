@@ -28,6 +28,8 @@ LOCKED_ENV_KEYS = {
     "CODEX_MODEL_PROVIDER": "CODEX_MODEL_PROVIDER",
     "CODEX_BASE_URL": "CODEX_BASE_URL",
 }
+# 流水线 MCP 专用参数：只注入明确需要流水线工具的技能，避免缺陷门禁等任务拿到无关凭据。
+DEVOPS_MCP_ENV_KEYS = ("DEVOPS_MCP_URL", "DEVOPS_MCP_TOKEN")
 
 # 必填项：缺失时任务直接失败。DEVOPS_MCP_TOKEN 不在其中——留空表示不注册流水线 MCP，
 # 此时后端会清掉 config.toml 里的同名 server 表，技能同样拿不到其它来源的令牌。
@@ -61,10 +63,15 @@ def _read(config, key: str) -> str:
     return str(value or "").strip()
 
 
-def collect_locked_env(config) -> dict:
-    """收集注入技能子进程的权威运行参数，并附加锁定标记。"""
+def collect_locked_env(config, include_devops_mcp: bool = True) -> dict:
+    """收集注入技能子进程的权威运行参数，并附加锁定标记。
+
+    include_devops_mcp=False 时不注入流水线 MCP 地址与令牌，实现按技能最小权限。
+    """
     locked = {}
     for name, key in LOCKED_ENV_KEYS.items():
+        if not include_devops_mcp and name in DEVOPS_MCP_ENV_KEYS:
+            continue
         value = _read(config, key)
         if value:
             locked[name] = value

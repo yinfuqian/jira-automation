@@ -20,6 +20,30 @@ def load_config_module():
 
 
 class AsyncConfigTests(unittest.TestCase):
+    def test_analysis_model_key_falls_back_to_codex_api_key(self):
+        module = load_config_module()
+        env = {
+            "OPENAI_KEY": "",
+            "OPENAI_API_KEY": "",
+            "CODEX_API_KEY": "codex-key",
+        }
+        with patch.dict(os.environ, env, clear=False):
+            resolved = module._resolve_openai_api_key()
+
+        self.assertEqual(resolved, "codex-key")
+
+    def test_analysis_model_key_prefers_explicit_openai_key(self):
+        module = load_config_module()
+        env = {
+            "OPENAI_KEY": "analysis-key",
+            "OPENAI_API_KEY": "standard-key",
+            "CODEX_API_KEY": "codex-key",
+        }
+        with patch.dict(os.environ, env, clear=False):
+            resolved = module._resolve_openai_api_key()
+
+        self.assertEqual(resolved, "analysis-key")
+
     def test_fault_analysis_model_and_reasoning_effort_are_environment_driven(self):
         env = {
             "OPENAI_MODEL": "gpt-5.6-sol",

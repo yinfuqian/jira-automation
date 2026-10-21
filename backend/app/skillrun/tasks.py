@@ -160,25 +160,33 @@ def run_skill_task(self, record_id: int):
         extra_args=extra_args,
     )
     codex_home = str(config.get("CODEX_HOME") or "")
-    if codex_home:
+    # 每个任务使用独立的 CODEX_HOME，避免共享目录里的 skills/ 被 Codex 自动发现。
+    # 否则模型可能看到其它技能（jira-code、devops-mcp-invoker 等）而误调用；
+    # 隔离后本任务只能使用提示词指定并挂载的技能目录。
+    task_codex_home = os.path.join(codex_home, "runs", record.task_id) if codex_home else ""
+    if task_codex_home:
         # Codex CLI 要求 CODEX_HOME 必须已存在且不会自动创建：容器内由命名卷提供，本地运行在这里兜底。
         try:
-            os.makedirs(codex_home, exist_ok=True)
+            os.makedirs(task_codex_home, exist_ok=True)
         except OSError as exc:
-            logging.warning("无法创建 CODEX_HOME 目录 %s：%s", codex_home, exc)
-    # 流水线 MCP：无头 codex exec 每次都是新进程，配置写在 CODEX_HOME 里即可生效，不需要重启会话。
-    # 未配置 DEVOPS_MCP_TOKEN 时这里不会写入任何东西，热更新阶段会如实报告缺少凭据。
-    mcp_config.ensure_devops_mcp_config(
-        codex_home,
-        url=str(config.get("DEVOPS_MCP_URL") or ""),
-        token=str(config.get("DEVOPS_MCP_TOKEN") or ""),
-    )
+            logging.warning("无法创建 CODEX_HOME 目录 %s：%s", task_codex_home, exc)
+    # 流水线 MCP 只注册给真正需要它的技能，避免缺陷门禁等任务看到并误用流水线工具。
+    # 非流水线技能即使复用了任务目录，也会用空令牌清理掉可能残留的同名 server。
+    allow_devops_mcp = mcp_config.supports_devops_mcp(skill.skill_id)
+    if allow_devops_mcp:
+        mcp_config.ensure_devops_mcp_config(
+            task_codex_home,
+            url=str(config.get("DEVOPS_MCP_URL") or ""),
+            token=str(config.get("DEVOPS_MCP_TOKEN") or ""),
+        )
+    else:
+        mcp_config.ensure_devops_mcp_config(task_codex_home, url="", token="")
     env = codex_runner.build_codex_env(
         os.environ,
         api_key=api_key,
         api_key_env=api_key_env,
-        codex_home=codex_home,
-        locked_env=env_lock.collect_locked_env(config),
+        codex_home=task_codex_home or codex_home,
+        locked_env=env_lock.collect_locked_env(config, include_devops_mcp=allow_devops_mcp),
     )
 
     # 未显式配置 CODEX_SKILL_TIMEOUT 时按技能自身 runtime.json 声明的超时执行（缺省 1800 秒）。

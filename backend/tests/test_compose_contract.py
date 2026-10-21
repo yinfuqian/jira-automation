@@ -63,6 +63,13 @@ class ComposeContractTests(unittest.TestCase):
         self.assertNotIn("docker-compose.prod.yml", readme)
         self.assertNotIn("`docker-compose.yml`", readme)
 
+    def test_restart_scripts_recreate_containers_to_reload_env(self):
+        """restart 脚本必须重建容器，compose restart 不会加载新的 .env。"""
+        for name in ("restart-dev.sh", "restart-master.sh"):
+            source = (PROJECT_ROOT / name).read_text(encoding="utf-8")
+            self.assertIn("up -d --force-recreate", source)
+            self.assertNotIn("restart \"${SERVICES[@]}\"", source)
+
 
 if __name__ == "__main__":
     unittest.main()

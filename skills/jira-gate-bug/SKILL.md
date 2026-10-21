@@ -120,10 +120,10 @@ node <技能目录>/scripts/jira-cli.mjs attachments <KEY|URL> <工作目录>/<K
 1. 产品：优先取技能调用方 `inputs.product`，否则取 Jira 字段「问题发现产品」；值为空或 `无` 时按缺失处理。
 2. 模块：优先取调用方 `inputs.module`（含 Agent 从可辨认图片识别的唯一模块），其次取评论固定块的第一条 `模块:Tag`，再取描述、环境、概要里显式写出的 `模块:Tag`（首条为主模块，其余作为关联模块），最后仅在 Jira 模块/组件只有一个值且与产品名不同时自动采用。自动采用时 Jira 组件与产品同名只是产品回声，不算模块（人工在评论固定块或描述里显式写出的同名模块仍按原样使用，由 `scope-mapping.json` 别名解析）。图片、Jira 或调用方给出多个候选时**不要猜**，必须列出候选并要求明确主模块和关联模块。
 3. 影响版本与精准 Tag：门禁只要求工单中存在明确的模块版本号，可来自调用方 `inputs.version`、评论固定块、该模块自己的 `模块:Tag`、Jira 影响版本字段，或概要、描述、评论和可辨认图片中的模块版本号；描述/评论里写成 `模块:Tag` 时，Tag 与该模块成对使用，其它模块的版本不会互相覆盖。修复版本不作为来源。自动分析时，主模块和非公共关联模块仍须把该版本按规则解析为 GitLab 中真实存在的精准 Tag，不能只停留在业务版本号，也不能使用 `master`、`feature/*` 等分支。评论区固定块只写需要独立分析和拉取的模块，不写公共组件；公共组件由代码分析按需联动处理。
-4. 仓库地址与 Git Tag：由 `config/scope-mapping.json` 根据产品、模块和版本规则确定；故障分析只关注 Tag，不使用 `master`、`feature/*` 等分支。
+4. 仓库地址与 Git Tag：由 `config/scope-mapping.json` 根据产品、模块和版本规则确定；故障分析只关注 Tag，不使用 `master`、`feature/*` 等分支。Jira「产品归属」只约束主模块；关联模块按模块名在 `scope-mapping.json` 中反查自己的产品，不能一律套用主产品。例如产品归属为 `Aiforce` 时，`bot-portal` 仍应从 `bot` 产品解析出 `bot/bot-portal` 仓库。同一模块配置在多个产品下且主产品不持有该模块时，按映射歧义通知维护人，不猜。
 5. 调用 `resolve` 后按失败类型分流：
    - 工单缺少产品、模块或版本，或指定 Tag 在远端不存在：按「输出模板 · 缺分析参数」写评论，写门禁字段 `{"result":"未检查","selfCheck":"无"}`，结束任务。
-   - 工单已提供产品、模块和版本，但 `resolve` 返回 `"reason":"scope-mapping-missing"`、`"scope-mapping-invalid"` 或 `"scope-mapping-ambiguous"` 且 `"skipped":true`：这是内部映射配置缺口，不是提单人缺信息。该分支会正常退出并输出 JSON，**不能因为 `ok:false` 就停止**。直接使用返回的 `comment` 字段原样写评论（其中会 @ 映射维护人），写门禁字段 `{"result":"未检查","selfCheck":"无"}`；不要打回、不要流转经办人、不要继续分析，结束任务。
+   - 工单已提供产品、模块和版本，但 `resolve` 返回 `"reason":"scope-mapping-missing"`、`"scope-mapping-invalid"` 或 `"scope-mapping-ambiguous"` 且 `"skipped":true`：这是内部映射配置缺口，不是提单人缺信息。该分支会正常退出并输出 JSON，**不能因为 `ok:false` 就停止**。直接使用返回的 `comment` 字段原样写评论（其中会 @ 映射维护人），写门禁字段 `{"result":"未检查","selfCheck":"无"}`，然后执行 `jira-cli.mjs assign <KEY> --user <mappingOwner.name>` 把经办人转派给映射维护人（默认 `yinfuqian1193`，即尹甫乾）。转派只改经办人、不改工作流状态；不要按缺参打回、不要继续分析，结束任务。
 
 参数齐全、映射成功且远端精准 Tag 校验通过时，直接继续执行 4.3，不需要再向提单人或研发确认模块、仓库地址或 Tag。
 
@@ -272,7 +272,13 @@ h4. 需要补充
 
 ### 映射缺失（通知维护人并跳过检查）
 
-当 `analysis-cli.mjs resolve` 返回 `reason` 为 `scope-mapping-missing`、`scope-mapping-invalid` 或 `scope-mapping-ambiguous` 时，说明工单已有分析对象，但 `config/scope-mapping.json` 缺少产品、模块、仓库地址或版本转 Tag 规则。此时**不按缺分析参数打回**，也不要求提单人重复补模块；使用 `resolve` 输出里的 `comment` 原样写评论，并写门禁字段 `{"result":"未检查","selfCheck":"无"}`，结束任务。评论固定为：
+当 `analysis-cli.mjs resolve` 返回 `reason` 为 `scope-mapping-missing`、`scope-mapping-invalid` 或 `scope-mapping-ambiguous` 时，说明工单已有分析对象，但 `config/scope-mapping.json` 缺少产品、模块、仓库地址或版本转 Tag 规则。此时**不按缺分析参数打回**，也不要求提单人重复补模块；使用 `resolve` 输出里的 `comment` 原样写评论，写门禁字段 `{"result":"未检查","selfCheck":"无"}`，并执行下面的命令把工单转派给映射维护人，结束任务：
+
+```bash
+node <技能目录>/scripts/jira-cli.mjs assign <KEY|URL> --user <返回结果中的 mappingOwner.name>
+```
+
+`assign` 只改经办人，不改变工作流状态。返回结果里的 `mappingOwner.name` 是登录名，默认 `yinfuqian1193`，展示名尹甫乾；不要传中文展示名。转派失败时不能静默结束，必须追加评论写明失败原因和“请映射维护人手工接手”，并保留门禁结果 `未检查`。评论固定为：
 
 ```text
 h3. 模块映射丢失，已跳过检查
@@ -281,10 +287,10 @@ h3. 模块映射丢失，已跳过检查
 * 待处理：[~yinfuqian1193] 请补齐映射内容：产品、模块、仓库地址，以及版本转 Tag 规则。
 * 当前识别：产品={{<实际产品>}}；模块={{<实际模块>}}；版本={{<实际版本>}}。
 * 缺口：<返回的实际缺口>
-* 处理方式：无需提单人重复补充模块；映射补齐后重新触发本技能即可自动检查，不要求额外确认。
+* 处理方式：无需提单人重复补充模块；映射补齐后重新触发本技能即可自动检查，不要求额外确认。本单会转派给上述映射维护人，不改变工作流状态。
 ```
 
-映射维护人可在 `config/scope-mapping.json` 顶层用 `mappingOwner` 覆盖 `name`、`displayName` 和 `mention`；默认账号为 `yinfuqian1193`，Jira 提及写法为 `[~yinfuqian1193]`。
+映射维护人可在 `config/scope-mapping.json` 顶层用 `mappingOwner` 覆盖 `name`、`displayName` 和 `mention`；默认账号为 `yinfuqian1193`，Jira 提及写法为 `[~yinfuqian1193]`。映射缺失分支会自动把经办人设为这里的 `name`，因此修改负责人时不要只改展示名。
 
 公共组件仓库在 `scope-mapping.json` 中以 `common: true` 留存，但不作为独立模块写进评论固定块，也不要求发布或提供精准 Tag。主模块和普通关联模块的代码或日志确认引用公共组件后，后端会自动拉取该公共组件的默认分支参与分析；未命中的公共组件不会拉取，拉取失败只记录跳过证据并继续主分析。代码分析确认引用公共组件时，应在结论中说明“本缺陷引用了 xxx 公共组件功能，关键代码在 xxxxxx”；无法定位关键代码时必须明确说明，不得编造。公共组件没有精准 Tag 不作为打回原因；非公共模块仍严格使用精准 Tag，不回退默认分支。
 
@@ -353,7 +359,7 @@ h4. 日志/复现豁免判定
 
 ## 硬性约束
 
-- 除门禁字段和打回后的经办人恢复外不修改缺陷单字段；打回时不得让门禁账号占用经办人字段，必须恢复流转前的原经办人。
+- 除门禁字段、打回后的经办人恢复和映射缺失时的经办人转派外不修改缺陷单字段；打回时不得让门禁账号占用经办人字段，必须恢复流转前的原经办人；映射缺失时经办人必须转派给 `mappingOwner.name`。
 - 未配置 `rejectTransitionName` 时不流转状态、不关闭缺陷单。
 - 不编造分析结论：评论里的结论必须来自 `analysis-cli.mjs` 的输出。
 - 不把“检索工作”反问给提单人；不因为某项无法判定而停止其余项检查。
@@ -367,7 +373,7 @@ h4. 日志/复现豁免判定
 |---|---|
 | `未配置 ANALYSIS_API_TOKEN` | 在 `.env` 设置 `ANALYSIS_API_TOKEN` 并在 api/worker 生效后重试 |
 | `缺少代码仓库地址或版本` | 先用 `jira-cli.mjs scope` 查看来源；缺模块/版本时按固定评论块补齐，仓库地址由 `scope-mapping.json` 维护 |
-| `reason=scope-mapping-missing/invalid/ambiguous` | 工单已有分析对象，但配置缺映射：原样使用返回的 `comment` 通知 `mappingOwner`，门禁写 `未检查`，跳过检查且不打回提单人 |
+| `reason=scope-mapping-missing/invalid/ambiguous` | 工单已有分析对象，但配置缺映射：原样使用返回的 `comment` 通知 `mappingOwner`，门禁写 `未检查`，跳过检查且不打回；随后用 `jira-cli.mjs assign --user <mappingOwner.name>` 转派经办人 |
 | `故障分析工具中没有匹配的产品/模块` | 配置映射存在但分析服务未注册该对象；记录实际错误，不要伪造映射或改用默认分支 |
 | 分析任务超时 | 任务仍可能在后台完成：前端「历史记录」可见；可提高 `CODEX_SKILL_TIMEOUT` 与 `--timeout` 后重跑 |
 | `鉴权失败` / HTTP 401 | 检查 `JIRA_TOKEN` 是否过期、`ANALYSIS_API_TOKEN` 是否与 api 服务一致 |

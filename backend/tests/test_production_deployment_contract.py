@@ -27,6 +27,8 @@ class ProductionDeploymentContractTests(unittest.TestCase):
 
         self.assertEqual(source.count('network_mode: "host"'), 3)
         self.assertIn('"${API_PORT}:5000"', source)
+        # host 网络下 ports 映射不生效，gunicorn 必须直接监听 API_PORT。
+        self.assertIn("0.0.0.0:${API_PORT:-5000}", source)
 
     def test_frontend_image_supports_template_upstreams(self):
         template = (PROJECT_ROOT / "frontend" / "nginx.conf").read_text(encoding="utf-8")

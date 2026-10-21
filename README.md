@@ -38,7 +38,7 @@ docker compose --env-file .env -f docker-compose-dev.yaml up -d
 docker compose -f docker-compose-dev.yaml ps -a
 ```
 
-开发环境重启 API 与 Celery Worker（不会重启数据库，也不会删除数据）：
+开发环境重建 API 与 Celery Worker（不会重启数据库，也不会删除数据；会重新读取 `.env`）：
 
 ```bash
 bash restart-dev.sh
@@ -50,7 +50,7 @@ Master 生产环境使用 `docker-compose-prod.yaml` 与 `.env.production`：
 bash restart-master.sh
 ```
 
-两个脚本都支持传入 Compose 服务名，例如 `bash restart-dev.sh api` 或 `bash restart-master.sh worker`。如确需临时覆盖配置文件，可使用 `COMPOSE_FILE`、`ENV_FILE` 环境变量。
+两个脚本都使用 `docker compose up -d --force-recreate` 重建指定服务，因此修改 `.env` / `.env.production` 后会立即生效；`docker compose restart` 不会重新读取环境文件。脚本支持传入 Compose 服务名，例如 `bash restart-dev.sh api` 或 `bash restart-master.sh worker`。如确需临时覆盖配置文件，可使用 `COMPOSE_FILE`、`ENV_FILE` 环境变量。
 
 首次生产启动前至少修改 `.env` 中的以下内容：
 
@@ -202,7 +202,7 @@ docker run --rm jira-automation-frontend:test nginx -t
 
 - `docker-compose-dev.yaml` 和 `docker-compose-prod.yaml` 内容完全相同，分别用于 dev 和 master 生产环境；dev 默认读取 `.env`，生产默认读取 `.env.production`。生产服务器不需要也不应该保存源码仓库或完整源码包。镜像仍会包含程序运行所需的应用文件，因此镜像仓库权限必须严格控制；Docker 镜像本身不是加密或防反编译方案。
 
-这两份 Compose 的 `api`、`worker`、`migrate` 统一使用 host 网络，API 直接监听宿主机 `5000`。MySQL、Redis 必须配置为宿主机可访问的真实地址，不能使用 Compose 服务名。前端如单独部署，应把 `/api` 代理到宿主机 `127.0.0.1:5000`。
+这两份 Compose 的 `api`、`worker`、`migrate` 统一使用 host 网络，API 直接监听宿主机端口 `${API_PORT:-5000}`。MySQL、Redis 必须配置为宿主机可访问的真实地址，不能使用 Compose 服务名。前端如单独部署，应把 `/api` 代理到对应的宿主机端口。
 
 ### 本地开发
 
@@ -385,10 +385,31 @@ MCP server `pipeline-integration-mcp` 的有序调用）与 `pipeline-adapter`�
 | --- | --- | --- |
 | `GET` | `/skill/list` | 列出技能目录中的可用技能 |
 | `POST` | `/skill/run` | 提交技能任务，异步执行并立即返回 `task_id` |
+| `POST` | `/skill/jira/events` | 接收 Jira 新建缺陷 webhook，自动提交 `jira-gate-bug` |
 | `GET` | `/skill/task/<task_id>` | 查询任务状态、阶段进度与最终结论 |
 | `GET` | `/skill/task/<task_id>/artifacts/<文件名>` | 下载任务交付物（`outputs/`、`reports/`，文件名需 URL 编码；带 `?ticket=` 时可直接在浏览器打开） |
 | `GET` | `/skill/tasks` | 最近任务列表，支持 `limit`、`skill_id`、`status` |
 | `POST` | `/skill/task/<task_id>/cancel` | 取消排队或执行中的任务 |
+
+`/skill/run` 只负责“被调用后执行”，不会主动监听 Jira。要让新建缺陷自动触发，需要在 Jira 侧配置 webhook 或 Automation 规则调用 `/skill/jira/events`：
+
+- 地址：`http://<服务器地址>:<API_PORT>/skill/jira/events`，其中 `API_PORT` 必须与容器实际监听端口一致。
+- 事件：默认只处理 `jira:issue_created`（新建问题），不处理评论和字段更新，避免技能回写评论后再次触发形成循环。
+- 鉴权：Jira Automation 发送请求头 `X-API-Token: <SKILL_API_TOKEN>`；Jira 原生 webhook 可配置 `JIRA_WEBHOOK_SECRET`，接口同时接受 `X-Hub-Signature-256` 或 `X-Hub-Signature` 的 HMAC-SHA256 签名。
+- 类型过滤：默认只接收 `缺陷` 和 `Bug`，可通过 `JIRA_WEBHOOK_ISSUE_TYPES` 调整；留空表示不按类型过滤。
+- 去重：同一缺陷已有排队或执行中的 `jira-gate-bug` 任务时，webhook 重试会返回原任务，不会重复执行。
+
+Jira Automation 的“Send web request”动作可使用下面的请求体；Jira 原生 webhook 直接发送标准 issue payload 即可：
+
+```json
+{
+  "webhookEvent": "jira:issue_created",
+  "issue": {
+    "key": "{{issue.key}}",
+    "fields": {"issuetype": {"name": "{{issue.issueType.name}}"}}
+  }
+}
+```
 
 提交任务（外部系统建议使用独立令牌 `X-API-Token`，避免共享登录会话）：
 
@@ -473,15 +494,19 @@ curl -H "X-API-Token: <SKILL_API_TOKEN>" http://127.0.0.1:5000/skill/task/SKL-8F
 | `CODEX_SANDBOX` | `danger-full-access` | Codex 子进程沙箱模式，隔离边界由容器提供 |
 | `CODEX_NETWORK_RETRY_LIMIT` | `10` | 连续网络错误达到该次数即判定模型/Jira 不可达并提前终止，不再空转到超时 |
 | `SKILL_RECOVER_ORPHANS` | `true` | worker 启动时把上一次运行遗留的 `running` 任务标记为失败 |
-| `CODEX_HOME` | `/data/codex` | Codex 运行目录，挂载 `codex-home` 命名卷，只存放 Codex 运行期状态（`state_*.sqlite` 等） |
+| `CODEX_HOME` | `/data/codex` | Codex 运行目录基址，挂载 `codex-home` 卷。每次技能任务使用独立的 `runs/<task_id>` 子目录，避免继承共享的 `skills/` 与 MCP 配置 |
 | `SKILLS_DIR` | `/data/skills` | 技能目录，容器内由 `./skills` 只读挂载而来，Codex 运行时不会改写它 |
 | `JIRA_TOKEN` | 无（**必填**） | 注入给技能脚本的 Jira 个人访问令牌；运行时锁定为唯一来源，技能不会回落到 `skills/.jira-token` 等令牌文件 |
 | `JIRA_BASE_URL` | 无（**必填**） | 注入给技能脚本的 Jira 站点地址；技能只允许访问该站点，传入其它站点的单号链接会被拒绝 |
+| `JIRA_WEBHOOK_SECRET` | 无 | Jira 原生 webhook 的 HMAC-SHA256 签名密钥；不使用原生签名时留空，Jira Automation 改用 `X-API-Token` |
+| `JIRA_WEBHOOK_SKILL_ID` | `jira-gate-bug` | Jira 事件自动提交的技能标识 |
+| `JIRA_WEBHOOK_EVENTS` | `jira:issue_created,issue_created` | 允许触发的问题事件，逗号分隔；默认不处理评论和字段更新 |
+| `JIRA_WEBHOOK_ISSUE_TYPES` | `缺陷,Bug` | 允许自动触发的问题类型；留空表示不按类型过滤 |
 | `GITLAB_PRIVATE_TOKEN` | 无 | `jira-code` 拉分支与推送代码用的 GitLab 令牌，需要仓库写权限；缺失时技能只会中断并如实上报 |
 | `GIT_BASE_URL` | 无 | GitLab 站点地址；方案里只写 `group/repo` 时用它补全克隆地址 |
 | `GIT_USER`、`GIT_PASSWORD` | 无 | 没有 `GITLAB_PRIVATE_TOKEN` 时的账号密码兜底 |
-| `DEVOPS_MCP_TOKEN` | 无 | 流水线平台个人中心签发的 API Token；`jira-code` 的热更新阶段用它调 `pipeline-integration-mcp`，由后端写进 `CODEX_HOME/config.toml`（同名旧配置会被覆盖）；缺失时后端清掉该 server 配置，技能按「跳过并说明」处理 |
-| `DEVOPS_MCP_URL` | `https://devops.ks1.wezhuiyi.com/mcp` | 流水线 MCP server 地址，与 `DEVOPS_MCP_TOKEN` 一起由后端写进 `CODEX_HOME/config.toml` |
+| `DEVOPS_MCP_TOKEN` | 无 | 流水线平台个人中心签发的 API Token；只给 `jira-code`、`devops-mcp-invoker` 注册 `pipeline-integration-mcp`，配置写入任务独立 `CODEX_HOME` 的 `config.toml`；缺失时清掉该 server 配置，技能按「跳过并说明」处理 |
+| `DEVOPS_MCP_URL` | `https://devops.ks1.wezhuiyi.com/mcp` | 流水线 MCP server 地址，与 `DEVOPS_MCP_TOKEN` 一起写入需要该 MCP 的任务独立 `CODEX_HOME` |
 | `ANALYSIS_API_BASE_URL` | `http://api:5000` | `jira-gate-bug` 回写时调用的本服务地址（宿主网络改为 `http://127.0.0.1:5000`） |
 | `ANALYSIS_API_TOKEN` | `local-dev-analysis-token` | 技能脚本调用 `/analysis`、`/logfile` 等接口的内部令牌；生产环境必须替换 |
 
@@ -489,7 +514,7 @@ curl -H "X-API-Token: <SKILL_API_TOKEN>" http://127.0.0.1:5000/skill/task/SKL-8F
 技能脚本（`jira.mjs`、`jira-cli.mjs` 等）读到该标记后只认环境变量，不再回落到令牌文件、`--token` / `--base-url` 入参与内置默认站点。
 必填项（`JIRA_BASE_URL`、`JIRA_TOKEN`、`DEVOPS_MCP_URL`、`CODEX_MODEL`、`CODEX_MODEL_PROVIDER`、`CODEX_BASE_URL`）缺失时，
 `POST /skill/run` 直接返回 503 并列出缺哪一项，worker 也会把任务标记为失败，不会带着来源不明的参数继续跑；
-`DEVOPS_MCP_TOKEN` 留空表示不启用热更新，此时后端会清掉 `CODEX_HOME/config.toml` 里的同名 MCP 配置。
+`DEVOPS_MCP_TOKEN` 留空表示不启用热更新，此时后端会在任务目录里清掉同名 MCP 配置。缺陷门禁等非流水线技能不会注册该 MCP，也看不到流水线工具。
 
 技能运行参数由后端以 `codex exec -c ...` 传入（模型、中转地址、请求协议、推理强度等），容器内无需维护 `config.toml`；
 需要附加 Codex 配置时用 `CODEX_EXTRA_ARGS` 追加，例如 `CODEX_EXTRA_ARGS=-c model_context_window=128000`。
@@ -510,8 +535,8 @@ Codex 自己生成的状态文件全部落在 `codex-home` 卷（本地运行对
 docker compose -f docker-compose-dev.yaml exec worker node /data/skills/jira-gate-1/scripts/jira-cli.mjs selftest
 # jira-code 额外自检 GitLab 凭据（只回显来源，不打印令牌）
 docker compose -f docker-compose-dev.yaml exec worker node /data/skills/jira-code/scripts/git-flow.mjs creds
-# 配了 DEVOPS_MCP_TOKEN 时确认 MCP 已注册（看不出内容说明令牌没写进去）
-docker compose -f docker-compose-dev.yaml exec worker sh -c 'grep -c pipeline-integration-mcp /data/codex/config.toml'
+# 配了 DEVOPS_MCP_TOKEN 时确认最近的任务配置已注册 MCP（不打印令牌）
+docker compose -f docker-compose-dev.yaml exec worker sh -c 'for f in /data/codex/runs/*/config.toml; do grep -q pipeline-integration-mcp "$f" && echo "$f"; done'
 ```
 
 - API 只负责提交任务，Codex 实际执行发生在 `worker` 容器，请确保 `worker` 能访问 Jira 与模型中转。

@@ -1,4 +1,5 @@
 # Environment files
+.env
 .env.*
 !.env.example
 **/.env

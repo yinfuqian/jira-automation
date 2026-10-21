@@ -1382,7 +1382,12 @@ def call_ai_multimodal_model(system_prompt, user_prompt, image_data_url):
     request_options = build_ai_request_options(app.config, api_style)
     model = request_options["model"]
     if not api_key or not base_url:
-        raise ValueError("API Key \u6216 Base URL \u672a\u914d\u7f6e")
+        missing = []
+        if not api_key:
+            missing.append("OPENAI_KEY/OPENAI_API_KEY/CODEX_API_KEY")
+        if not base_url:
+            missing.append("OPENAI_URL")
+        raise ValueError(f"AI 模型配置缺失: {', '.join(missing)}")
 
     image_data_urls = image_data_url if isinstance(image_data_url, list) else [image_data_url]
     image_data_urls = [item for item in image_data_urls if item]
@@ -1621,7 +1626,12 @@ def call_ai_model(system_prompt, user_prompt):
     )
 
     if not api_key or not base_url:
-        raise ValueError("API Key \u6216 Base URL \u672a\u914d\u7f6e")
+        missing = []
+        if not api_key:
+            missing.append("OPENAI_KEY/OPENAI_API_KEY/CODEX_API_KEY")
+        if not base_url:
+            missing.append("OPENAI_URL")
+        raise ValueError(f"AI 模型配置缺失: {', '.join(missing)}")
 
     client = OpenAI(api_key=api_key, base_url=base_url)
     try:

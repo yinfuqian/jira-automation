@@ -47,16 +47,17 @@ DEFAULT_PROMPT_TEMPLATE = """请使用 {skill_id} 技能完成本次任务。
 {inputs_lines}
 
 执行要求：
-1. 先完整阅读 {skill_dir}/SKILL.md（技能 {skill_id}）及其引用的参考资料，严格按其中的标准执行，不要自行发明判定规则。
-2. 技能目录位于 {skill_dir}；当前运行环境是服务器容器，没有桌面工具，请直接通过 shell 执行技能自带脚本。
-3. 技能要求的操作（例如写入 Jira 评论）必须真实完成，不要在本地生成报告文档代替。
-4. 运行环境已预装技能所需工具与依赖（含 bsdtar / 7z / unzip 等解压命令、Python 与 Node 依赖），
+1. 本次必须且只能使用技能 {skill_id}；禁止调用、切换到其它技能。即使运行环境里能看到其它技能，也不属于本任务。
+2. 先完整阅读 {skill_dir}/SKILL.md（技能 {skill_id}）及其引用的参考资料，严格按其中的标准执行，不要自行发明判定规则。
+3. 技能目录位于 {skill_dir}；当前运行环境是服务器容器，没有桌面工具，请直接通过 shell 执行技能自带脚本。
+4. 技能要求的操作（例如写入 Jira 评论）必须真实完成，不要在本地生成报告文档代替。
+5. 运行环境已预装技能所需工具与依赖（含 bsdtar / 7z / unzip 等解压命令、Python 与 Node 依赖），
    不要执行 apt-get、yum、apk、pip、npm 等安装命令；确实缺少工具时可以自行联网安装。
-5. 技能要求的交付物（Jira 评论、状态流转、附件上传）都要真实完成；完成后用简洁中文总结：
+6. 技能要求的交付物（Jira 评论、状态流转、附件上传）都要真实完成；完成后用简洁中文总结：
    是否达标、难度等级、实际写入的内容、上传的附件名、关键依据。
-6. 运行参数已由服务端锁定：JIRA_BASE_URL、JIRA_TOKEN、DEVOPS_MCP_URL、DEVOPS_MCP_TOKEN、
-   CODEX_MODEL、CODEX_MODEL_PROVIDER、CODEX_BASE_URL 一律直接使用当前进程的环境变量，
-   不要读取技能目录或 ~/.codex 下的令牌文件，不要用 --base-url/--token 覆盖，
+7. 运行参数已由服务端锁定：JIRA_BASE_URL、JIRA_TOKEN、CODEX_MODEL、CODEX_MODEL_PROVIDER、
+   CODEX_BASE_URL 一律直接使用当前进程的环境变量；仅流水线技能还会注入 DEVOPS_MCP_URL 与
+   DEVOPS_MCP_TOKEN。不要读取技能目录或 ~/.codex 下的令牌文件，不要用 --base-url/--token 覆盖，
    也不要导出新的同名变量，或在工作区创建 .codex/config.toml 覆盖模型与中转设置
    （技能脚本检测到锁定标记后会直接拒绝这些来源）。"""
 
