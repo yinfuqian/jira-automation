@@ -14,7 +14,7 @@ metadata:
 **交付物有两个落点：Jira 评论 + Jira 附件**：
 
 1. Jira 评论：**只列检查点**——一行难度结论 + 逐项打标记的检查项清单（`(/)` 通过、`(x)` 不通过）；达标与不达标用同一套结构（模板见本文档「输出模板」节）。**末尾固定带一行「报告附件」**，指向第 2 点的附件名。
-2. Jira 附件：调用同仓库的 `review-jira-songlizhi` 技能产出 OpenSpec 评审报告 Markdown，**上传到需求单附件区**，文件名**必须以「宋立志」结尾**（见 §11）。
+2. Jira 附件：调用同仓库的 `review-jira-req` 技能产出 OpenSpec 评审报告 Markdown，**上传到需求单附件区**，文件名**必须以「宋立志」结尾**（见 §11）。
 3. 对话里的摘要：难度（高/中/低）+ 达标/不达标 + 关键理由，供用户即时看到结果。
 
 **不达标时额外有两个动作**（见 §9）：把需求单流转到「评审中」，并在评论里 `@` 流转人；结论达标时不动状态、不加 `@`。
@@ -55,7 +55,7 @@ metadata:
   # 下载附件到工作目录
   node <技能目录>/scripts/jira-cli.mjs attachments <KEY|URL> work/jira-gate/<KEY>/attachments
 
-  # --- 先跑 review-jira-songlizhi 五步流水线生成报告 md，再取评审结论（见 §11）---
+  # --- 先跑 review-jira-req 五步流水线生成报告 md，再取评审结论（见 §11）---
   # …（fetch / normalize / rulecheck / semantic / report.mjs 详见 §11）
   node <技能目录>/scripts/report-conclusion.mjs <报告路径> <KEY>   # → 不合格 / 需修改 / 合格
 
@@ -251,16 +251,18 @@ const back = await j.getGateResult(key);        // 写入后读回确认
 - 取值约定：达标写 `通过`，不达标写 `不通过`；`6.7.1`（工作量与子任务）未满足**不改变** `result`，因为它不阻断 G1。
 - 评论与字段必须一致：先写评论，再写字段；复审后结论有变化时重新回写一次。
 
-### 11. 评审报告（review-jira-songlizhi）与附件上传
+### 11. 评审报告（review-jira-req）与附件上传
 
-G1 评论只给门禁结论；需求质量的细读结论由同仓库的 `review-jira-songlizhi` 技能产出。**它的产物是 Markdown 报告，必须作为附件上传到需求单**——只留在本地不算完成。
+G1 评论只给门禁结论；需求质量的细读结论由同仓库的 `review-jira-req` 技能产出。**它的产物是 Markdown 报告，必须作为附件上传到需求单**——只留在本地不算完成。
 
-**技能位置**：容器内固定为 `/data/skills/review-jira-songlizhi`（桌面端为 `<仓库>/skills/review-jira-songlizhi`）。先完整读它的 `SKILL.md`，严格按它的五步流水线执行；**它自身对 Jira 只读**（`bin/` 里没有任何写请求），写附件由本技能的 `jira-cli.mjs attach` 负责，不要改动它的脚本。
+**技能位置**：容器内固定为 `/data/skills/review-jira-req`（桌面端为 `<仓库>/skills/review-jira-req`）。先完整读它的 `SKILL.md`，严格按它的五步流水线执行；**它自身对 Jira 只读**（`bin/` 里没有任何写请求），写附件由本技能的 `jira-cli.mjs attach` 负责，不要改动它的脚本。
+
+**附件分工**：`review-jira-req` 的 fetch 步骤会自行下载附件到 `reports/.work/<run-id>/attachments/<KEY>/`，并抽取文本或保留图片供 normalize/semantic 使用；本技能此前为 G1 判定下载到 `work/jira-gate/<KEY>/attachments/` 的副本仍保留。两边目录用途不同，不要用 `--no-attachments` 关闭它的附件读取，否则报告会缺少附件证据和检查总览。
 
 **环境桥接**（桌面端它读 `JIRA_PAT`；容器内后端已注入 `SKILLRUN_ENV_LOCKED=1`，它直接读 `JIRA_TOKEN`，下面几条命令带上也无副作用）：
 
 ```bash
-export SKILL_DIR=/data/skills/review-jira-songlizhi
+export SKILL_DIR=/data/skills/review-jira-req
 export JIRA_PAT="$JIRA_TOKEN"
 export JIRA_BASE_URL="${JIRA_BASE_URL:-https://jira.in.wezhuiyi.com}"
 ```

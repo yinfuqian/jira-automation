@@ -1,4 +1,4 @@
-"""评审报告附件契约测试：锁定 review-jira-songlizhi 的引入方式与附件命名规则。"""
+"""评审报告附件契约测试：锁定 review-jira-req 的引入方式与附件命名规则。"""
 import shutil
 import subprocess
 import sys
@@ -14,7 +14,7 @@ if str(BACKEND_DIR) not in sys.path:
 PROJECT_ROOT = BACKEND_DIR.parent
 SKILLS_ROOT = PROJECT_ROOT / "skills"
 GATE_SKILL_DIR = SKILLS_ROOT / "jira-gate-1"
-REVIEW_SKILL_DIR = SKILLS_ROOT / "review-jira-songlizhi"
+REVIEW_SKILL_DIR = SKILLS_ROOT / "review-jira-req"
 
 
 class ReviewSkillVendoringTests(unittest.TestCase):
@@ -28,6 +28,7 @@ class ReviewSkillVendoringTests(unittest.TestCase):
             REVIEW_SKILL_DIR / "bin" / "rulecheck.mjs",
             REVIEW_SKILL_DIR / "bin" / "report.mjs",
             REVIEW_SKILL_DIR / "bin" / "verify-semantic-quotes.mjs",
+            REVIEW_SKILL_DIR / "bin" / "lib" / "attachments.mjs",
         ]
         for path in expected:
             self.assertTrue(path.is_file(), f"缺少技能文件：{path}")
@@ -36,18 +37,29 @@ class ReviewSkillVendoringTests(unittest.TestCase):
         """技能目录需满足注册表约定：front matter 的 name 等于目录名。"""
         from app.skillrun.registry import load_skill
 
-        skill = load_skill(REVIEW_SKILL_DIR, "review-jira-songlizhi")
+        skill = load_skill(REVIEW_SKILL_DIR, "review-jira-req")
 
-        self.assertEqual(skill.skill_id, "review-jira-songlizhi")
+        self.assertEqual(skill.skill_id, "review-jira-req")
         self.assertTrue(skill.description)
 
     def test_review_skill_documents_container_adaptation(self):
         """新技能需声明容器内的技能目录、凭据桥接与只读边界。"""
         text = (REVIEW_SKILL_DIR / "SKILL.md").read_text(encoding="utf-8")
 
-        self.assertIn("/data/skills/review-jira-songlizhi", text)
+        self.assertIn("/data/skills/review-jira-req", text)
         self.assertIn('export JIRA_PAT="$JIRA_TOKEN"', text)
         self.assertIn("只读边界不变", text)
+
+    def test_review_skill_supports_attachment_evidence(self):
+        """新版技能需在拉取、语义评审与报告中贯通附件证据。"""
+        fetch_source = (REVIEW_SKILL_DIR / "bin" / "jira-fetch.mjs").read_text(encoding="utf-8")
+        report_source = (REVIEW_SKILL_DIR / "bin" / "report.mjs").read_text(encoding="utf-8")
+        semantic_source = (REVIEW_SKILL_DIR / "prompts" / "semantic.md").read_text(encoding="utf-8")
+
+        self.assertIn("downloadAttachments", fetch_source)
+        self.assertIn("--max-attachments", fetch_source)
+        self.assertIn("附件检查总览", report_source)
+        self.assertIn("attachment:<id>", semantic_source)
 
     def test_review_skill_scripts_stay_read_only(self):
         """脚本层不得出现写请求，保持“拉取只读”的硬约束。"""
@@ -63,8 +75,8 @@ class ReportAttachmentContractTests(unittest.TestCase):
         """jira-gate-1 需写明调用新技能、上传附件，且文件名以“宋立志”结尾。"""
         text = (GATE_SKILL_DIR / "SKILL.md").read_text(encoding="utf-8")
 
-        self.assertIn("### 11. 评审报告（review-jira-songlizhi）与附件上传", text)
-        self.assertIn("/data/skills/review-jira-songlizhi", text)
+        self.assertIn("### 11. 评审报告（review-jira-req）与附件上传", text)
+        self.assertIn("/data/skills/review-jira-req", text)
         self.assertIn("<KEY>-需求评审报告-宋立志.md", text)
         self.assertIn("必须以「宋立志」结尾", text)
         self.assertIn("jira-cli.mjs attach", text)

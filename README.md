@@ -362,13 +362,13 @@ powershell -ExecutionPolicy Bypass -File scripts\export_release_image.ps1 `
 系统内置技能执行能力：外部系统提交一个 Jira 链接与 `skill_id`，服务端在独立工作目录中启动 Codex CLI，
 加载 `skills/<skill_id>/SKILL.md`，由 Agent 按技能定义访问 Jira、执行检查并写回评论。当前内置技能为
 `jira-gate-1`（Jira 需求准入检查 G1，产出难度分级与达标结论，把逐项打标记的检查项清单写入需求单评论；
-不达标时流转到「评审中」并在评论里 @ 流转人；最后调用 `review-jira-songlizhi` 生成 OpenSpec 评审报告，
+不达标时流转到「评审中」并在评论里 @ 流转人；最后调用 `review-jira-req` 生成 OpenSpec 评审报告，
 作为附件上传到需求单，文件名以「宋立志」结尾；交付完成后清理本次任务的工作区中间产物）、
 `jira-gate-1-mock`（同一套判定流程的**只读预演版**：不写评论、不回写门禁字段、不上传附件、不流转状态，
-也不 @ 流转人；依次调用 `review-jira-songlizhi` 与 `review-jira-design` 产出需求质量评审报告与
+也不 @ 流转人；依次调用 `review-jira-req` 与 `review-jira-design` 产出需求质量评审报告与
 PRD—原型一致性审核报告，只把评论草稿与这两份报告打成
 `<工作目录>/outputs/<KEY>-G1预检包-<时间戳>.zip` 供下载）、
-`review-jira-songlizhi`（按 OpenSpec 好需求标准评审需求质量，
+`review-jira-req`（按 OpenSpec 好需求标准评审需求质量，同时读取 Jira 附件并抽取文本/图片证据，
 产出 Markdown 报告，对 Jira 只读）、`review-jira-design`（对照定稿 PRD 审核产品原型初稿，
 检查需求完整性、PRD—原型一致性、流程与状态覆盖，产出简洁可执行的自包含 HTML 报告；对 Jira 只读，
 由 `jira-gate-1-mock` 在需求质量评审之后调用）与 `jira-code`（读取需求单的「开发方案」附件，从方案指定的基线分支拉出

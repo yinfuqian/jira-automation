@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 /**
- * 从 review-jira-songlizhi 生成的评审报告 Markdown 中提取规则结论。
+ * 从 review-jira-req 生成的评审报告 Markdown 中提取规则结论。
  *
  * 用法：
  *   node scripts/report-conclusion.mjs <报告md路径> [KEY]

@@ -15,11 +15,27 @@ import path from 'node:path';
 
 import { loadCredentials, createLogger, makeRunId, CredentialsError } from './lib/shared.mjs';
 import { cleanWikiMarkup } from './lib/wikimarkup.mjs';
+import {
+  DEFAULT_ATTACHMENT_LIMITS,
+  DEFAULT_TEXT_LIMITS,
+  downloadAttachments,
+  addAttachmentStats,
+  emptyAttachmentStats,
+} from './lib/attachments.mjs';
 
-const FIELDS = ['summary', 'description', 'issuetype', 'status', 'labels', 'assignee'];
+const FIELDS = ['summary', 'description', 'issuetype', 'status', 'labels', 'assignee', 'attachment'];
 
 export const DEFAULT_LIMIT = 20;
 export const PAGE_SIZE = 50;
+
+/** 附件限额默认值（可通过 CLI 调大）。 */
+export const DEFAULT_MAX_ATTACHMENTS = DEFAULT_ATTACHMENT_LIMITS.maxAttachments;
+export const DEFAULT_MAX_ATTACHMENT_MB = 5;
+export const DEFAULT_MAX_ATTACHMENT_TOTAL_MB = 15;
+
+/** 抽取文本上下文预算（可通过 CLI 调大）。 */
+export const DEFAULT_MAX_FILE_TEXT_CHARS = DEFAULT_TEXT_LIMITS.perFileChars;
+export const DEFAULT_MAX_ISSUE_TEXT_CHARS = DEFAULT_TEXT_LIMITS.perIssueChars;
 
 /**
  * 默认输出目录基于 cwd，而不是脚本自身位置。
@@ -43,6 +59,15 @@ export class FetchError extends Error {
 export function normalizeIssue(raw) {
   const fields = raw?.fields ?? {};
   const descriptionRaw = fields.description ?? '';
+  const attachmentCandidates = Array.isArray(fields.attachment)
+    ? fields.attachment.map((attachment) => ({
+        id: attachment?.id,
+        filename: attachment?.filename,
+        mimeType: attachment?.mimeType,
+        size: attachment?.size,
+        content: attachment?.content,
+      }))
+    : [];
   return {
     key: raw?.key ?? '(未知)',
     summary: fields.summary ?? '',
@@ -53,6 +78,9 @@ export function normalizeIssue(raw) {
     labels: Array.isArray(fields.labels) ? fields.labels : [],
     assignee: fields.assignee?.displayName ?? fields.assignee?.name ?? '',
     self: raw?.self ?? '',
+    // 附件清单在下载完成后回填；attachmentCandidates 仅用于进程内传递，落盘前删除。
+    attachments: [],
+    attachmentCandidates,
   };
 }
 
@@ -196,7 +224,7 @@ export async function fetchByKeys({ baseUrl, pat, keys, limit = DEFAULT_LIMIT, f
   return { issues, total: keys.length, truncated, failures };
 }
 
-async function persist({ issues, runId, outDir, logger }) {
+async function persist({ issues, runId, outDir, logger, quiet = false }) {
   const runDir = path.join(outDir, runId);
   const rawDir = path.join(runDir, 'raw');
   await mkdir(rawDir, { recursive: true });
@@ -208,7 +236,7 @@ async function persist({ issues, runId, outDir, logger }) {
     written.push(file);
   }
 
-  logger.info(`已落盘 ${written.length} 份原始 issue 到 ${rawDir}`);
+  if (!quiet) logger.info(`已落盘 ${written.length} 份原始 issue 到 ${rawDir}`);
   return { runDir, rawDir, written };
 }
 
@@ -217,7 +245,29 @@ function sanitizeKey(key) {
 }
 
 export function parseArgs(argv) {
-  const args = { key: null, keys: null, jql: null, limit: DEFAULT_LIMIT, runId: null, outDir: null };
+  const args = {
+    key: null,
+    keys: null,
+    jql: null,
+    limit: DEFAULT_LIMIT,
+    runId: null,
+    outDir: null,
+    attachments: true,
+    maxAttachments: DEFAULT_MAX_ATTACHMENTS,
+    maxAttachmentMb: DEFAULT_MAX_ATTACHMENT_MB,
+    maxAttachmentTotalMb: DEFAULT_MAX_ATTACHMENT_TOTAL_MB,
+    maxFileTextChars: DEFAULT_MAX_FILE_TEXT_CHARS,
+    maxIssueTextChars: DEFAULT_MAX_ISSUE_TEXT_CHARS,
+  };
+
+  const positiveInt = (value, flag) => {
+    const parsed = Number.parseInt(value, 10);
+    if (!Number.isFinite(parsed) || parsed <= 0 || String(parsed) !== String(value).trim()) {
+      throw new FetchError(`${flag} 需要正整数，收到 "${value}"。`, { kind: 'usage' });
+    }
+    return parsed;
+  };
+
   for (let i = 0; i < argv.length; i += 1) {
     const token = argv[i];
     const next = argv[i + 1];
@@ -234,11 +284,7 @@ export function parseArgs(argv) {
       args.jql = next;
       i += 1;
     } else if (token === '--limit') {
-      const parsed = Number.parseInt(next, 10);
-      if (!Number.isFinite(parsed) || parsed <= 0) {
-        throw new FetchError(`--limit 需要正整数，收到 "${next}"。`, { kind: 'usage' });
-      }
-      args.limit = parsed;
+      args.limit = positiveInt(next, '--limit');
       i += 1;
     } else if (token === '--run-id') {
       args.runId = next;
@@ -246,6 +292,23 @@ export function parseArgs(argv) {
     } else if (token === '--out') {
       args.outDir = next;
       i += 1;
+    } else if (token === '--max-attachments') {
+      args.maxAttachments = positiveInt(next, '--max-attachments');
+      i += 1;
+    } else if (token === '--max-attachment-mb') {
+      args.maxAttachmentMb = positiveInt(next, '--max-attachment-mb');
+      i += 1;
+    } else if (token === '--max-attachment-total-mb') {
+      args.maxAttachmentTotalMb = positiveInt(next, '--max-attachment-total-mb');
+      i += 1;
+    } else if (token === '--max-file-text-chars') {
+      args.maxFileTextChars = positiveInt(next, '--max-file-text-chars');
+      i += 1;
+    } else if (token === '--max-issue-text-chars') {
+      args.maxIssueTextChars = positiveInt(next, '--max-issue-text-chars');
+      i += 1;
+    } else if (token === '--no-attachments') {
+      args.attachments = false;
     } else if (token === '--pat' || token.startsWith('--pat=')) {
       throw new FetchError(
         '不接受通过命令行传递 PAT。请改用环境变量 JIRA_PAT。',
@@ -324,7 +387,59 @@ export async function runFetch({
     failures = result.failures;
   }
 
+  // attachmentCandidates 只用于进程内传递，不落盘。
+  const candidatesByKey = new Map();
+  for (const issue of issues) {
+    candidatesByKey.set(
+      issue.key,
+      Array.isArray(issue.attachmentCandidates) ? issue.attachmentCandidates : [],
+    );
+    delete issue.attachmentCandidates;
+  }
+
+  // 先把 issue 原始数据落盘，避免附件下载中途失败时丢掉已拉取的需求。
   const { runDir, rawDir, written } = await persist({ issues, runId, outDir: resolvedOutDir, logger });
+
+  const attachmentLimits = {
+    maxAttachments: args.maxAttachments,
+    maxFileBytes: args.maxAttachmentMb * 1024 * 1024,
+    maxTotalBytes: args.maxAttachmentTotalMb * 1024 * 1024,
+  };
+  const textLimits = {
+    perFileChars: args.maxFileTextChars,
+    perIssueChars: args.maxIssueTextChars,
+  };
+
+  let attachmentStats = emptyAttachmentStats();
+  if (args.attachments) {
+    for (const issue of issues) {
+      const candidates = candidatesByKey.get(issue.key) ?? [];
+      if (candidates.length > 0) {
+        logger.info(`${issue.key}：下载并抽取 ${candidates.length} 个附件…`);
+      }
+      const result = await downloadAttachments({
+        attachments: candidates,
+        baseUrl,
+        pat,
+        key: issue.key,
+        runDir,
+        limits: attachmentLimits,
+        textLimits,
+        logger,
+      });
+      issue.attachments = result.attachments;
+      attachmentStats = addAttachmentStats(attachmentStats, result.stats);
+    }
+  }
+
+  if (attachmentStats.total > 0) {
+    // 附件结果回填后再写一次清单（raw 里只有清单，不含正文）。
+    await persist({ issues, runId, outDir: resolvedOutDir, logger, quiet: true });
+    logger.info(
+      `附件：共 ${attachmentStats.total} 个（文本 ${attachmentStats.text} / 图片 ${attachmentStats.image} / ` +
+        `无法解析 ${attachmentStats.unsupported} / 跳过 ${attachmentStats.skipped} / 失败 ${attachmentStats.failed}）`,
+    );
+  }
 
   const meta = {
     runId,
@@ -341,10 +456,29 @@ export async function runFetch({
     truncatedCount: truncated ? total - issues.length : 0,
     failures,
     keys: issues.map((issue) => issue.key),
+    attachmentsEnabled: args.attachments,
+    attachmentStats,
+    attachmentLimits: {
+      maxAttachments: args.maxAttachments,
+      maxAttachmentMb: args.maxAttachmentMb,
+      maxAttachmentTotalMb: args.maxAttachmentTotalMb,
+      maxFileTextChars: args.maxFileTextChars,
+      maxIssueTextChars: args.maxIssueTextChars,
+    },
   };
   await writeFile(path.join(runDir, 'meta.json'), `${JSON.stringify(meta, null, 2)}\n`, 'utf8');
 
-  return { runId, runDir, rawDir, issues, failures, meta, writtenFiles: written, logger, secrets: [pat] };
+  return {
+    runId,
+    runDir,
+    rawDir,
+    issues,
+    failures,
+    meta,
+    writtenFiles: written,
+    logger,
+    secrets: [pat],
+  };
 }
 
 async function main() {
@@ -368,6 +502,7 @@ async function main() {
         (failures.length > 0 ? `，${failures.length} 条无法访问` : ''),
     );
   } catch (error) {
+    // 锁定模式下令牌在 JIRA_TOKEN 里；两个来源都纳入掩码，避免错误日志泄露。
     const secrets = [process.env.JIRA_PAT, process.env.JIRA_TOKEN].filter(Boolean);
     const logger = createLogger({ secrets });
     if (error instanceof CredentialsError) {
@@ -384,7 +519,9 @@ async function main() {
       if (error.kind === 'usage') {
         logger.error(
           `${error.message}\n用法：node scripts/jira-fetch.mjs ` +
-            '（--key PROJ-123 | --keys PROJ-1,PROJ-2 | --jql "<JQL>"）[--limit N]',
+            '（--key PROJ-123 | --keys PROJ-1,PROJ-2 | --jql "<JQL>"）[--limit N] ' +
+            '[--max-attachments N] [--max-attachment-mb N] [--max-attachment-total-mb N] ' +
+            '[--max-file-text-chars N] [--max-issue-text-chars N] [--no-attachments]',
         );
         process.exitCode = 4;
         return;

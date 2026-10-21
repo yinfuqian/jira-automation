@@ -18,6 +18,39 @@ import { createServer } from 'node:http';
 
 export const MOCK_PAT = 'mock-pat-do-not-use-in-production';
 
+/** 演示用附件：一份 Markdown 与一张 1x1 PNG（二进制响应）。 */
+const ATTACHMENT_MARKDOWN = [
+  '# 批量删除验收标准',
+  '',
+  '- 用户勾选多件商品后点击"批量删除"，系统 SHALL 一次性删除全部选中项',
+  '- 删除前 SHALL 弹出确认，说明将删除的商品数量',
+  '- 若部分商品已下架，SHALL 跳过该商品并提示用户',
+].join('\n');
+
+const ATTACHMENT_PNG = Buffer.from(
+  'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==',
+  'base64',
+);
+
+const ATTACHMENT_FILES = new Map([
+  [
+    '20001',
+    {
+      filename: 'acceptance.md',
+      mimeType: 'text/markdown',
+      data: Buffer.from(ATTACHMENT_MARKDOWN, 'utf8'),
+    },
+  ],
+  [
+    '20002',
+    {
+      filename: 'mock.png',
+      mimeType: 'image/png',
+      data: ATTACHMENT_PNG,
+    },
+  ],
+]);
+
 /** 数据集：模拟一批从 JIRA 拉回来的需求。 */
 export const ISSUES = [
   {
@@ -46,6 +79,22 @@ export const ISSUES = [
       status: { name: 'Open' },
       labels: ['cart', 'frontend'],
       assignee: { displayName: '李四' },
+      attachment: [
+        {
+          id: '20001',
+          filename: 'acceptance.md',
+          mimeType: 'text/markdown',
+          size: ATTACHMENT_FILES.get('20001').data.length,
+          content: '/secure/attachment/20001/acceptance.md',
+        },
+        {
+          id: '20002',
+          filename: 'mock.png',
+          mimeType: 'image/png',
+          size: ATTACHMENT_FILES.get('20002').data.length,
+          content: '/secure/attachment/20002/mock.png',
+        },
+      ],
     },
   },
   {
@@ -158,6 +207,14 @@ export async function startMockJira({ pat = MOCK_PAT, port = 0, log = false } = 
       res.end(JSON.stringify(body));
     };
 
+    const sendBinary = (status, body, contentType) => {
+      res.writeHead(status, {
+        'content-type': contentType ?? 'application/octet-stream',
+        'content-length': body.length,
+      });
+      res.end(body);
+    };
+
     if (log) {
       process.stderr.write(`[mock-jira] ${req.method} ${req.url} auth=${auth ? 'yes' : 'no'}\n`);
     }
@@ -169,6 +226,17 @@ export async function startMockJira({ pat = MOCK_PAT, port = 0, log = false } = 
     }
     if (auth !== `Bearer ${pat}`) {
       send(401, { errorMessages: ['Client must be authenticated to access this resource.'] });
+      return;
+    }
+
+    const attachmentMatch = url.pathname.match(/^\/secure\/attachment\/([^/]+)\//);
+    if (attachmentMatch) {
+      const attachment = ATTACHMENT_FILES.get(decodeURIComponent(attachmentMatch[1]));
+      if (!attachment) {
+        send(404, { errorMessages: ['附件不存在'] });
+        return;
+      }
+      sendBinary(200, attachment.data, attachment.mimeType);
       return;
     }
 

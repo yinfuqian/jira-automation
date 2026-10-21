@@ -16,12 +16,45 @@ export const SEMANTIC_DIMENSIONS = [
 
 export const SEMANTIC_CONCLUSIONS = ['合格', '需修改', '不合格', '无法判定'];
 
+/** 模型对单个附件的检查状态。 */
+export const ATTACHMENT_USAGE_STATUSES = ['used', 'not-used', 'not-inspected'];
+
+/** 证据来源：描述正文，或某个附件（attachment:<id>）。 */
+const SOURCE_PATTERN = /^(description|attachment:\S+)$/;
+
 /** 校验一份 semantic/<KEY>.json。返回问题列表，空数组表示合规。 */
 export function validateSemantic(payload) {
   const issues = [];
   if (!payload || typeof payload !== 'object') return ['不是对象'];
 
   if (typeof payload.key !== 'string' || payload.key === '') issues.push('缺少 key');
+
+  // 附件检查记录是可选字段：旧结果没有它也仍然有效。
+  if (payload.attachments !== undefined) {
+    if (!Array.isArray(payload.attachments)) {
+      issues.push('attachments 必须是数组');
+    } else {
+      payload.attachments.forEach((attachment, index) => {
+        const label = `attachments[${index}]`;
+        if (!attachment || typeof attachment !== 'object') {
+          issues.push(`${label} 不是对象`);
+          return;
+        }
+        if (
+          (typeof attachment.id !== 'string' && typeof attachment.id !== 'number') ||
+          String(attachment.id).trim() === ''
+        ) {
+          issues.push(`${label} 缺少 id`);
+        }
+        if (typeof attachment.filename !== 'string' || attachment.filename.trim() === '') {
+          issues.push(`${label} 缺少 filename`);
+        }
+        if (!ATTACHMENT_USAGE_STATUSES.includes(attachment.status)) {
+          issues.push(`${label} 的 status 非法：${attachment.status}`);
+        }
+      });
+    }
+  }
 
   if (!Array.isArray(payload.dimensions)) {
     issues.push('缺少 dimensions 数组');
@@ -39,6 +72,17 @@ export function validateSemantic(payload) {
     }
     if (!Array.isArray(dimension?.reasons) || dimension.reasons.length === 0) {
       issues.push(`维度 ${dimension?.id} 缺少 reasons`);
+    }
+    if (Array.isArray(dimension?.evidence)) {
+      dimension.evidence.forEach((item, index) => {
+        if (item?.source !== undefined) {
+          if (typeof item.source !== 'string' || !SOURCE_PATTERN.test(item.source)) {
+            issues.push(
+              `维度 ${dimension?.id} 的 evidence[${index}] source 非法：${item.source}`,
+            );
+          }
+        }
+      });
     }
     // 除"无法判定"外，结论必须给出引用原文的证据
     const hasEvidence =

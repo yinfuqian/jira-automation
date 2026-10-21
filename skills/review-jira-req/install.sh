@@ -29,7 +29,7 @@ for arg in "$@"; do
   esac
 done
 
-SKILL_NAME="review-jira-songlizhi"
+SKILL_NAME="review-jira-req"
 SOURCE_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # 命令文件随技能一起打包，技能目录被单独拷走后仍能装上斜杠命令。
 COMMAND_SOURCE="${SOURCE_DIR}/command/${SKILL_NAME}.md"
@@ -110,9 +110,9 @@ cat <<EOF
      建议写进 shell 的 rc 文件，或用一个单独的 .env 在你自己的 shell 里 source。
 
   2) 在任意项目目录里直接要求评审即可，例如：
-       「用 review-jira-songlizhi 评审 SHOP-101」
+       「用 review-jira-req 评审 SHOP-101」
      或使用斜杠命令：
-       /review-jira-songlizhi SHOP-101
+       /review-jira-req SHOP-101
 
   3) 没有真实 JIRA 想先试跑：
        node "${CLAUDE_HOME}/skills/${SKILL_NAME}/bin/mock-jira.mjs" --print-env

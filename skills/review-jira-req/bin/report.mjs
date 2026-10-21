@@ -20,6 +20,7 @@ import path from 'node:path';
 
 import { createLogger, makeTimestamp, redactUrl } from './lib/shared.mjs';
 import { countBySeverity } from './lib/rules.mjs';
+import { formatBytes } from './lib/attachments.mjs';
 import { SEMANTIC_DIMENSIONS, SEMANTIC_CONCLUSIONS, validateSemantic } from './lib/semantic-schema.mjs';
 
 /**
@@ -142,6 +143,7 @@ export function buildModel({ runId, meta, rulecheck, semantic, raw, generatedAt 
       ruleResult: result,
       ruleCounts: countBySeverity(result.allIssues),
       semantic: semanticResult,
+      attachments: enrichAttachments(rawIssue?.attachments, semanticResult),
     };
   });
 
@@ -162,8 +164,89 @@ export function buildModel({ runId, meta, rulecheck, semantic, raw, generatedAt 
     missingDrafts: rulecheck.missingDrafts ?? [],
     semanticProblems: semantic.problems ?? [],
     semanticMissingAll: Boolean(semantic.missingAll),
+    attachmentSummary: summarizeAttachments(items),
     summary: summarizeItems(items),
   };
+}
+
+/** 把 fetch 侧附件清单与模型侧的检查状态并列。模型未记录时保持 null，不臆测。 */
+function enrichAttachments(attachments, semanticResult) {
+  if (!Array.isArray(attachments)) return [];
+  const recorded = new Map();
+  if (Array.isArray(semanticResult?.attachments)) {
+    for (const entry of semanticResult.attachments) {
+      if (entry?.id !== undefined && entry?.id !== null) recorded.set(String(entry.id), entry.status);
+    }
+  }
+  return attachments.map((attachment) => ({
+    ...attachment,
+    modelStatus: recorded.get(String(attachment?.id)) ?? null,
+  }));
+}
+
+const FETCH_UNINSPECTED_STATUSES = new Set(['failed', 'skipped', 'unsupported']);
+
+/** 附件总览：fetch 状态与模型检查状态分开统计，缺失时如实标为未记录。 */
+export function summarizeAttachments(items) {
+  const counts = {
+    total: 0,
+    text: 0,
+    image: 0,
+    unsupported: 0,
+    skipped: 0,
+    failed: 0,
+    modelUsed: 0,
+    modelNotUsed: 0,
+    modelNotInspected: 0,
+    modelUnrecorded: 0,
+  };
+  const unchecked = [];
+  const duplicates = [];
+
+  for (const item of items) {
+    for (const attachment of item.attachments ?? []) {
+      counts.total += 1;
+      if (Object.hasOwn(counts, attachment.status)) counts[attachment.status] += 1;
+
+      if (attachment.modelStatus === 'used') counts.modelUsed += 1;
+      else if (attachment.modelStatus === 'not-used') counts.modelNotUsed += 1;
+      else if (attachment.modelStatus === 'not-inspected') counts.modelNotInspected += 1;
+      else counts.modelUnrecorded += 1;
+
+      if (attachment.status === 'skipped' && /^重复附件：/.test(attachment.note || '')) {
+        duplicates.push({
+          key: item.key,
+          id: attachment.id,
+          filename: attachment.filename,
+          modelStatus: attachment.modelStatus ?? null,
+          reason: attachment.note,
+        });
+      } else if (FETCH_UNINSPECTED_STATUSES.has(attachment.status)) {
+        unchecked.push({
+          key: item.key,
+          id: attachment.id,
+          filename: attachment.filename,
+          reason: attachment.note || `fetch 状态：${attachment.status}`,
+        });
+      } else if (!attachment.modelStatus) {
+        unchecked.push({
+          key: item.key,
+          id: attachment.id,
+          filename: attachment.filename,
+          reason: '模型检查状态未记录',
+        });
+      } else if (attachment.modelStatus === 'not-inspected') {
+        unchecked.push({
+          key: item.key,
+          id: attachment.id,
+          filename: attachment.filename,
+          reason: '模型明确未检查',
+        });
+      }
+    }
+  }
+
+  return { counts, unchecked, duplicates };
 }
 
 /** 需修改与不合格优先；同档内按 Key 排序，保证输出稳定。 */
@@ -221,6 +304,19 @@ export function formatTerminalSummary(model) {
 
   for (const item of model.unreachable) {
     lines.push(`  ${item.key}  (无法访问：${item.kind})`);
+  }
+
+  const attachmentCounts = model.attachmentSummary?.counts;
+  if (attachmentCounts && attachmentCounts.total > 0) {
+    const duplicateCount = model.attachmentSummary.duplicates.length;
+    lines.push('');
+    lines.push(
+      `附件：${attachmentCounts.total} 个（文本 ${attachmentCounts.text} / 图片 ${attachmentCounts.image} / ` +
+        `无法解析 ${attachmentCounts.unsupported} / 跳过 ${attachmentCounts.skipped} / ` +
+        `失败 ${attachmentCounts.failed}），` +
+        `${model.attachmentSummary.unchecked.length} 个未能检查或未记录` +
+        (duplicateCount > 0 ? `，${duplicateCount} 个内容重复` : ''),
+    );
   }
 
   if (model.summary.ruleFailureRanking.length > 0) {
@@ -286,6 +382,8 @@ export function renderMarkdown(model) {
     });
     out.push('');
   }
+
+  renderAttachmentOverview(out, model.attachmentSummary);
 
   if (model.unreachable.length > 0) {
     out.push('### 无法访问的需求');
@@ -419,9 +517,113 @@ export function renderMarkdown(model) {
       }
       out.push('');
     }
+
+    renderItemAttachments(out, item);
   }
 
   return `${out.join('\n')}\n`;
+}
+
+const ATTACHMENT_STATUS_LABELS = {
+  text: '已抽取文本',
+  image: '图片',
+  unsupported: '无法解析',
+  skipped: '已跳过',
+  failed: '失败',
+};
+
+const MODEL_STATUS_LABELS = {
+  used: '已使用',
+  'not-used': '未使用',
+  'not-inspected': '未检查',
+};
+
+/** 报告开头的附件总览与"未能检查"告警。 */
+function renderAttachmentOverview(out, attachmentSummary) {
+  const counts = attachmentSummary?.counts ?? { total: 0 };
+  out.push('## 附件检查总览');
+  out.push('');
+
+  if (counts.total === 0) {
+    out.push('本次运行未发现附件。');
+    out.push('');
+    return;
+  }
+
+  out.push(
+    `本次共 ${counts.total} 个附件：文本 ${counts.text} / 图片 ${counts.image} / ` +
+      `无法解析 ${counts.unsupported} / 跳过 ${counts.skipped} / 失败 ${counts.failed}。`,
+  );
+  out.push('');
+  const duplicateNotInspected = (attachmentSummary.duplicates ?? []).filter(
+    (entry) => entry.modelStatus === 'not-inspected',
+  ).length;
+  out.push(
+    `模型检查状态：已使用 ${counts.modelUsed} / 未使用 ${counts.modelNotUsed} / ` +
+      `未检查 ${counts.modelNotInspected}` +
+      (duplicateNotInspected > 0 ? `（其中 ${duplicateNotInspected} 个为内容重复附件）` : '') +
+      ` / 未记录 ${counts.modelUnrecorded}。`,
+  );
+  out.push('');
+
+  if (attachmentSummary.unchecked.length > 0) {
+    out.push('### 未能检查的附件');
+    out.push('');
+    out.push('以下附件未能下载、解析，或模型未记录检查状态。它们不影响规则结论，但评审可能因此不完整：');
+    out.push('');
+    for (const entry of attachmentSummary.unchecked) {
+      const id = entry.id ? `（#${entry.id}）` : '';
+      out.push(`- \`${entry.key}\` / ${entry.filename}${id}：${entry.reason}`);
+    }
+    out.push('');
+  }
+
+  if (attachmentSummary.duplicates.length > 0) {
+    out.push('### 内容重复的附件');
+    out.push('');
+    out.push('以下附件与同 issue 内其他附件内容相同，已按 SHA-256 去重，评审覆盖以原附件为准：');
+    out.push('');
+    for (const entry of attachmentSummary.duplicates) {
+      const id = entry.id ? `（#${entry.id}）` : '';
+      out.push(`- \`${entry.key}\` / ${entry.filename}${id}：${entry.reason}`);
+    }
+    out.push('');
+  }
+}
+
+/** 每条需求下的附件检查明细：fetch 状态与模型检查状态并列。 */
+function renderItemAttachments(out, item) {
+  out.push('#### 附件检查');
+  out.push('');
+
+  if (!item.attachments || item.attachments.length === 0) {
+    out.push('（该 issue 无附件。）');
+    out.push('');
+    return;
+  }
+
+  out.push('| 文件 | 类型 | 大小 | 下载/抽取 | 模型检查 | 抽取字符 | 备注 |');
+  out.push('| --- | --- | --- | --- | --- | --- | --- |');
+
+  for (const attachment of item.attachments) {
+    const status =
+      ATTACHMENT_STATUS_LABELS[attachment.status] ?? attachment.status ?? '(未知)';
+    const modelStatus = attachment.modelStatus
+      ? MODEL_STATUS_LABELS[attachment.modelStatus] ?? attachment.modelStatus
+      : '未记录';
+    const chars =
+      attachment.status === 'text'
+        ? `${attachment.textChars ?? 0}${attachment.truncated ? '（已截断）' : ''}`
+        : '—';
+    out.push(
+      `| ${escapeCell(attachment.filename)}${attachment.id ? `（#${escapeCell(String(attachment.id))}）` : ''} | ` +
+        `${escapeCell(attachment.mimeType || '(未知)')} | ` +
+        `${formatBytes(attachment.size)} | ${escapeCell(status)} | ${escapeCell(modelStatus)} | ` +
+        `${escapeCell(chars)} | ${escapeCell(attachment.note || '')} |`,
+    );
+  }
+
+  out.push('');
 }
 
 /** 渲染问题的位置描述。文档级问题没有行号，不能渲染成"第 null 行"。 */

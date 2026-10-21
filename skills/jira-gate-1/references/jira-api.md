@@ -152,12 +152,12 @@ node scripts/jira-cli.mjs transition <KEY|URL> --to 评审中   # 执行流转
 
 ## 10. 评审报告附件上传
 
-需求质量的细读结论由同仓库技能 `review-jira-songlizhi` 产出（对 Jira 只读），本技能负责把它的 Markdown 报告上传成需求单附件。
+需求质量的细读结论由同仓库技能 `review-jira-req` 产出（对 Jira 只读），本技能负责把它的 Markdown 报告上传成需求单附件。
 
-1. **技能位置**：容器内 `/data/skills/review-jira-songlizhi`（随 `skills/` 只读挂载）；桌面端为 `<仓库>/skills/review-jira-songlizhi`。执行它的流水线前先做凭据桥接——它读 `JIRA_PAT`，容器里注入的是 `JIRA_TOKEN`：
+1. **技能位置**：容器内 `/data/skills/review-jira-req`（随 `skills/` 只读挂载）；桌面端为 `<仓库>/skills/review-jira-req`。执行它的流水线前先做凭据桥接——桌面端它读 `JIRA_PAT`，容器锁定模式下直接读 `JIRA_TOKEN`：
 
 ```bash
-export SKILL_DIR=/data/skills/review-jira-songlizhi
+export SKILL_DIR=/data/skills/review-jira-req
 export JIRA_PAT="$JIRA_TOKEN"
 export JIRA_BASE_URL="${JIRA_BASE_URL:-https://jira.in.wezhuiyi.com}"
 ```
@@ -199,7 +199,7 @@ node scripts/jira-cli.mjs attach-list <KEY|URL>   # 读回确认：列表里出�
 | 上传报 `Content-Type` 相关 400/415 | 手工设置了 multipart 的 `Content-Type`；改为让 `fetch` 自动生成边界 |
 | 上传返回 `ok:true` 但单子上看不到附件 | 站点接受了 POST 不等于挂上了；用 `attach-list` 读回 `fields.attachment` 确认，并核对是否看的是同一站点（生产/测试的 Key 可能同名） |
 | 附件作者与评论作者不是同一人 | 附件按**令牌账号**记录作者，评论按令牌账号写入，属正常现象 |
-| `JIRA_PAT` 缺失导致 review-jira-songlizhi 直接退出 | 忘了凭据桥接；见 §10 的 `export JIRA_PAT="$JIRA_TOKEN"` |
+| `JIRA_PAT` 缺失导致 review-jira-req 直接退出 | 桌面端忘了设置凭据；容器锁定模式应检查 `JIRA_TOKEN`，见 §10 的凭据桥接 |
 | `report-conclusion.mjs` 报「匹配到 N 条结论」 | 报告里有多个 issue；评论那行只服务单个需求，必须带上 `<KEY>` 参数后重跑 |
 | `report-conclusion.mjs` 报「报告里找不到 XXX 的小节」 | 报告不是这份 Key 的（常见于复用了上一轮的报告路径）；用本轮 `report.mjs` 刚输出的那个 md 路径 |
 | `report-conclusion.mjs` 报「结论取值非法」 | 报告结构变了（非「- 结论：**X**」格式）；核对报告版本，不要手工塞一个结论进评论 |

@@ -131,7 +131,7 @@ Jira 错误响应形如 `{"errorMessages":["..."],"errors":{...}}`，`jira.mjs` 
 | 输出里有 `[压缩包解压失败]` | 运行环境缺少可用解压命令（镜像异常或换了非容器环境）；如实记为"附件无法解析"并报告，不要自行安装软件，也不要臆测包内内容 |
 | 评论数与 `fields.comment.total` 不一致 | `getIssue()` 会自动再拉一次 `/comment` 全量接口 |
 | 找不到 `addComment` / `transitionToStatus` / `uploadAttachment` / `setGateResult` | 本技能是只读预演版，这些写函数刻意不存在；要写 Jira 请用 `jira-gate-1` |
-| `JIRA_PAT` 缺失导致 review-jira-songlizhi 直接退出 | 忘了凭据桥接；见 `SKILL.md` §10 的 `export JIRA_PAT="$JIRA_TOKEN"` |
+| `JIRA_PAT` 缺失导致 review-jira-req 直接退出 | 桌面端忘了设置凭据；容器锁定模式应检查 `JIRA_TOKEN`，见 `SKILL.md` §10 的凭据桥接 |
 | `report-conclusion.mjs` 报「匹配到 N 条结论」 | 报告里有多个 issue；必须带上 `<KEY>` 参数后重跑 |
 | `report-conclusion.mjs` 报「报告里找不到 XXX 的小节」 | 报告不是这份 Key 的（常见于复用了上一轮的报告路径）；用本轮 `report.mjs` 刚输出的那个 md 路径 |
 | `report-conclusion.mjs` 报「结论取值非法」 | 报告结构变了（非「- 结论：**X**」格式）；核对报告版本，不要手工塞一个结论进草稿 |

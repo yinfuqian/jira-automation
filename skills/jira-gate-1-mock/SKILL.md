@@ -1,13 +1,13 @@
 ---
 name: jira-gate-1-mock
-description: 对 Jira 需求单做需求评审准入检查（G1）的只读预演版。取数、判定、难度分级与达标结论都和 jira-gate-1 一致，依次调用 review-jira-songlizhi 与 review-jira-design 产出需求质量评审报告和 PRD—原型一致性审核报告，但不写入 Jira——不写评论、不回写门禁字段、不上传附件、不流转状态，而是把评论草稿与两份报告打成压缩包供下载。当用户要求"预演 / 演练 / 试跑 G1 准入检查"、"检查需求是否达标但先不要在单子上留痕"，或给出 Jira 需求链接（如 https://jira.in.wezhuiyi.com/browse/CALL-1446）并要求做准入检查且不要写评论时使用。
+description: 对 Jira 需求单做需求评审准入检查（G1）的只读预演版。取数、判定、难度分级与达标结论都和 jira-gate-1 一致，依次调用 review-jira-req 与 review-jira-design 产出需求质量评审报告和 PRD—原型一致性审核报告，但不写入 Jira——不写评论、不回写门禁字段、不上传附件、不流转状态，而是把评论草稿与两份报告打成压缩包供下载。当用户要求"预演 / 演练 / 试跑 G1 准入检查"、"检查需求是否达标但先不要在单子上留痕"，或给出 Jira 需求链接（如 https://jira.in.wezhuiyi.com/browse/CALL-1446）并要求做准入检查且不要写评论时使用。
 metadata:
   short-description: G1 准入检查只读预演，结果打包下载
 ---
 
 # Jira 需求准入检查（预演版）
 
-用户给一个 Jira 需求链接，你自己打开它，读完描述、附件、依赖、子任务和历史评论，按准入清单逐项判定，给出**需求难度分级**与**是否达标**，再依次跑需求质量评审（`review-jira-songlizhi`）与原型设计准入审核（`review-jira-design`），最后把**评论草稿**和**两份报告**打成压缩包交给用户。
+用户给一个 Jira 需求链接，你自己打开它，读完描述、附件、依赖、子任务和历史评论，按准入清单逐项判定，给出**需求难度分级**与**是否达标**，再依次跑需求质量评审（`review-jira-req`）与原型设计准入审核（`review-jira-design`），最后把**评论草稿**和**两份报告**打成压缩包交给用户。
 
 ## 与 jira-gate-1 的关系
 
@@ -32,7 +32,7 @@ metadata:
 ```text
 <工作目录>/outputs/<KEY>-G1预检包-<时间戳>.zip
   ├── <KEY>-G1预检评论.txt          # 评论草稿，Jira wiki 标记，可直接粘贴到需求单评论区
-  ├── <KEY>-需求评审报告-宋立志.md   # 需求质量评审报告（review-jira-songlizhi 产出）
+  ├── <KEY>-需求评审报告-宋立志.md   # 需求质量评审报告（review-jira-req 产出）
   └── <KEY>-原型设计准入报告.html     # PRD—原型一致性审核报告（review-jira-design 产出，自包含 HTML）
 ```
 
@@ -74,7 +74,7 @@ metadata:
   # 建议流转人（只读，仅用于在草稿里写「建议处理人」，不会真的 @）
   node <技能目录>/scripts/jira-cli.mjs flow-owner <KEY|URL>
 
-  # --- 先跑 review-jira-songlizhi 五步流水线生成报告 md（见 §10）---
+  # --- 先跑 review-jira-req 五步流水线生成报告 md（见 §10）---
   node <技能目录>/scripts/report-conclusion.mjs <报告路径> <KEY>   # → 不合格 / 需修改 / 合格
 
   # --- 再跑 review-jira-design（读它的 SKILL.md 按步骤执行）---
@@ -244,16 +244,16 @@ const owner = await j.resolveFlowOwner(issue);       // 只读：拿到建议处
 
    在对话摘要里给出预演值（例如 `G1准入结论=不通过 / G1需求难度=中`、`若执行会流转到「评审中」`），并注明**未回写、未流转**。
 
-### 10. 生成需求质量评审报告（review-jira-songlizhi）
+### 10. 生成需求质量评审报告（review-jira-req）
 
-G1 草稿只给门禁结论；需求质量的细读结论由同仓库的 `review-jira-songlizhi` 技能产出，产物是 Markdown 报告，**作为压缩包内的文件交付**。
+G1 草稿只给门禁结论；需求质量的细读结论由同仓库的 `review-jira-req` 技能产出，产物是 Markdown 报告，**作为压缩包内的文件交付**。
 
-**技能位置**：容器内固定为 `/data/skills/review-jira-songlizhi`（桌面端为 `<仓库>/skills/review-jira-songlizhi`）。先完整读它的 `SKILL.md`，严格按它的五步流水线执行；**它自身对 Jira 只读**（`bin/` 里没有任何写请求），不要改动它的脚本。
+**技能位置**：容器内固定为 `/data/skills/review-jira-req`（桌面端为 `<仓库>/skills/review-jira-req`）。先完整读它的 `SKILL.md`，严格按它的五步流水线执行；**它自身对 Jira 只读**（`bin/` 里没有任何写请求），不要改动它的脚本。
 
 **环境桥接**（桌面端它读 `JIRA_PAT`；容器内后端已注入 `SKILLRUN_ENV_LOCKED=1`，它直接读 `JIRA_TOKEN`，下面几条命令带上也无副作用）：
 
 ```bash
-export SKILL_DIR=/data/skills/review-jira-songlizhi
+export SKILL_DIR=/data/skills/review-jira-req
 export JIRA_PAT="$JIRA_TOKEN"
 export JIRA_BASE_URL="${JIRA_BASE_URL:-https://jira.in.wezhuiyi.com}"
 ```
@@ -454,7 +454,7 @@ h4. 检查项
 
 - **对 Jira 严格只读**：不写评论、不写字段、不上传附件、不流转状态、不指派经办人。脚本层已不提供写入口，不要绕过或新增写能力。
 - 交付物只有 §12 的压缩包（评论草稿 + 需求评审报告 + 原型设计准入报告）；对话里给出摘要与压缩包绝对路径。
-- **必须依次调用 `review-jira-songlizhi` 与 `review-jira-design`**：两份报告都要真进压缩包；原型缺失或无法读取时，设计报告按「审核未完成」交付，不要跳过这一步、也不要自造结论。
+- **必须依次调用 `review-jira-req` 与 `review-jira-design`**：两份报告都要真进压缩包；原型缺失或无法读取时，设计报告按「审核未完成」交付，不要跳过这一步、也不要自造结论。
 - 不编造需求未写明的内容，不把推测写成已确认事实。
 - 依赖项、非功能要求、工作量与子任务都要检查并记录，但按下列等级处理：只有 5.2.1 / 5.8.1 / 已触发的 6.3.1 / 6.6.1 与 §10 红线才判不达标，6.7.1 在清单里注明「不阻断 G1，排期前补齐」。
 - 不把单据字段缺失、测试数据未准备、纯技术细节当作不达标理由。

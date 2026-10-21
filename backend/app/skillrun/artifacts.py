@@ -3,7 +3,7 @@
 技能以任务工作目录为 cwd 运行，交付物固定落在工作目录下的约定子目录里：
 
 - ``outputs/``：打包类交付物，例如 ``jira-gate-1-mock`` 的 ``<KEY>-G1预检包-<时间戳>.zip``；
-- ``reports/``：报告类交付物，例如 ``review-jira-songlizhi`` 的 ``review-report-<时间戳>.md``。
+- ``reports/``：报告类交付物，例如 ``review-jira-req`` 的 ``review-report-<时间戳>.md``。
 
 工作目录里的 ``work/`` 是解析附件用的临时目录，不是交付物，这里不列也不允许下载。
 本模块只读文件系统，不接受任何外部拼接的目录。
