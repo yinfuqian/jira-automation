@@ -1,4 +1,4 @@
 interface:
   display_name: "Jira 需求准入检查（预演）"
-  short_description: "只读预演 G1 准入检查：给出难度分级与达标结论，依次调用 review-jira-req 与 review-jira-design，把评论草稿与两份报告打包成压缩包下载，不写 Jira"
-  default_prompt: "用 $jira-gate-1-mock 预演这个 Jira 需求链接的评审准入检查：给出难度分级与达标结论；依次调用 review-jira-req 生成需求质量评审报告、review-jira-design 生成原型设计准入报告；对 Jira 只读，不要写评论、不要回写门禁字段、不要流转状态、不要上传附件，把评论草稿与两份报告打包成压缩包供下载。"
+  short_description: "只读预演 G1 准入检查：只处理「故事」单，按 PRD 需求准入 Checklist 用绿勾/红叉生成评论草稿，再调用 review-jira-req 与 review-jira-design，把草稿和两份报告打包下载，不写 Jira"
+  default_prompt: "用 $jira-gate-1-mock 预演这个 Jira 需求链接的 G1 需求准入检查。先确认单据类型是「故事」，不是就跳过；按 PRD 需求准入 Checklist 逐项判定并用绿勾/红叉生成评论草稿；依次调用 review-jira-req 生成需求质量评审报告、review-jira-design 生成原型设计准入报告；对 Jira 严格只读，不要写评论、不要回写门禁字段、不要流转状态、不要上传附件，把评论草稿与两份报告打包成压缩包供下载。"

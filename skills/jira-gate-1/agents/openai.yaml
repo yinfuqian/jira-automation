@@ -1,4 +1,4 @@
 interface:
-  display_name: "Jira 需求准入检查"
-  short_description: "检查 Jira 需求单是否达标并分级难度，不达标写入评论、流转到评审中并 @ 流转人"
-  default_prompt: "用 $jira-gate-1 检查这个 Jira 需求链接是否达到评审准入标准，给出难度分级；不达标就把不达标点写进单子评论，把单子流转到「评审中」并在评论里 @ 流转人。"
+  display_name: "Jira G1 需求准入检查"
+  short_description: "按 PRD 需求准入 Checklist 检查 Jira 故事单：评论里用绿勾/红叉逐项展示；通过不流转状态，不通过流转到「评审中」并 @ 流转人；随后生成评审报告附件"
+  default_prompt: "用 $jira-gate-1 检查这个 Jira 需求链接是否达到 G1 需求准入标准。先确认单据类型是「故事」，不是就跳过；按 PRD 需求准入 Checklist 逐项判定，把结论和绿勾/红叉清单写进评论。通过时保持当前状态不流转；不通过就流转到「评审中」并在评论里 @ 流转人；最后调用 review-jira-req 生成评审报告并上传附件。"

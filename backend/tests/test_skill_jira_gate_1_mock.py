@@ -1,4 +1,4 @@
-"""jira-gate-1-mock 契约测试：只读边界、压缩包交付与打包脚本行为。"""
+"""jira-gate-1-mock 契约测试：故事类型门禁、只读边界、压缩包交付与打包脚本行为。"""
 import json
 import importlib.util
 import shutil
@@ -33,6 +33,7 @@ class MockSkillPackagingTests(unittest.TestCase):
     def test_skill_files_are_shipped_with_the_repo(self):
         expected = [
             MOCK_SKILL_DIR / "SKILL.md",
+            MOCK_SKILL_DIR / "runtime.json",
             MOCK_SKILL_DIR / "agents" / "openai.yaml",
             MOCK_SKILL_DIR / "references" / "checklist.md",
             MOCK_SKILL_DIR / "references" / "jira-api.md",
@@ -86,6 +87,7 @@ class MockSkillReadOnlyTests(unittest.TestCase):
     def test_cli_exposes_only_read_commands(self):
         source = (MOCK_SKILL_DIR / "scripts" / "jira-cli.mjs").read_text(encoding="utf-8")
 
+        self.assertIn('case "precheck"', source)
         self.assertIn('case "get"', source)
         self.assertIn('case "attach-list"', source)
         for command in ("comment", "comment-update", "gate-set", "transition"):
@@ -94,10 +96,56 @@ class MockSkillReadOnlyTests(unittest.TestCase):
         for method in WRITE_METHODS:
             self.assertNotIn(f'"{method}"', source)
 
+    def test_issue_type_gate_is_story_only(self):
+        """类型门禁只放行「故事」/ Story，且脚本仍不包含任何写方法。"""
+        source = (MOCK_SKILL_DIR / "scripts" / "jira.mjs").read_text(encoding="utf-8")
+
+        self.assertIn('const SUPPORTED_ISSUE_TYPES = ["故事", "Story"]', source)
+        self.assertIn("export function isSupportedIssueType", source)
+        self.assertIn("export async function precheckIssueType", source)
+
+        if NODE:
+            jira_url = (MOCK_SKILL_DIR / "scripts" / "jira.mjs").as_uri()
+            script = f"""
+const m = await import("{jira_url}");
+console.log(JSON.stringify([m.isSupportedIssueType("故事"), m.isSupportedIssueType("Story"), m.isSupportedIssueType("缺陷")]));
+"""
+            result = subprocess.run(
+                [NODE, "-e", script],
+                capture_output=True,
+                encoding="utf-8",
+                errors="replace",
+                check=False,
+                timeout=60,
+            )
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertEqual(json.loads(result.stdout), [True, True, False])
+
+    def test_runtime_prompt_requires_precheck_and_packaging(self):
+        """服务端调用时必须先做类型预检，并把结果打进压缩包。"""
+        payload = json.loads((MOCK_SKILL_DIR / "runtime.json").read_text(encoding="utf-8"))
+
+        self.assertEqual(payload["required_inputs"], ["jira_url"])
+        self.assertIn("precheck", payload["prompt_template"])
+        self.assertIn("review-jira-req", payload["prompt_template"])
+        self.assertIn("review-jira-design", payload["prompt_template"])
+        self.assertIn("pack-deliverables.mjs", payload["prompt_template"])
+
     def test_skill_documents_read_only_and_package_delivery(self):
-        """SKILL.md 要把「不写 Jira」和「压缩包交付」写清楚。"""
+        """SKILL.md 要把「故事类型门禁」「PRD 清单」「不写 Jira」「压缩包交付」写清楚。"""
         text = (MOCK_SKILL_DIR / "SKILL.md").read_text(encoding="utf-8")
 
+        self.assertIn("只处理类型为「故事」", text)
+        self.assertIn("precheck <KEY|URL>", text)
+        self.assertIn("PRD 需求准入 Checklist", text)
+        self.assertIn("### 5. 逐项判定", text)
+        self.assertIn("5.1 事实源", text)
+        self.assertIn("6.6.2 性能/安全/隐私-敏感数据", text)
+        self.assertIn("开发设计中", text)
+        self.assertIn("需求设计", text)
+        self.assertIn("评审中", text)
+        self.assertNotIn("通过→开发设计中", text)
+        self.assertNotIn("退回补充→需求设计", text)
         self.assertIn("### 12. 打包交付", text)
         self.assertIn("### 11. 生成原型设计准入报告（review-jira-design）", text)
         self.assertIn("### 13. 收尾：清理本次任务的工作区中间产物", text)
@@ -107,11 +155,21 @@ class MockSkillReadOnlyTests(unittest.TestCase):
         self.assertIn("<KEY>-需求评审报告-宋立志.md", text)
         self.assertIn("<KEY>-原型设计准入报告.html", text)
         self.assertIn("**对 Jira 严格只读**", text)
+        self.assertNotIn("难度：", text)
+        self.assertNotIn("G1需求难度", text)
         # 旧的写 Jira 口径不得残留。
         self.assertNotIn("jira-cli.mjs comment ", text)
         self.assertNotIn("jira-cli.mjs attach <", text)
         self.assertNotIn("jira-cli.mjs transition ", text)
         self.assertNotIn("上传评审报告附件", text)
+
+    def test_skill_requires_two_review_skills(self):
+        """预演流程必须依次调用需求评审与原型设计审核。"""
+        text = (MOCK_SKILL_DIR / "SKILL.md").read_text(encoding="utf-8")
+
+        self.assertIn("review-jira-req", text)
+        self.assertIn("review-jira-design", text)
+        self.assertLess(text.index("### 10. 生成需求质量评审报告"), text.index("### 11. 生成原型设计准入报告"))
 
 
 @unittest.skipUnless(NODE, "未安装 node，跳过打包脚本测试")
@@ -124,14 +182,14 @@ class PackDeliverablesTests(unittest.TestCase):
         self.work = Path(self.tmp.name)
         self.comment = self.work / "comment.txt"
         self.comment.write_text(
-            "h3. G1 需求准入 AI 预检（预演）：不达标（退回补充）\n"
+            "h3. G1 需求准入结论（预演）：退回补充（流转至评审中）\n"
             "\n"
-            "* 难度：中 | 检查对象：本单描述 | 依据：PRD 需求准入 Checklist\n"
+            "* 结论：退回补充 | 依据：PRD 需求准入 Checklist\n"
             "* 建议处理人：[~liu.huan]｜建议流转：评审中（预演未执行）\n"
             "\n"
-            "h4. 检查项\n"
+            "h4. MUST（8 项）\n"
             "\n"
-            "# (x) *5.2.1 背景与价值*（MUST）：未写业务价值 → 补影响范围；证据：PRD §1\n"
+            "# (x) *5.2 目标与范围*（MUST）：未写业务价值 → 补影响范围；证据：PRD §1\n"
             "\n"
             "* 报告附件：CALL-1941-需求评审报告-宋立志.md（已在压缩包内）｜评审结论：需修改\n",
             encoding="utf-8",
@@ -202,7 +260,7 @@ class PackDeliverablesTests(unittest.TestCase):
     def test_warns_on_markdown_syntax_in_comment(self):
         """评论草稿残留 Markdown 粗体时给出 warning，但不阻断打包。"""
         self.comment.write_text(
-            "h3. G1 需求准入 AI 预检（预演）：达标\n\n# (/) *5.1.1 需求来源*（MUST）\n\n**粗体**\n\n* 报告附件：x｜评审结论：合格\n",
+            "h3. G1 需求准入结论（预演）：通过\n\n# (/) *5.1 事实源*（MUST）\n\n**粗体**\n\n* 报告附件：x｜评审结论：合格\n",
             encoding="utf-8",
         )
 

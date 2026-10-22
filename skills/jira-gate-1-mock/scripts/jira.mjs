@@ -83,6 +83,32 @@ const DEFAULT_GATE_FIELD_NAMES = {
   checkedAt: ["G1预检时间", "G1需求准入预检时间", "需求准入预检时间"],
 };
 
+// G1 只处理「故事」类型的单子；英文站点返回 Story 时视为同一种类型。
+const SUPPORTED_ISSUE_TYPES = ["故事", "Story"];
+
+/** 判断 Jira 问题类型是否在 G1 的处理范围内（只认「故事」/ Story）。 */
+export function isSupportedIssueType(issueType) {
+  return SUPPORTED_ISSUE_TYPES.includes(String(issueType || "").trim());
+}
+
+/**
+ * 类型预检：在读取附件、调用其它技能或生成任何交付物之前先确认单据类型。
+ * 本条命令只读；返回 supported=false 时调用方必须立即停止。
+ */
+export async function precheckIssueType(keyOrUrl, options = {}) {
+  const issue = options.issue || await getIssue(keyOrUrl, options);
+  const issueType = String(issue.issueType || "").trim();
+  return {
+    ok: true,
+    key: issue.key,
+    issueType,
+    expected: "故事",
+    supported: isSupportedIssueType(issueType),
+    status: issue.status,
+    summary: issue.summary,
+  };
+}
+
 /** 从任意输入中解析 Jira 问题 Key */
 export function parseIssueKey(input) {
   if (!input) return null;

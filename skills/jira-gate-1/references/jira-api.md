@@ -108,14 +108,14 @@ nodeRepl.write(["ADD_COMMENTS", "EDIT_ISSUES", "TRANSITION_ISSUES"].map(n => `${
 
 实测 `ZY20260061-3343`：`ADD_COMMENTS=true`、`EDIT_ISSUES=true`、`TRANSITION_ISSUES=true`。若 `ADD_COMMENTS=false`，不要反复重试，直接告知用户缺少评论权限。
 
-`TRANSITION_ISSUES` 是「不达标时流转到评审中」所需的权限。为 `false` 时**跳过流转动作**，评论里写「未流转（缺少流转权限）」，同样不要反复重试。
+`TRANSITION_ISSUES` 是退回补充时流转状态（→ 评审中）所需的权限。为 `false` 时**跳过流转动作**，评论里写「未流转（缺少流转权限）」，同样不要反复重试。结论为通过时不调用流转接口，因此不依赖该权限。
 
 `CREATE_ATTACHMENTS` 是「上传评审报告附件」所需的权限（见 §10）。为 `false` 时跳过上传，并在对话里如实说明缺权限。
 
 ## 8. 评论写入实操
 
 - 评论模板与 Jira wiki 标记对照见 `SKILL.md`「输出模板」节；**评论正文用 Jira wiki 标记，不要提交 Markdown 表格**，否则会显示成原始符号。
-- 评论只列检查点：一行难度结论 + 检查项清单；每项行首必须有标记——通过写 `(/)`（绿勾），不通过写 `(x)`（红叉）。不通过项每条一行、80 字以内；判定过程与难度维度留在对话回复里。
+- 评论只列检查点：结论摘要 + 检查项清单；每项行首必须有标记——通过写 `(/)`（绿勾），不通过写 `(x)`（红叉）。不通过项每条一行、80 字以内；判定过程留在对话回复里。
 - 不达标时元信息区多一行「待处理人」：`* 待处理人：[~登录名]｜流转：<实际流转结果>`，`@` 写法见 §9。
 - 评论**末尾固定一行**「报告附件 + 评审结论」：`* 报告附件：<KEY>-需求评审报告-宋立志.md（已上传）｜评审结论：需修改`，与检查项清单之间空一行；达标与不达标都要有（见 §10 第 8 条）。`评审结论` 只取 `不合格 / 需修改 / 合格`，且只能由 `report-conclusion.mjs` 从报告 md 提取，不许自己判。
 - 写入后读回验证，确认渲染正常、无截断：
@@ -131,23 +131,33 @@ nodeRepl.write(last.id + " | " + last.author + " | " + last.body.slice(0, 120));
 - 评论正文中避免出现未转义的花括号组合（`{color}` 之类会被当作宏）。
 - 结论只以评论留痕，不生成报告文档；本地仅保留附件与解析中间文件。
 
-## 9. 交付顺序与「不达标时的流转与 @ 流转人」
+## 9. 交付顺序与「仅退回补充时流转并 @ 流转人」
 
-第 6 条的交付顺序对所有结论都适用（评论 → 门禁字段 → 附件 → 流转）；其余条目描述的流转动作**仅在 AI 预检结论为不达标时执行**，结论达标时不动状态、也不 @ 人。
+第 6 条的交付顺序对所有结论都适用（评论 → 门禁字段 → 附件 → 流转）。前三步对所有结论执行，**状态流转只在结论为「退回补充」时执行**：
+
+- 结论「通过」：**不流转状态**，保持当前状态，允许进入技术方案设计；不 @ 人。
+- 结论「退回补充」：流转到 **评审中**，并在评论里 @ 流转人。
+
+**先做类型预检**：只有问题类型为「故事」（英文站点 `Story` 视为同一类型）才执行本技能；类型不符时直接停止，不做任何写操作。命令行入口：
+
+```bash
+node scripts/jira-cli.mjs precheck <KEY|URL>
+# {"ok":true,"key":"...","issueType":"故事","expected":"故事","supported":true,"status":"需求设计"}
+```
 
 1. **流转人从哪来**：本站在 `/rest/api/2/field` 里没有名为「流转人」的字段（实测名字含「流转」的字段为 0 个），因此本技能已确认的口径是**取经办人 `assignee`**；仅在经办人为空时才按 `assignee → reporter → creator` 回退，回退取到时对话摘要里要写明实际来源（`resolveFlowOwner()` 返回的 `source` 字段会标明）。需要长期换口径时在技能目录的 `jira-config.json`（即仓库 `skills/jira-gate-1/jira-config.json`，随技能目录挂载进容器）里用 `flowOwnerField` 指定人员字段名，**不要改脚本**。
 2. **@ 写法**：Jira Server / DC 按登录名引用，`[~liu.huan]` 渲染为「刘欢」。`resolveFlowOwner()` 直接返回拼好的 `mention`；实测 `flow-owner ZYSQ-95` → `{"name":"liu.huan","displayName":"刘欢","mention":"[~liu.huan]","field":"assignee"}`。
-3. **目标状态固定为「评审中」**（实测站点状态清单里存在该状态）。**不要写死流转 id**：不同项目工作流的流转 id 与流转名都可能不同，`transitionToStatus()` 按目标状态名匹配（先比 `to`，再比 `name`）。
+3. **退回补充的目标状态固定为「评审中」**；结论为通过时不得调用流转接口。**不要写死流转 id**：不同项目工作流的流转 id 与流转名都可能不同，`transitionToStatus()` 按目标状态名匹配（先比 `to`，再比 `name`）。
 
 ```bash
 node scripts/jira-cli.mjs transitions <KEY|URL>             # 只读：看当前可用流转
 node scripts/jira-cli.mjs flow-owner <KEY|URL>              # 只读：看流转人与 @ 写法
-node scripts/jira-cli.mjs transition <KEY|URL> --to 评审中   # 执行流转
+node scripts/jira-cli.mjs transition <KEY|URL> --to 评审中       # 仅退回补充
 ```
 
-4. **匹配不到流转时不抛错**：返回 `{ok:false, reason:"no-transition", status, target, available}`，`available` 是当前可用流转列表。实测 `CALL-1446` 只有 `To Do→待办`、`初步处理→完成`、`跟进需求→需求澄清` 三条，**没有「评审中」**——这类单子按 `SKILL.md` §9 记「未流转（该单当前状态无「评审中」流转）」，并在对话里列出 `available` 交人工处理，不要改用其他状态。
+4. **匹配不到流转时不抛错**：返回 `{ok:false, reason:"no-transition", status, target, available}`，`available` 是当前可用流转列表。若当前状态没有通向目标状态的流转，按 `SKILL.md` §9 记「未流转（该单当前状态无目标状态流转）」，并在对话里列出 `available` 交人工处理，不要改用其他状态。
 5. 已在目标状态时返回 `{ok:true, skipped:true, reason:"already-in-target"}`，不重复发起流转。
-6. 写评论、回写门禁字段、上传附件、流转的顺序固定为：**评论（含 @）→ 门禁字段 → 附件 → 流转**，流转放最后（见 §10）。前三步对所有结论都执行，只有流转那一步仅在结论为「不达标」时做。
+6. 写评论、回写门禁字段、上传附件、流转的顺序固定为：**评论（含 @）→ 门禁字段 → 附件 → 流转**，流转放最后（见 §10）。前三步对所有结论都执行；流转只在退回补充时执行，目标为「评审中」，通过不流转。
 7. 因为是评论先写、流转后做，评论里的「流转：」先按预期结果写；流转跑完必须核对返回值，任一非成功分支都用 `comment-update` 改成实际措辞（措辞见 `SKILL.md` §9 的表）。
 
 ## 10. 评审报告附件上传
@@ -222,14 +232,15 @@ node scripts/jira-cli.mjs attach-list <KEY|URL>   # 读回确认：列表里出�
 | 字段名 | 类型 | 取值 |
 |---|---|---|
 | `G1准入结论` | 单选列表 | `未检查` / `通过` / `不通过` / `豁免` |
-| `G1需求难度` | 单选列表 | `高` / `中` / `低` |
 | `G1预检时间` | 日期时间 | — |
 
   字段名可自定义，但要和 `config.json` 里的 `gateResultField` 等保持一致。
 
-2. **加入屏幕**：把三个字段加到 `故事` / `客户用户故事` 的**查看**和**编辑**屏幕上（REST 写字段要求字段在该问题类型的编辑屏幕上）。
+   > 本版本按 PRD 需求准入 Checklist 判定，不再产出需求难度；`G1需求难度` 字段若已存在可保留，但技能不会写入。
 
-3. **加流转门禁**：在「→ 开发设计中」这条流转上二选一：
+2. **加入屏幕**：把上述字段加到 `故事` 的**查看**和**编辑**屏幕上（REST 写字段要求字段在该问题类型的编辑屏幕上）。
+
+3. **加流转门禁**：在人工推进的「需求设计 → 开发设计中」这条流转上二选一（本技能通过时不自动流转，由人工按门禁结果决定是否推进）：
 
 | 方案 | 配置 | 效果 | 依赖 |
 |---|---|---|---|
@@ -250,14 +261,14 @@ node scripts/jira-cli.mjs attach-list <KEY|URL>   # 读回确认：列表里出�
 
 - **保留人工豁免通道**：加 `豁免` 取值，只允许产品架构师角色设置，避免 AI 误判把需求彻底卡死。
 - **先观察再收紧**：建议先用方案 B 的「警告模式」跑 1~2 个迭代，统计误判率，再切成硬门禁。
-- **难度可以联动**：`G1需求难度 = 高` 时可额外要求技术方案评审，或多挂一个校验条件。
+- **不要写难度**：本版本不产出需求难度；如需按复杂度加严评审，请在 G2 或人工流程里单独配置。
 
 ### 12.5 相关函数
 
 ```javascript
 const rf = await j.resolveGateFields();     // 探测字段是否存在：{ fields, missing, configSource }
 const g  = await j.getGateResult("CALL-1940");  // 读回当前值
-const r  = await j.setGateResult("CALL-1940", { result: "不通过", difficulty: "高" });
+const r  = await j.setGateResult("CALL-1940", { result: "不通过" });
 const d  = await j.setGateResult("CALL-1940", { result: "通过" }, { dryRun: true });  // 只算不写
 ```
 
@@ -266,7 +277,7 @@ const d  = await j.setGateResult("CALL-1940", { result: "通过" }, { dryRun: tr
 ```javascript
 const ts = await j.listTransitions("CALL-1446");                 // 当前可用流转 [{id, name, to}]
 const fo = await j.resolveFlowOwner(issue);                      // 流转人与 @ 写法 {name, mention, field}
-const tr = await j.transitionToStatus("ZYSQ-95", "评审中");       // 流转；失败时返回 ok:false 而不抛错
+const back = await j.transitionToStatus("ZYSQ-95", "评审中");     // 仅退回补充时流转
 ```
 
 评审报告附件：
@@ -287,7 +298,6 @@ const up = await j.uploadAttachment("CALL-1940", "reports/review-report-20260920
 {
   "token": "...",
   "gateResultField": "G1准入结论",
-  "gateDifficultyField": "G1需求难度",
   "gateCheckedAtField": "G1预检时间"
 }
 ```

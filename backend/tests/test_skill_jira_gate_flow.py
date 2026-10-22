@@ -1,4 +1,4 @@
-"""技能流转契约测试：锁定「仅不达标时流转到『评审中』并 @ 流转人」的脚本与文档约定。"""
+"""技能流转契约测试：锁定 G1「通过不流转、退回补充→评审中」与故事类型门禁。"""
 import json
 import shutil
 import subprocess
@@ -18,15 +18,41 @@ NODE = shutil.which("node")
 
 
 class SkillJiraGateFlowTests(unittest.TestCase):
-    def test_skill_documents_fail_only_transition(self):
-        """SKILL.md 必须写明只在结论不达标时流转，达标不做任何状态变更。"""
+    def test_skill_documents_return_flow_and_type_gate(self):
+        """SKILL.md 必须写明通过不流转、退回补充流转到「评审中」，并且只处理「故事」类型。"""
         text = SKILL_PATH.read_text(encoding="utf-8")
 
-        self.assertIn("### 9. 交付顺序与「不达标时流转状态并 @ 流转人」", text)
-        self.assertIn("不做任何状态变更", text)
+        self.assertIn("### 9. 交付顺序与「仅退回补充时流转并 @ 流转人」", text)
         self.assertIn("评审中", text)
+        self.assertIn("--to 评审中", text)
+        self.assertIn("通过不流转", text)
+        self.assertIn("只处理类型为「故事」", text)
+        self.assertIn("precheck", text)
+        self.assertNotIn("--to 开发设计中", text)
+        self.assertNotIn("--to 需求设计", text)
         # 旧口径「一律不流转状态」必须已被替换，否则与本次需求冲突。
         self.assertNotIn("不流转状态、不指派经办人", text)
+
+    def test_checklist_is_prd_admission_checklist(self):
+        """判定标准必须换成 PRD 需求准入 Checklist，包含 8 项 MUST 与 6 组 CONDITIONAL。"""
+        text = (SKILL_DIR / "references" / "checklist.md").read_text(encoding="utf-8")
+
+        self.assertIn("# PRD 需求准入 Checklist", text)
+        for must in ("事实源", "目标与范围", "核心链路", "业务规则", "状态与权限", "业务数据", "异常恢复", "验收标准"):
+            self.assertIn(must, text)
+        for group in ("UI 与字段", "角色、状态与高风险确认", "跨系统、异步与外部依赖", "迁移、历史兼容与存量对象", "LLM 业务质量、失败策略与副作用", "性能、安全、隐私与合规"):
+            self.assertIn(group, text)
+        self.assertIn("同一结果测试", text)
+
+    def test_runtime_prompt_requires_precheck_return_flow_and_report(self):
+        """服务端调用时必须先做类型预检，并完整执行 G1 的退回流转与报告附件。"""
+        payload = json.loads((SKILL_DIR / "runtime.json").read_text(encoding="utf-8"))
+
+        self.assertEqual(payload["required_inputs"], ["jira_url"])
+        self.assertIn("precheck", payload["prompt_template"])
+        self.assertIn("评审中", payload["prompt_template"])
+        self.assertIn("结论「通过」不流转状态", payload["prompt_template"])
+        self.assertIn("review-jira-req", payload["prompt_template"])
 
     def test_comment_template_mentions_flow_owner(self):
         """不达标评论模板必须带 @ 流转人的「待处理人」行，且注明达标时省略。"""
@@ -64,6 +90,8 @@ class SkillJiraGateFlowTests(unittest.TestCase):
         self.assertIn("TRANSITION_ISSUES", text)
         self.assertIn("no-transition", text)
         self.assertIn("available", text)
+        self.assertIn("--to 评审中", text)
+        self.assertIn("通过不流转", text)
 
     def test_flow_owner_defaults_to_assignee(self):
         """流转人默认口径为经办人，文档与脚本必须一致地声明这一点。"""

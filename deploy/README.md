@@ -160,6 +160,11 @@ DEVOPS_MCP_URL=https://devops.ks1.wezhuiyi.com/mcp
 ```bash
 docker compose --env-file .env.production -f docker-compose-prod.yaml exec worker \
   node /data/skills/jira-gate-1/scripts/jira-cli.mjs selftest
+# G1 / G2 的类型门禁自检：返回 supported=true（issuetype 为「故事」）才会继续处理
+docker compose --env-file .env.production -f docker-compose-prod.yaml exec worker \
+  node /data/skills/jira-gate-1/scripts/jira-cli.mjs precheck CALL-1
+docker compose --env-file .env.production -f docker-compose-prod.yaml exec worker \
+  node /data/skills/jira-gate-2/scripts/jira-cli.mjs precheck CALL-1
 # jira-code 额外自检 GitLab 凭据（只回显来源，不打印令牌）
 docker compose --env-file .env.production -f docker-compose-prod.yaml exec worker \
   node /data/skills/jira-code/scripts/git-flow.mjs creds

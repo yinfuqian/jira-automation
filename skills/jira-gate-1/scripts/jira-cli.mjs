@@ -37,6 +37,7 @@ const TOKEN_FILE_NAMES = [".jira-token", ".jira-token.txt", "jira-token.txt"];
 
 const USAGE = `用法：
   node scripts/jira-cli.mjs selftest
+  node scripts/jira-cli.mjs precheck <KEY|URL>
   node scripts/jira-cli.mjs get <KEY|URL>
   node scripts/jira-cli.mjs json <KEY|URL>
   node scripts/jira-cli.mjs attachments <KEY|URL> <目录>
@@ -186,6 +187,12 @@ async function main() {
       requireArgs(positional, 1, "get <KEY|URL>");
       const issue = await jira.getIssue(positional[0], callOptions);
       console.log(jira.renderIssueMarkdown(issue));
+      return;
+    }
+    case "precheck": {
+      // 类型预检：只输出 JSON，调用方按 supported 决定是否继续。
+      requireArgs(positional, 1, "precheck <KEY|URL>");
+      console.log(JSON.stringify(await jira.precheckIssueType(positional[0], callOptions), null, 2));
       return;
     }
     case "json": {
