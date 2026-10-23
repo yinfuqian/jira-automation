@@ -9,6 +9,7 @@ import path from 'node:path';
 import { EXIT, QaError, boolArg, checkNode, loadCredentials, log, parseArgs, parseIssueKey, resolveWorkspace } from './lib/env.mjs';
 import { JiraClient } from './lib/jira.mjs';
 import { ensureDir, readText, writeJson } from './lib/fs-safe.mjs';
+import { handleFatal } from './lib/fatal.mjs';
 
 function firstLine(text) {
   return String(text || '').split(/\r?\n/).find((line) => line.trim()) || '';
@@ -27,11 +28,13 @@ async function main() {
   const bodyFile = args.body;
   if (!bodyFile) {
     process.stderr.write('[jira-comment][ERR] 缺少 --body <wiki 文件>。\n');
-    process.exit(EXIT.USAGE);
+    throw new QaError('参数或配置错误', EXIT.USAGE);
   }
   const body = await readText(bodyFile);
   const title = args.title || firstLine(body);
+  const matchTitle = String(title).replace(/v\d+\.\d+\s*$/, '').trim();
   const materialLine = args['material-line'] || lastLine(body);
+  const materialVersion = (String(materialLine).match(/材料版本：\s*(PRD\s+[^\s（(]+)/) || [])[1] || '';
   const mode = args.mode || 'auto';
   const dryRun = boolArg(args, 'dry-run') || boolArg(args, 'no-comment');
   const runId = args['run-id'] || 'manual';
@@ -40,7 +43,10 @@ async function main() {
   const comments = process.env.JIRA_BASE_URL ? await client.getComments(key) : [];
   const existing = comments.find((c) => {
     const text = String(c.body || '');
-    return text.includes(title) && text.includes(materialLine);
+    return (
+      text.includes(matchTitle) &&
+      (text.includes(materialLine) || (materialVersion && text.includes(materialVersion)))
+    );
   });
 
   let action = 'create';
@@ -50,7 +56,7 @@ async function main() {
     commentId = String(existing.id);
   } else if (!existing && mode === 'edit') {
     process.stderr.write('[jira-comment][ERR] 没有找到匹配的既有评论，无法 edit。\n');
-    process.exit(EXIT.PRECONDITION);
+    throw new QaError('前置条件不满足', EXIT.PRECONDITION);
   } else if (args['edit-id']) {
     action = 'edit';
     commentId = String(args['edit-id']);
@@ -72,8 +78,6 @@ async function main() {
   process.stdout.write(`ACTION=${action}\nCOMMENT_ID=${id}\n`);
 }
 
-main().catch((error) => {
-  const code = error instanceof QaError ? error.code : EXIT.INTERNAL;
-  process.stderr.write(`[jira-comment][ERR] ${error.message}\n`);
-  process.exit(code === EXIT.OK ? EXIT.REMOTE_WRITE : code);
-});
+main().catch((error) =>
+  handleFatal(error, { argv: process.argv.slice(2), stage: "", script: "jira-comment" }),
+);

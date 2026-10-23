@@ -57,14 +57,21 @@ class SkillJiraGateFlowTests(unittest.TestCase):
         self.assertIn("review-jira-req", payload["prompt_template"])
         self.assertIn("review-jira-design", payload["prompt_template"])
         self.assertIn("review-jira-qa", payload["prompt_template"])
+        self.assertIn("reuse.mjs", payload["prompt_template"])
+        self.assertIn("REUSE=true", payload["prompt_template"])
+        self.assertIn("--coverage-required", payload["prompt_template"])
         self.assertIn("调用顺序固定为 review-jira-req → review-jira-design → review-jira-qa", payload["prompt_template"])
         self.assertIn("build-report.mjs", payload["prompt_template"])
         self.assertIn("只执行阶段一", payload["prompt_template"])
         self.assertIn("ok=false", payload["prompt_template"])
-        # QA 失败不能阻塞 G1：必须记录失败步骤并继续交付。
-        self.assertIn("--non-blocking", payload["prompt_template"])
-        self.assertIn("failedStep", payload["prompt_template"])
-        self.assertIn("--run-id manual", payload["prompt_template"])
+        # QA 0.1.5 统一用 status 表示异常/不适用，G1 不能把退出码当成功依据。
+        self.assertIn("status=SKIPPED", payload["prompt_template"])
+        self.assertIn("status=ERROR", payload["prompt_template"])
+        self.assertIn("exit 0", payload["prompt_template"])
+        self.assertIn("不适用", payload["prompt_template"])
+        self.assertIn("未完成", payload["prompt_template"])
+        self.assertNotIn("--non-blocking", payload["prompt_template"])
+        self.assertNotIn("failedStep", payload["prompt_template"])
         self.assertIn("继续写 G1 评论", payload["prompt_template"])
 
     def test_skill_integrates_qa_gate_and_merges_conclusions(self):
@@ -80,11 +87,18 @@ class SkillJiraGateFlowTests(unittest.TestCase):
         self.assertIn('QA_WORKSPACE="$PWD/work/jira-gate/<KEY>/review-jira-qa"', text)
         self.assertIn("QA 清单附件", text)
         self.assertIn("QA 评论", text)
-        # QA 运营性失败只记「未完成」，G1 后续交付与流转必须继续。
-        self.assertIn("--non-blocking", text)
-        self.assertIn("failedStep/error", text)
+        # QA 输入不适用/运营性失败都不能阻塞 G1 后续交付与流转。
+        self.assertIn("status=SKIPPED", text)
+        self.assertIn("status=ERROR", text)
+        self.assertIn("未完成（status/errorCode/error）", text)
         self.assertIn("继续执行 G1 的评论", text)
-        self.assertIn("不得中断 G1 后续交付", text)
+        # QA 0.1.7：先判同材料复用，再生成 AC 覆盖基线并强制校验覆盖率。
+        self.assertIn("reuse.mjs", text)
+        self.assertIn("REUSE=true", text)
+        self.assertIn("coverage.mjs", text)
+        self.assertIn("--coverage-required", text)
+        self.assertNotIn("--non-blocking", text)
+        self.assertNotIn("failedStep", text)
 
     def test_skill_integrates_design_review_between_req_and_qa(self):
         """G1 必须在需求评审之后、QA 之前调用 review-jira-design，并上传设计报告。"""
@@ -116,6 +130,28 @@ class SkillJiraGateFlowTests(unittest.TestCase):
         self.assertIn("QA 自己的评论和 HTML 上传由 `review-jira-qa` 在其阶段一内完成", text)
         self.assertIn("不要把 QA 的 HTML 再上传一次", text)
         self.assertIn("上传需求评审报告与设计准入报告", text)
+
+    def test_child_skill_failures_never_interrupt_g1(self):
+        """三个子技能的任何失败都只能记为「未完成」，不得中断 G1 后续交付。"""
+        text = SKILL_PATH.read_text(encoding="utf-8")
+        payload = json.loads((SKILL_DIR / "runtime.json").read_text(encoding="utf-8"))
+        api_text = API_DOC_PATH.read_text(encoding="utf-8")
+
+        self.assertIn("### 6.1 子技能失败统一收口（硬约束）", text)
+        self.assertIn("所有子技能都不得中断 G1 流程", text)
+        self.assertIn("子技能失败**不等于** G1 交付失败", text)
+        self.assertIn("五步流水线任一步非零退出", text)
+        self.assertIn("设计准入记为「未完成（原因）」", text)
+        self.assertIn("QA 的任何失败", text)
+        self.assertIn("只有 G1 自身无法形成业务结论", text)
+        # 服务端提示词必须同样约束，避免只改文档不改实际执行。
+        self.assertIn("所有子技能都不得中断 G1 流程", payload["prompt_template"])
+        self.assertIn("review-jira-req 五步中任一步失败", payload["prompt_template"])
+        self.assertIn("子技能失败但 G1 交付动作已完成", payload["prompt_template"])
+        # 接口文档同步收口，不得再出现「停止 G1 后续交付」的旧口径。
+        self.assertIn("需求评审记为「未完成（阶段/原因）」", api_text)
+        self.assertIn("不中断 G1 后续交付", api_text)
+        self.assertNotIn("停止 G1 后续交付并保留现场", api_text)
 
     def test_comment_template_mentions_flow_owner(self):
         """不达标评论模板必须带 @ 流转人的「待处理人」行，且注明达标时省略。"""
@@ -166,7 +202,7 @@ class SkillJiraGateFlowTests(unittest.TestCase):
 
 
 class WorkdirCleanupDocTests(unittest.TestCase):
-    """SKILL.md 必须写明收尾清理的范围、幂等性与「失败保留现场」。"""
+    """SKILL.md 必须写明收尾清理的范围、幂等性与「仅 G1 自身交付失败保留现场」。"""
 
     def test_skill_documents_cleanup_step(self):
         text = SKILL_PATH.read_text(encoding="utf-8")
@@ -174,7 +210,8 @@ class WorkdirCleanupDocTests(unittest.TestCase):
         self.assertIn("### 12. 收尾：清理本次任务的工作区中间产物", text)
         self.assertIn("workdir-cleanup.mjs --key <KEY>", text)
         self.assertIn("`reports/` 不在清理范围内", text)
-        self.assertIn("交付失败（异常中断）时不要调用本脚本", text)
+        self.assertIn("子技能失败但 G1 已完成评论", text)
+        self.assertNotIn("交付失败（异常中断）时不要调用本脚本", text)
         self.assertIn("按 §12 清理工作区中间产物", text)
 
 

@@ -10,6 +10,7 @@ import { readFile } from 'node:fs/promises';
 import { EXIT, QaError, boolArg, checkNode, parseArgs, parseIssueKey, resolveWorkspace } from './lib/env.mjs';
 import { readJson, readText, sha256, writeJson } from './lib/fs-safe.mjs';
 import { timestamp } from './lib/env.mjs';
+import { handleFatal } from './lib/fatal.mjs';
 
 async function main() {
   checkNode();
@@ -47,8 +48,6 @@ async function main() {
   process.stdout.write(`REVIEW_MARKER=${markerPath}\n`);
 }
 
-main().catch((error) => {
-  const code = error instanceof QaError ? error.code : EXIT.INTERNAL;
-  process.stderr.write(`[mark-reviewed][ERR] ${error.message}\n`);
-  process.exit(code);
-});
+main().catch((error) =>
+  handleFatal(error, { argv: process.argv.slice(2), stage: "design", comment: false, script: "mark-reviewed" }),
+);

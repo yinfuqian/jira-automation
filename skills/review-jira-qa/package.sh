@@ -1,15 +1,15 @@
 #!/usr/bin/env bash
-# package.sh — 把 review-jira-qa 打成可分享的 zip。
+# package.sh — 把 qa-gate 打成可分享的 zip。
 #
 # 用法：bash package.sh [版本号]
-# 产出：dist/review-jira-qa-<版本>.zip
+# 产出：dist/qa-gate-<版本>.zip
 # 排除：凭据、运行态、构建产物、pycache、历史产物。
 
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 VER="${1:-$(cat "$ROOT/VERSION" 2>/dev/null || echo 0.1.0)}"
-NAME="review-jira-qa-$VER"
+NAME="qa-gate-$VER"
 DIST="$ROOT/dist"
 STAGE="$DIST/.stage/$NAME"
 
@@ -29,10 +29,8 @@ mkdir -p "$STAGE"
 
 # 白名单式拷贝
 cp "$ROOT/SKILL.md" "$ROOT/README.md" "$ROOT/install.sh" "$ROOT/package.sh" "$STAGE/"
-[ -f "$ROOT/runtime.json" ] && cp "$ROOT/runtime.json" "$STAGE/"
 [ -f "$ROOT/.env.example" ] && cp "$ROOT/.env.example" "$STAGE/"
 cp -R "$ROOT/bin" "$ROOT/command" "$ROOT/prompts" "$ROOT/templates" "$ROOT/test" "$STAGE/"
-[ -d "$ROOT/agents" ] && cp -R "$ROOT/agents" "$STAGE/"
 [ -d "$ROOT/docs" ] && cp -R "$ROOT/docs" "$STAGE/"
 
 # 清理运行态与构建产物

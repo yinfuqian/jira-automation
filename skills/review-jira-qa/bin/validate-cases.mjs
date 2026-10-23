@@ -11,6 +11,7 @@ import { fileURLToPath } from 'node:url';
 import { EXIT, QaError, checkNode, parseArgs, parseIssueKey } from './lib/env.mjs';
 import { readJson } from './lib/fs-safe.mjs';
 import { parseXMind, walkLeaves } from './lib/xmind.mjs';
+import { handleFatal } from './lib/fatal.mjs';
 
 const HEADERS = [
   'Summary',
@@ -70,7 +71,7 @@ async function main() {
   const csv = args.csv;
   if (!casesPath || !xlsx || !csv) {
     process.stderr.write('[validate-cases][ERR] 需要 --cases <json> --xlsx <file> --csv <file>。\n');
-    process.exit(EXIT.USAGE);
+    throw new QaError('参数或配置错误', EXIT.USAGE);
   }
   const data = await readJson(casesPath);
   const key = parseIssueKey(args.key || data.jiraKey);
@@ -102,9 +103,13 @@ async function main() {
 
   const py = process.env.PYTHON || (process.platform === 'win32' ? 'python' : 'python3');
   const pyScript = path.join(path.dirname(fileURLToPath(import.meta.url)), 'read-xlsx.py');
-  const res = spawnSync(py, [pyScript, xlsx], { encoding: 'utf8' });
-  if (res.status !== 0) {
-    errors.push(`Excel 读取失败（需要 Python 3 + openpyxl）：${(res.stderr || '').trim()}`);
+  const res = spawnSync(py, [pyScript, xlsx], {
+    encoding: 'utf8',
+    timeout: Number(process.env.QA_PY_TIMEOUT_MS || 120000),
+    maxBuffer: 10 * 1024 * 1024,
+  });
+  if (res.error || res.signal || res.status !== 0) {
+    errors.push(`Excel 读取失败（需要 Python 3 + openpyxl）：${(res.error?.message || res.signal || res.stderr || '').trim()}`);
   } else {
     const info = JSON.parse(res.stdout);
     if (!info.sheets.includes('测试用例')) errors.push('Excel 缺少「测试用例」工作表');
@@ -121,11 +126,9 @@ async function main() {
 
   const out = { ok: errors.length === 0, cases: cases.length, errors };
   process.stdout.write(`${JSON.stringify(out)}\n`);
-  process.exit(errors.length ? EXIT.VALIDATION : EXIT.OK);
+  if (errors.length) throw new QaError(`用例校验失败：${errors.join('；')}`, EXIT.VALIDATION);
 }
 
-main().catch((error) => {
-  const code = error instanceof QaError ? error.code : EXIT.INTERNAL;
-  process.stderr.write(`[validate-cases][ERR] ${error.message}\n`);
-  process.exit(code);
-});
+main().catch((error) =>
+  handleFatal(error, { argv: process.argv.slice(2), stage: "cases", comment: false, script: "validate-cases" }),
+);

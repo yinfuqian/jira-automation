@@ -10,6 +10,7 @@ import path from 'node:path';
 import { EXIT, QaError, boolArg, checkNode, loadCredentials, log, parseArgs, parseIssueKey, resolveWorkspace } from './lib/env.mjs';
 import { JiraClient, attachmentList } from './lib/jira.mjs';
 import { ensureDir, writeJson } from './lib/fs-safe.mjs';
+import { handleFatal } from './lib/fatal.mjs';
 
 function familyOf(filename) {
   const base = path.basename(filename);
@@ -18,7 +19,7 @@ function familyOf(filename) {
   return { prefix: m[1], version: `${m[2]}.${m[3]}`, ext: `.${m[4].toLowerCase()}`, base };
 }
 
-async function acquireLock(workspace, key) {
+async function acquireLock(workspace, key, attempt = 1) {
   const dir = path.join(workspace, '.qa', 'locks');
   await ensureDir(dir);
   const file = path.join(dir, `${key}.lock`);
@@ -36,12 +37,15 @@ async function acquireLock(workspace, key) {
   } catch (error) {
     if (error.code !== 'EEXIST') throw error;
     const info = await stat(file).catch(() => null);
-    if (info && Date.now() - info.mtimeMs > 30 * 60 * 1000) {
+    if (!info || Date.now() - info.mtimeMs > 30 * 60 * 1000) {
       await unlink(file).catch(() => {});
-      return acquireLock(workspace, key);
+      if (attempt >= 2) {
+        throw new QaError(`锁文件无法清除：${file}`, EXIT.PRECONDITION);
+      }
+      return acquireLock(workspace, key, attempt + 1);
     }
     process.stderr.write(`[jira-upload][ERR] 该单正在被另一次运行处理：${file}\n`);
-    process.exit(EXIT.PRECONDITION);
+    throw new QaError('该单正在被另一次运行处理', EXIT.PRECONDITION);
   }
 }
 
@@ -57,7 +61,7 @@ async function main() {
   for (const item of args._.slice(1)) files.push(item);
   if (files.length === 0) {
     process.stderr.write('[jira-upload][ERR] 缺少 --file <交付物路径>。\n');
-    process.exit(EXIT.USAGE);
+    throw new QaError('参数或配置错误', EXIT.USAGE);
   }
   const dryRun = boolArg(args, 'dry-run');
   const forceUpload = boolArg(args, 'force-upload');
@@ -75,7 +79,7 @@ async function main() {
       const family = familyOf(abs);
       if (!family) {
         process.stderr.write(`[jira-upload][ERR] 文件名不符合 <KEY>-<名称>-<类型>-v<版本>.<ext>：${abs}\n`);
-        process.exit(EXIT.VALIDATION);
+        throw new QaError('校验失败', EXIT.VALIDATION);
       }
       const local = await stat(abs);
       const same = before.find((a) => a.filename === path.basename(abs) && Number(a.size) === local.size);
@@ -127,8 +131,6 @@ async function main() {
   }
 }
 
-main().catch((error) => {
-  const code = error instanceof QaError ? error.code : EXIT.INTERNAL;
-  process.stderr.write(`[jira-upload][ERR] ${error.message}\n`);
-  process.exit(code === EXIT.OK ? EXIT.REMOTE_WRITE : code);
-});
+main().catch((error) =>
+  handleFatal(error, { argv: process.argv.slice(2), stage: "", script: "jira-upload" }),
+);

@@ -9,6 +9,7 @@ import { EXIT, QaError, checkNode, loadCredentials, log, parseArgs, parseIssueKe
 import { JiraClient, attachmentList } from './lib/jira.mjs';
 import { ensureDir, writeJson } from './lib/fs-safe.mjs';
 import { makeRunId } from './lib/result.mjs';
+import { handleFatal } from './lib/fatal.mjs';
 
 async function main() {
   checkNode();
@@ -57,8 +58,6 @@ async function main() {
   }
 }
 
-main().catch((error) => {
-  const code = error instanceof QaError ? error.code : EXIT.INTERNAL;
-  process.stderr.write(`[jira-read][ERR] ${error.message}\n`);
-  process.exit(code);
-});
+main().catch((error) =>
+  handleFatal(error, { argv: process.argv.slice(2), stage: "risk-analysis", script: "jira-read" }),
+);

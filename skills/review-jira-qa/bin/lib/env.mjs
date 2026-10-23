@@ -124,8 +124,15 @@ export function skillDir() {
   return path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..');
 }
 
+function normalizeWindowsPath(value) {
+  const raw = String(value ?? '');
+  if (process.platform !== 'win32') return raw;
+  const m = raw.match(/^\/([a-zA-Z])\/(.*)$/);
+  return m ? `${m[1].toUpperCase()}:/${m[2]}` : raw;
+}
+
 export function resolveWorkspace(explicit) {
-  const chosen = explicit || process.env.QA_WORKSPACE || process.cwd();
+  const chosen = normalizeWindowsPath(explicit || process.env.QA_WORKSPACE || process.cwd());
   const resolved = path.resolve(chosen);
   if (isInside(resolved, skillDir())) {
     fail('工作区不能位于技能安装目录内；请设置 QA_WORKSPACE 或换一个执行目录。', EXIT.USAGE);

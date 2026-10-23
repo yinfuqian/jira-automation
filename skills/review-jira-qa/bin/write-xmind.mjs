@@ -9,6 +9,7 @@ import { EXIT, QaError, boolArg, checkNode, parseArgs, resolveWorkspace } from '
 import { ensureDir, readJson, safeFilename, writeFileAtomic } from './lib/fs-safe.mjs';
 import { buildXMind, walkLeaves } from './lib/xmind.mjs';
 import { versionedName } from './lib/versions.mjs';
+import { handleFatal } from './lib/fatal.mjs';
 
 function validateSpec(spec) {
   if (!spec.root || !spec.root.title) throw new QaError('xmind.spec.json 缺少 root.title。', EXIT.VALIDATION);
@@ -36,7 +37,7 @@ async function main() {
   const specPath = args.spec || args._[0];
   if (!specPath) {
     process.stderr.write('[write-xmind][ERR] 缺少 --spec <xmind.spec.json>。\n');
-    process.exit(EXIT.USAGE);
+    throw new QaError('参数或配置错误', EXIT.USAGE);
   }
   const spec = await readJson(specPath);
   const leaves = validateSpec(spec);
@@ -55,8 +56,6 @@ async function main() {
   process.stdout.write(`XMIND=${out}\nLEAVES=${leaves.length}\nVERSION=${version}\n`);
 }
 
-main().catch((error) => {
-  const code = error instanceof QaError ? error.code : EXIT.INTERNAL;
-  process.stderr.write(`[write-xmind][ERR] ${error.message}\n`);
-  process.exit(code);
-});
+main().catch((error) =>
+  handleFatal(error, { argv: process.argv.slice(2), stage: "design", comment: false, script: "write-xmind" }),
+);

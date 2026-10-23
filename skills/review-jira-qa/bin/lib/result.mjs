@@ -29,3 +29,32 @@ export async function writeResult(workspace, runId, result) {
 export function printResult(result) {
   process.stdout.write(`QA_RESULT_JSON\n${JSON.stringify(redact(result))}\n`);
 }
+
+/**
+ * 输入不符合门禁要求时的“跳过”结果：不算失败、不中断平台流程、不写 Jira 评论。
+ * 退出码保持 0；平台据 applicable=false / status=SKIPPED 继续后续流程。
+ */
+export async function writeSkipResult(workspace, runId, { jiraKey, reason, errorCode, attachments = [], stage = 'risk-analysis', commentId = '', warnings = [] }) {
+  const result = {
+    schemaVersion: 1,
+    stage,
+    ok: true,
+    applicable: false,
+    status: 'SKIPPED',
+    jiraKey,
+    conclusion: '',
+    failedItemCount: 0,
+    deliverableVersion: '',
+    htmlPath: '',
+    attachmentId: '',
+    commentId: String(commentId || ''),
+    materialAttachmentIds: attachments.map((a) => String(a.id ?? a)),
+    errorCode,
+    reason,
+    nextCommand: '',
+    warnings,
+  };
+  const file = await writeResult(workspace, runId, result);
+  printResult(result);
+  return { result, file };
+}

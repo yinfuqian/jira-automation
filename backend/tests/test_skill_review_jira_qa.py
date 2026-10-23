@@ -27,6 +27,7 @@ class ReviewJiraQaVendoringTests(unittest.TestCase):
         expected = [
             SKILL_DIR / "SKILL.md",
             SKILL_DIR / "README.md",
+            SKILL_DIR / "VERSION",
             SKILL_DIR / "runtime.json",
             SKILL_DIR / "agents" / "openai.yaml",
             SKILL_DIR / "prompts" / "contract.md",
@@ -35,14 +36,19 @@ class ReviewJiraQaVendoringTests(unittest.TestCase):
             SKILL_DIR / "bin" / "jira-read.mjs",
             SKILL_DIR / "bin" / "jira-download.mjs",
             SKILL_DIR / "bin" / "materials.mjs",
+            SKILL_DIR / "bin" / "coverage.mjs",
+            SKILL_DIR / "bin" / "reuse.mjs",
             SKILL_DIR / "bin" / "render-gate.mjs",
             SKILL_DIR / "bin" / "validate-gate.mjs",
             SKILL_DIR / "bin" / "jira-upload.mjs",
             SKILL_DIR / "bin" / "jira-comment.mjs",
             SKILL_DIR / "bin" / "result.mjs",
             SKILL_DIR / "bin" / "selftest.mjs",
+            SKILL_DIR / "bin" / "lib" / "fatal.mjs",
             SKILL_DIR / "templates" / "gate-html.html",
+            SKILL_DIR / "templates" / "test-cases" / "test-case-template.xlsx",
             SKILL_DIR / "command" / "review-jira-qa.md",
+            SKILL_DIR / "command" / "qa-risk-analysis.md",
         ]
         for path in expected:
             self.assertTrue(path.is_file(), f"缺少技能文件：{path}")
@@ -67,11 +73,15 @@ class ReviewJiraQaVendoringTests(unittest.TestCase):
         self.assertIn("不得自动进入阶段二或阶段三", text)
         self.assertIn("G1 最终结论必须为「退回补充」", text)
         self.assertIn("运营性失败", text)
-        # 子流程必须非阻塞：失败也只写结果并返回，不能中断父技能。
-        self.assertIn("--non-blocking", text)
-        self.assertIn("failedStep", text)
+        # 0.1.5 起统一以 status 表达异常与不适用；0.1.7 继续保持所有脚本 exit 0。
+        self.assertIn("status=ERROR", text)
+        self.assertIn("status=SKIPPED", text)
+        self.assertIn("exit 0", text)
         self.assertIn("不能阻塞父流程继续执行", text)
-        self.assertIn("--run-id manual", text)
+        self.assertIn(".skill-result.json", text)
+        self.assertNotIn("--non-blocking", text)
+        self.assertNotIn("failedStep", text)
+        self.assertEqual((SKILL_DIR / "VERSION").read_text(encoding="utf-8").strip(), "0.1.7")
 
     def test_runtime_defaults_to_stage1_only(self):
         """服务端直接调用该技能时也只能跑阶段一，并强制读取 Jira 链接。"""
@@ -83,11 +93,22 @@ class ReviewJiraQaVendoringTests(unittest.TestCase):
         self.assertIn("禁止执行阶段二或阶段三", prompt)
         self.assertIn("preflight", prompt)
         self.assertIn("validate-gate", prompt)
+        self.assertIn("coverage-required", prompt)
+        self.assertIn("coverage.mjs", prompt)
+        self.assertIn("reuse.mjs", prompt)
+        self.assertIn("REUSE=true", prompt)
+        self.assertIn("--comments 10", prompt)
+        self.assertIn("同类", prompt)
         self.assertIn("QA_RESULT_JSON", prompt)
-        self.assertIn("--non-blocking", prompt)
-        self.assertIn("failedStep", prompt)
         self.assertIn("不阻塞", prompt)
-        self.assertIn("--run-id manual", prompt)
+        self.assertIn("status=SKIPPED", prompt)
+        self.assertIn("status=ERROR", prompt)
+        self.assertIn("exit 0", prompt)
+        self.assertIn("不适用", prompt)
+        self.assertIn("未完成", prompt)
+        self.assertIn(".skill-result.json", prompt)
+        self.assertNotIn("--non-blocking", prompt)
+        self.assertNotIn("failedStep", prompt)
         # runtime 模板必须是真实换行，不能把字面量 \n 塞给模型。
         self.assertIn("\n", prompt)
         self.assertNotIn("\\n", prompt)
@@ -112,6 +133,24 @@ class ReviewJiraQaVendoringTests(unittest.TestCase):
         self.assertIn("closingConditions", html_source)
         self.assertIn("结论为「通过」时 failures 必须为空", html_source)
 
+    def test_stage1_requires_full_ac_coverage_and_reuse(self):
+        """0.1.7 必须全量覆盖 AC、记录复评来源，并支持同材料复用。"""
+        prompt_text = (SKILL_DIR / "prompts" / "stage1-gate.md").read_text(encoding="utf-8")
+        validate_source = (SKILL_DIR / "bin" / "validate-gate.mjs").read_text(encoding="utf-8")
+        reuse_source = (SKILL_DIR / "bin" / "reuse.mjs").read_text(encoding="utf-8")
+        coverage_source = (SKILL_DIR / "bin" / "coverage.mjs").read_text(encoding="utf-8")
+
+        self.assertIn('"coverage"', prompt_text)
+        self.assertIn("coverage-required.json", prompt_text)
+        self.assertIn("同类扫描", prompt_text)
+        self.assertIn("本版材料变更引入", prompt_text)
+        self.assertIn("上一版漏检", prompt_text)
+        self.assertIn("待确认来源", prompt_text)
+        self.assertIn("coverage-required", validate_source)
+        self.assertIn("coverage 缺少 AC", validate_source)
+        self.assertIn("REUSE=", reuse_source)
+        self.assertIn("required", coverage_source)
+
     def test_qa_skill_does_not_change_jira_status(self):
         """QA 阶段一只上传附件、写评论和产出结果，不负责 Jira 状态流转。"""
         for path in (SKILL_DIR / "bin").rglob("*.mjs"):
@@ -120,29 +159,24 @@ class ReviewJiraQaVendoringTests(unittest.TestCase):
             self.assertNotIn("setGateResult", source, f"{path} 不应写 G1 门禁字段")
 
 
-@unittest.skipUnless(NODE, "未安装 node，跳过 result.mjs 非阻塞测试")
-class ResultNonBlockingTests(unittest.TestCase):
-    """非阻塞模式必须写出 ok=false 结果，同时以 0 退出把控制权交还父技能。"""
+@unittest.skipUnless(NODE, "未安装 node，跳过异常收口测试")
+class FatalResultTests(unittest.TestCase):
+    """脚本异常必须写 status=ERROR 结果，并以 0 退出把控制权交还父技能。"""
 
-    def test_non_blocking_error_returns_zero_and_writes_result(self):
+    def test_preflight_failure_returns_zero_and_writes_error_result(self):
         with tempfile.TemporaryDirectory() as tmp:
             env = os.environ.copy()
             env["QA_WORKSPACE"] = tmp
+            for key in ("JIRA_BASE_URL", "JIRA_PAT", "JIRA_TOKEN"):
+                env.pop(key, None)
             result = subprocess.run(
                 [
                     NODE,
-                    str(SKILL_DIR / "bin" / "result.mjs"),
-                    "--stage",
-                    "risk-analysis",
+                    str(SKILL_DIR / "bin" / "preflight.mjs"),
                     "--key",
                     "QA-101",
-                    "--run-id",
-                    "manual",
-                    "--error",
-                    "模拟脚本失败",
-                    "--failed-step",
-                    "preflight",
-                    "--non-blocking",
+                    "--stage",
+                    "1",
                 ],
                 capture_output=True,
                 encoding="utf-8",
@@ -155,13 +189,14 @@ class ResultNonBlockingTests(unittest.TestCase):
 
             self.assertEqual(result.returncode, 0, result.stderr)
             self.assertIn("QA_RESULT_JSON", result.stdout)
-            payload = json.loads(
-                (Path(tmp) / ".qa" / "runs" / "manual" / "result.json").read_text(encoding="utf-8")
-            )
+            result_files = list((Path(tmp) / ".qa" / "runs").glob("*/result.json"))
+            self.assertEqual(len(result_files), 1)
+            payload = json.loads(result_files[0].read_text(encoding="utf-8"))
             self.assertFalse(payload["ok"])
-            self.assertEqual(payload["failedStep"], "preflight")
-            self.assertEqual(payload["error"], "模拟脚本失败")
-            self.assertTrue(payload["nonBlocking"])
+            self.assertEqual(payload["status"], "ERROR")
+            self.assertTrue(payload["applicable"])
+            self.assertTrue(payload["errorCode"])
+            self.assertTrue(payload["error"])
 
 
 if __name__ == "__main__":

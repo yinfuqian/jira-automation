@@ -8,6 +8,8 @@ allowed-tools: Read, Write, Edit, Bash(node:*), Bash(python:*), Glob, Grep
 
 执行前把 `${CLAUDE_SKILL_DIR}` 替换为技能目录绝对路径；`${QA_WORKSPACE:-$PWD}` 由 shell 展开。
 
+逐条执行下述命令，不要用 `&&` 串联；任一脚本输出 `status=ERROR` 或 `status=SKIPPED` 时立即停止，不要继续后续步骤。
+
 ## 输入
 
 ```
@@ -45,6 +47,8 @@ node "${CLAUDE_SKILL_DIR}/bin/validate-cases.mjs" --cases <cases.json> --xlsx <x
 
 ## 约束
 
+- 阶段一是主任务；阶段三只是独立子任务，**不得修改阶段一的清单、门禁结论或 Jira 评论**。
+- 阶段三不写 Jira 评论、不上传 Excel/CSV；异常只写本地 result/日志。
 - 一叶一用例，不跨叶合并、不拆分、不重新排序、定级或分类。
 - 只允许不改变业务含义的格式、编号、错别字、空格和标点修正；业务语义问题退回阶段二。
 - 机械一致性必须 100% 通过；失败时停止并报告，不产出半成品。

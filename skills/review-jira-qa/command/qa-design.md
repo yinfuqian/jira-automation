@@ -8,6 +8,8 @@ allowed-tools: Read, Write, Edit, Bash(node:*), Glob, Grep
 
 执行前把 `${CLAUDE_SKILL_DIR}` 替换为技能目录绝对路径；`${QA_WORKSPACE:-$PWD}` 由 shell 展开。
 
+逐条执行下述命令，不要用 `&&` 串联；任一脚本输出 `status=ERROR` 或 `status=SKIPPED` 时立即停止，不要继续后续步骤。
+
 ## 输入
 
 ```
@@ -48,7 +50,7 @@ node "${CLAUDE_SKILL_DIR}/bin/validate-xmind.mjs" --xmind <XMind>
 4. 上传方案与 XMind，然后停止：
 
 ```bash
-node "${CLAUDE_SKILL_DIR}/bin/jira-upload.mjs" --key <KEY> --file <方案.md> --file <XMind> --run-id "<RUN_ID>"
+node "${CLAUDE_SKILL_DIR}/bin/jira-upload.mjs" --key <KEY> --file <方案.md> --file <XMind> --run-id "<RUN_ID>" --stage design
 ```
 
 5. 提示人工复核，并给出复核标记命令：
@@ -59,6 +61,8 @@ node "${CLAUDE_SKILL_DIR}/bin/mark-reviewed.mjs" --key <KEY> --plan <方案.md> 
 
 ## 约束
 
+- 阶段一是主任务；阶段二只是独立子任务，**不得修改阶段一的清单、门禁结论或 Jira 评论**。
+- 阶段二不写 Jira 评论；异常只写本地 result/日志，不影响主任务输出。
 - 输出后停止，等待人工复核方案、正式叶子、页面路径、主要类型和优先级。
 - 不生成 Excel、Xray CSV 或测试代码。
 - 页面操作路径未确认、层级不完整或存在冲突时，对应叶子标记 `【待确认】`，不计入正式用例数。
