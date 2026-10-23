@@ -5,6 +5,9 @@
  * 服务地址与内部令牌来自环境变量（ANALYSIS_API_BASE_URL / ANALYSIS_API_TOKEN），
  * 也可通过命令行参数覆盖；令牌只放在请求头 X-API-Token，不打印、不写进报告。
  */
+import http from "node:http";
+import https from "node:https";
+
 import { escapeHtml, renderAnalysisHtml } from "./report.mjs";
 import {
   ScopeResolutionError,
@@ -34,18 +37,75 @@ export function envValue(name) {
 
 /** 汇总接口地址与令牌，命令行参数优先于环境变量 */
 export function resolveConfig(overrides = {}) {
-  const baseUrl = String(overrides.baseUrl || envValue("ANALYSIS_API_BASE_URL") || DEFAULT_BASE_URL).replace(/\/+$/, "");
+  const apiPort = envValue("API_PORT").trim();
+  const loopbackDefault = apiPort ? "http://127.0.0.1:" + apiPort : DEFAULT_BASE_URL;
+  const baseUrl = String(overrides.baseUrl || envValue("ANALYSIS_API_BASE_URL") || loopbackDefault).replace(/\/+$/, "");
   const token = String(overrides.token || envValue("ANALYSIS_API_TOKEN") || "").trim();
   return { baseUrl, token, tokenSource: overrides.token ? "argument" : (token ? "environment" : null) };
+}
+
+
+/** 判断故障分析服务地址是否为同一主机的回环地址。 */
+export function isLoopbackBaseUrl(baseUrl) {
+  try {
+    const hostname = String(new URL(baseUrl).hostname || "").toLowerCase();
+    return hostname === "localhost" || hostname === "::1" || hostname === "[::1]" || hostname === "0:0:0:0:0:0:0:1"
+      || hostname === "127.0.0.1" || hostname.startsWith("127.");
+  } catch (error) {
+    return false;
+  }
+}
+
+
+/** Node fetch 会按 WHATWG 规则拒绝 6000 等 unsafe port；该场景改用 node:http(s)。 */
+function isUnsafeFetchPortError(error) {
+  return /bad port/i.test(String((error && error.cause && error.cause.message) || ""));
+}
+
+
+/** 绕过 Node fetch 的端口黑名单，同时保留 JSON 与 multipart/FormData 请求体。 */
+async function requestWithNodeHttp(method, target, headers, options) {
+  const url = new URL(target);
+  const outgoingHeaders = { ...headers };
+  let body;
+  if (options.formData !== undefined) {
+    const serialized = new Request("http://127.0.0.1", { method, body: options.formData });
+    const contentType = serialized.headers.get("content-type");
+    if (contentType) outgoingHeaders["Content-Type"] = contentType;
+    body = Buffer.from(await serialized.arrayBuffer());
+  } else if (options.body !== undefined) {
+    body = typeof options.body === "string" ? options.body : JSON.stringify(options.body);
+  }
+  if (body !== undefined) outgoingHeaders["Content-Length"] = String(Buffer.byteLength(body));
+
+  const client = url.protocol === "https:" ? https : http;
+  return await new Promise((resolve, reject) => {
+    const req = client.request(url, { method, headers: outgoingHeaders }, (res) => {
+      const chunks = [];
+      res.on("data", (chunk) => chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk)));
+      res.on("end", () => {
+        const status = Number(res.statusCode || 0);
+        resolve({
+          ok: status >= 200 && status < 300,
+          status,
+          text: async () => Buffer.concat(chunks).toString("utf8"),
+        });
+      });
+    });
+    req.on("error", reject);
+    if (body !== undefined) req.write(body);
+    req.end();
+  });
 }
 
 /** 统一发起请求；未配置令牌时给出可执行的修复提示 */
 export async function apiRequest(method, apiPath, options = {}) {
   const config = resolveConfig(options);
-  if (!config.token) {
-    throw new Error("未配置 ANALYSIS_API_TOKEN，无法调用故障分析接口；请在 .env 中设置 ANALYSIS_API_TOKEN 后重启 api 与 worker");
+  if (!config.token && !isLoopbackBaseUrl(config.baseUrl)) {
+    throw new Error("非回环地址调用故障分析接口时必须配置 ANALYSIS_API_TOKEN；同机技能请使用 http://127.0.0.1:<API_PORT>");
   }
-  const headers = { Accept: "application/json", "X-API-Token": config.token };
+  const headers = { Accept: "application/json" };
+  if (config.token) headers["X-API-Token"] = config.token;
   let payload;
   if (options.formData !== undefined) {
     payload = options.formData;
@@ -54,7 +114,21 @@ export async function apiRequest(method, apiPath, options = {}) {
     payload = JSON.stringify(options.body);
   }
   const target = /^https?:\/\//i.test(apiPath) ? apiPath : config.baseUrl + apiPath;
-  const res = await fetch(target, { method, headers, body: payload, redirect: "follow" });
+  let res;
+  try {
+    res = await fetch(target, { method, headers, body: payload, redirect: "follow" });
+  } catch (error) {
+    if (isUnsafeFetchPortError(error)) {
+      res = await requestWithNodeHttp(method, target, headers, options);
+    } else {
+      const cause = String((error && error.cause && error.cause.message) || "");
+      throw new Error(
+        "故障分析接口连接失败：" + String((error && error.message) || error)
+        + (cause ? "（底层原因：" + cause + "）" : "")
+        + "；地址：" + target,
+      );
+    }
+  }
   const text = await res.text();
   let data = null;
   try { data = text ? JSON.parse(text) : null; } catch (e) { data = text; }
@@ -79,11 +153,15 @@ export async function selftest(options = {}) {
   const config = resolveConfig(options);
   result.baseUrl = config.baseUrl;
   result.tokenSource = config.tokenSource;
-  if (!config.token) {
-    result.steps.push({ step: "读取内部令牌", ok: false, detail: "未配置 ANALYSIS_API_TOKEN" });
+  if (!config.token && !isLoopbackBaseUrl(config.baseUrl)) {
+    result.steps.push({ step: "准备内部调用", ok: false, detail: "非回环地址缺少 ANALYSIS_API_TOKEN" });
     return result;
   }
-  result.steps.push({ step: "读取内部令牌", ok: true, detail: config.tokenSource });
+  result.steps.push({
+    step: "准备内部调用",
+    ok: true,
+    detail: config.tokenSource || "同机回环免令牌",
+  });
   try {
     const data = await apiRequest("GET", "/product/get", options);
     const count = data && Array.isArray(data.products) ? data.products.length : 0;

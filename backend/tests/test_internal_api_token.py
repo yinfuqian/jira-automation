@@ -37,7 +37,7 @@ def purge_stubbed_modules():
 class InternalAnalysisTokenTests(unittest.TestCase):
     """校验内部令牌与外部技能令牌的权限边界互不重叠。"""
 
-    def build_app(self, analysis_token="analysis-secret"):
+    def build_app(self, analysis_token="analysis-secret", trust_loopback=False):
         """构造同时启用外部令牌与内部令牌的最小应用。"""
         purge_stubbed_modules()
 
@@ -53,6 +53,7 @@ class InternalAnalysisTokenTests(unittest.TestCase):
             ANALYSIS_API_TOKEN=analysis_token,
             ANALYSIS_API_TOKEN_PATHS=ANALYSIS_PATHS,
             ANALYSIS_API_USERNAME="analysis-skill",
+            ANALYSIS_API_TRUST_LOOPBACK=trust_loopback,
         )
         session_service = MagicMock()
         session_service.authenticate.return_value = None
@@ -63,6 +64,10 @@ class InternalAnalysisTokenTests(unittest.TestCase):
 
         @app.post("/analysis/submit_async")
         def submit_analysis():
+            return operator()
+
+        @app.post("/analysis-admin")
+        def analysis_admin():
             return operator()
 
         @app.post("/logfile/upload")
@@ -132,6 +137,67 @@ class InternalAnalysisTokenTests(unittest.TestCase):
         client = self.build_app(analysis_token="").test_client()
 
         response = client.post("/analysis/submit_async", headers={"X-API-Token": "analysis-secret"})
+
+        self.assertEqual(response.status_code, 401)
+
+    def test_trusted_loopback_call_can_use_analysis_api_without_token(self):
+        """同机技能进程通过回环地址调用时属于内部调用，不需要服务间令牌。"""
+        client = self.build_app(analysis_token="", trust_loopback=True).test_client()
+
+        submit = client.post(
+            "/analysis/submit_async",
+            environ_base={"REMOTE_ADDR": "127.0.0.1"},
+        )
+        product = client.get(
+            "/product/get",
+            environ_base={"REMOTE_ADDR": "::1"},
+        )
+
+        self.assertEqual(submit.status_code, 200)
+        self.assertEqual(submit.get_json()["operator"], "analysis-loopback")
+        self.assertEqual(product.status_code, 200)
+
+    def test_loopback_trust_still_requires_token_from_non_loopback_callers(self):
+        """启用回环信任后，来自其它主机的调用仍必须携带内部令牌。"""
+        client = self.build_app(analysis_token="analysis-secret", trust_loopback=True).test_client()
+
+        remote = client.post(
+            "/analysis/submit_async",
+            environ_base={"REMOTE_ADDR": "172.16.55.50"},
+        )
+        local = client.post(
+            "/analysis/submit_async",
+            headers={"X-API-Token": "analysis-secret"},
+            environ_base={"REMOTE_ADDR": "172.16.55.50"},
+        )
+
+        self.assertEqual(remote.status_code, 401)
+        self.assertEqual(local.status_code, 200)
+
+    def test_loopback_trust_does_not_expose_unscoped_business_routes(self):
+        """回环信任只覆盖分析脚本所需路径，不能扩展到产品删除或外部技能接口。"""
+        client = self.build_app(analysis_token="", trust_loopback=True).test_client()
+
+        delete_product = client.post(
+            "/product/delete",
+            environ_base={"REMOTE_ADDR": "127.0.0.1"},
+        )
+        run_skill = client.post(
+            "/skill/run",
+            environ_base={"REMOTE_ADDR": "127.0.0.1"},
+        )
+
+        self.assertEqual(delete_product.status_code, 401)
+        self.assertEqual(run_skill.status_code, 401)
+
+    def test_loopback_trust_uses_path_segment_boundaries(self):
+        """回环免鉴权不能仅凭字符串前缀放行 /analysis-admin 等相邻路径。"""
+        client = self.build_app(analysis_token="", trust_loopback=True).test_client()
+
+        response = client.post(
+            "/analysis-admin",
+            environ_base={"REMOTE_ADDR": "127.0.0.1"},
+        )
 
         self.assertEqual(response.status_code, 401)
 

@@ -336,7 +336,7 @@ h4. 日志/复现豁免判定
 ## 令牌与配置
 
 - Jira 令牌：`JIRA_TOKEN` 环境变量（部署时由 `.env` 注入）。容器内后端注入 `SKILLRUN_ENV_LOCKED=1` 后只认该环境变量与 `JIRA_BASE_URL`；桌面端未锁定时可回落到 `--token`，或技能目录 / `~/.codex` 下的 `.jira-token`、`jira-token.txt`、`~/.codex/jira/config.json`。
-- 故障分析服务：`ANALYSIS_API_BASE_URL`（容器内默认 `http://api:5000`，宿主网络为 `http://127.0.0.1:5000`）与 `ANALYSIS_API_TOKEN`（内部令牌，未配置时脚本会直接报错并说明如何配置）。
+- 故障分析服务：同机技能与故障分析服务属于同一系统，`ANALYSIS_API_BASE_URL` 应使用 `http://127.0.0.1:<API_PORT>`（未显式配置时按 `API_PORT` 生成回环地址）。同机回环内部调用免令牌，`ANALYSIS_API_TOKEN` 可以为空；该令牌仅在地址不是回环地址时才需要。**不得仅凭 `ANALYSIS_API_TOKEN` 为空就跳过分析、要求用户补令牌或判定失败。**
 - 分析范围映射：`config/scope-mapping.json` 维护产品、模块、仓库地址、版本到 Git Tag 的规则，以及映射缺口通知人 `mappingOwner`。产品值来自 Jira「问题发现产品」；工单缺模块时要求提单人补充，工单已有模块但配置中缺映射时通知维护人并跳过检查，不允许模糊匹配。
 - 可选 `jira-config.json`（放在技能目录或 `~/.codex/jira/config.json`）：
 
@@ -371,10 +371,10 @@ h4. 日志/复现豁免判定
 
 | 现象 | 处理 |
 |---|---|
-| `未配置 ANALYSIS_API_TOKEN` | 在 `.env` 设置 `ANALYSIS_API_TOKEN` 并在 api/worker 生效后重试 |
+| 非回环调用提示缺少 `ANALYSIS_API_TOKEN` | 同机技能改用 `http://127.0.0.1:<API_PORT>`；仅当 `ANALYSIS_API_BASE_URL` 不是回环地址时才配置令牌 |
 | `缺少代码仓库地址或版本` | 先用 `jira-cli.mjs scope` 查看来源；缺模块/版本时按固定评论块补齐，仓库地址由 `scope-mapping.json` 维护 |
 | `reason=scope-mapping-missing/invalid/ambiguous` | 工单已有分析对象，但配置缺映射：原样使用返回的 `comment` 通知 `mappingOwner`，门禁写 `未检查`，跳过检查且不打回；随后用 `jira-cli.mjs assign --user <mappingOwner.name>` 转派经办人 |
 | `故障分析工具中没有匹配的产品/模块` | 配置映射存在但分析服务未注册该对象；记录实际错误，不要伪造映射或改用默认分支 |
 | 分析任务超时 | 任务仍可能在后台完成：前端「历史记录」可见；可提高 `CODEX_SKILL_TIMEOUT` 与 `--timeout` 后重跑 |
-| `鉴权失败` / HTTP 401 | 检查 `JIRA_TOKEN` 是否过期、`ANALYSIS_API_TOKEN` 是否与 api 服务一致 |
+| `鉴权失败` / HTTP 401 | Jira 调用检查 `JIRA_TOKEN`；分析调用确认使用 `127.0.0.1` 回环地址，或非回环场景下令牌与 api 服务一致 |
 | 附件上传 413 | 报告或附件超过单据限制，压缩报告或拆分日志后重试 |

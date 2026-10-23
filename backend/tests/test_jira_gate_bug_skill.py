@@ -1,6 +1,7 @@
 """缺陷单门禁技能（jira-gate-bug）测试：覆盖技能发现、交付物契约与脚本行为（HTML 报告、自查结果判定）。"""
 import json
 import http.server
+import os
 import shutil
 import subprocess
 import sys
@@ -58,6 +59,7 @@ class DefectGateSkillDefinitionTests(unittest.TestCase):
         self.assertIn("jira-cli.mjs", skill.prompt_template)
         self.assertIn("必须且只能使用", skill.prompt_template)
         self.assertIn("任何其它技能", skill.prompt_template)
+        self.assertIn("不得仅凭 ANALYSIS_API_TOKEN 为空", skill.prompt_template)
 
     def test_skill_documents_the_whole_flow(self):
         """SKILL.md 必须覆盖完整流程，避免遗漏任一判定分支。"""
@@ -82,6 +84,14 @@ class DefectGateSkillDefinitionTests(unittest.TestCase):
             "rejectTransitionName",
         ):
             self.assertIn(required, content)
+
+    def test_skill_documents_loopback_analysis_without_token(self):
+        """说明文件必须明确同机回环免令牌，避免模型在发请求前自行阻断。"""
+        content = (SKILL_DIR / "SKILL.md").read_text(encoding="utf-8")
+
+        self.assertIn("同机回环内部调用免令牌", content)
+        self.assertIn("不得仅凭 `ANALYSIS_API_TOKEN` 为空", content)
+        self.assertNotIn("未配置时脚本会直接报错", content)
 
     def test_references_define_judgement_rules(self):
         """判定依据必须落在参考资料里，而不是让模型自行发挥。"""
@@ -384,6 +394,152 @@ console.log(JSON.stringify(failure));
         self.assertEqual(payload["gateResult"], "未检查")
         self.assertIn("[~yinfuqian1193]", payload["comment"])
         self.assertIn("operation-task", payload["comment"])
+
+    @unittest.skipIf(NODE_BIN is None, "需要 node 运行时才能执行技能脚本")
+    def test_analysis_api_accepts_port_rejected_by_node_fetch(self):
+        """故障分析服务使用 6000 端口时，不能因 Node fetch 的 unsafe-port 限制而误报连接失败。"""
+        class FakeAnalysisHandler(http.server.BaseHTTPRequestHandler):
+            def do_GET(self):  # noqa: N802 - BaseHTTPRequestHandler 约定方法名
+                if self.path.startswith("/product/get"):
+                    body = json.dumps({"products": [{"id": 1, "name": "Aiforce"}]}).encode("utf-8")
+                    self.send_response(200)
+                    self.send_header("Content-Type", "application/json")
+                    self.send_header("Content-Length", str(len(body)))
+                    self.end_headers()
+                    self.wfile.write(body)
+                    return
+                self.send_response(404)
+                self.end_headers()
+
+            def log_message(self, format, *args):  # noqa: A002 - 基类签名固定
+                return
+
+        server = http.server.ThreadingHTTPServer(("127.0.0.1", 6000), FakeAnalysisHandler)
+        thread = threading.Thread(target=server.serve_forever, daemon=True)
+        thread.start()
+        try:
+            result = subprocess.run(
+                [
+                    NODE_BIN,
+                    str(SKILL_DIR / "scripts" / "analysis-cli.mjs"),
+                    "selftest",
+                    "--base-url", "http://127.0.0.1:6000",
+                    "--token", "test-token",
+                ],
+                capture_output=True,
+                text=True,
+                encoding="utf-8",
+                cwd=str(BACKEND_DIR.parent),
+            )
+        finally:
+            server.shutdown()
+            server.server_close()
+            thread.join(timeout=2)
+
+        self.assertEqual(result.returncode, 0, result.stderr)
+        payload = json.loads(result.stdout)
+        self.assertTrue(payload["ok"], payload)
+        self.assertEqual(payload["baseUrl"], "http://127.0.0.1:6000")
+        self.assertEqual(payload["steps"][-1]["step"], "访问故障分析服务")
+        self.assertTrue(payload["steps"][-1]["ok"])
+
+    @unittest.skipIf(NODE_BIN is None, "需要 node 运行时才能执行技能脚本")
+    def test_loopback_analysis_selftest_does_not_require_internal_token(self):
+        """同机回环内部调用不要求 ANALYSIS_API_TOKEN，技能不应在发请求前自行拦截。"""
+        class FakeAnalysisHandler(http.server.BaseHTTPRequestHandler):
+            def do_GET(self):  # noqa: N802 - BaseHTTPRequestHandler 约定方法名
+                body = json.dumps({"products": [{"id": 1, "name": "Aiforce"}]}).encode("utf-8")
+                self.send_response(200)
+                self.send_header("Content-Type", "application/json")
+                self.send_header("Content-Length", str(len(body)))
+                self.end_headers()
+                self.wfile.write(body)
+
+            def log_message(self, format, *args):  # noqa: A002 - 基类签名固定
+                return
+
+        server = http.server.ThreadingHTTPServer(("127.0.0.1", 0), FakeAnalysisHandler)
+        thread = threading.Thread(target=server.serve_forever, daemon=True)
+        thread.start()
+        try:
+            env = dict(os.environ)
+            env.pop("ANALYSIS_API_TOKEN", None)
+            result = subprocess.run(
+                [
+                    NODE_BIN,
+                    str(SKILL_DIR / "scripts" / "analysis-cli.mjs"),
+                    "selftest",
+                    "--base-url", f"http://127.0.0.1:{server.server_port}",
+                ],
+                capture_output=True,
+                text=True,
+                encoding="utf-8",
+                cwd=str(BACKEND_DIR.parent),
+                env=env,
+            )
+        finally:
+            server.shutdown()
+            server.server_close()
+            thread.join(timeout=2)
+
+        self.assertEqual(result.returncode, 0, result.stderr)
+        payload = json.loads(result.stdout)
+        self.assertTrue(payload["ok"], payload)
+        self.assertIsNone(payload["tokenSource"])
+        self.assertEqual(payload["steps"][-1]["step"], "访问故障分析服务")
+        self.assertTrue(payload["steps"][-1]["ok"])
+
+    @unittest.skipIf(NODE_BIN is None, "需要 node 运行时才能执行技能脚本")
+    def test_analysis_api_multipart_upload_accepts_port_rejected_by_node_fetch(self):
+        """6000 端口的文件上传也必须保留 multipart Content-Type、boundary 和文件内容。"""
+        class FakeUploadHandler(http.server.BaseHTTPRequestHandler):
+            def do_POST(self):  # noqa: N802 - BaseHTTPRequestHandler 约定方法名
+                length = int(self.headers.get("Content-Length", "0"))
+                body = self.rfile.read(length)
+                content_type = self.headers.get("Content-Type", "")
+                response = json.dumps({
+                    "ok": True,
+                    "multipart": content_type.startswith("multipart/form-data; boundary="),
+                    "containsField": b'name="product_id"' in body,
+                    "containsFile": b'name="file"; filename="sample.log"' in body and b"test-log" in body,
+                }).encode("utf-8")
+                self.send_response(200)
+                self.send_header("Content-Type", "application/json")
+                self.send_header("Content-Length", str(len(response)))
+                self.end_headers()
+                self.wfile.write(response)
+
+            def log_message(self, format, *args):  # noqa: A002 - 基类签名固定
+                return
+
+        server = http.server.ThreadingHTTPServer(("127.0.0.1", 6000), FakeUploadHandler)
+        thread = threading.Thread(target=server.serve_forever, daemon=True)
+        thread.start()
+        try:
+            analysis_url = (SKILL_DIR / "scripts" / "analysis.mjs").as_uri()
+            driver = """
+const analysis = await import("__ANALYSIS__");
+const form = new FormData();
+form.append("product_id", "1");
+form.append("file", new Blob(["test-log"]), "sample.log");
+const result = await analysis.apiRequest("POST", "/upload", {
+  baseUrl: "http://127.0.0.1:6000",
+  token: "test-token",
+  formData: form,
+});
+console.log(JSON.stringify(result));
+""".replace("__ANALYSIS__", analysis_url)
+            output = self.run_node(driver)
+        finally:
+            server.shutdown()
+            server.server_close()
+            thread.join(timeout=2)
+
+        payload = json.loads(output.strip().splitlines()[-1])
+        self.assertTrue(payload["ok"])
+        self.assertTrue(payload["multipart"])
+        self.assertTrue(payload["containsField"])
+        self.assertTrue(payload["containsFile"])
 
     @unittest.skipIf(NODE_BIN is None, "需要 node 运行时才能执行技能脚本")
     def test_scope_resolution_never_falls_back_to_module_branch(self):

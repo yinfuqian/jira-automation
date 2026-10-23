@@ -312,6 +312,9 @@ class Config:
     )
     ANALYSIS_API_USERNAME = _env_or("ANALYSIS_API_USERNAME", "analysis-skill")
     ANALYSIS_API_BASE_URL = _env_or("ANALYSIS_API_BASE_URL", "")
+    # 同机技能通过 127.0.0.1 调用时属于内部调用，默认不要求人工或服务间令牌。
+    # 若部署环境需要强制分析接口令牌，可显式设为 false。
+    ANALYSIS_API_TRUST_LOOPBACK = _env_or("ANALYSIS_API_TRUST_LOOPBACK", "true").lower() == "true"
     LOG_ERROR_CONTEXT_LINES = int(os.getenv("LOG_ERROR_CONTEXT_LINES", "10"))
     LOG_CONTEXT_MAX_CHARS = int(os.getenv("LOG_CONTEXT_MAX_CHARS", "30000"))
     

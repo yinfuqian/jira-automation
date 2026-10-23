@@ -507,8 +507,9 @@ curl -H "X-API-Token: <SKILL_API_TOKEN>" http://127.0.0.1:5000/skill/task/SKL-8F
 | `GIT_USER`、`GIT_PASSWORD` | 无 | 没有 `GITLAB_PRIVATE_TOKEN` 时的账号密码兜底 |
 | `DEVOPS_MCP_TOKEN` | 无 | 流水线平台个人中心签发的 API Token；只给 `jira-code`、`devops-mcp-invoker` 注册 `pipeline-integration-mcp`，配置写入任务独立 `CODEX_HOME` 的 `config.toml`；缺失时清掉该 server 配置，技能按「跳过并说明」处理 |
 | `DEVOPS_MCP_URL` | `https://devops.ks1.wezhuiyi.com/mcp` | 流水线 MCP server 地址，与 `DEVOPS_MCP_TOKEN` 一起写入需要该 MCP 的任务独立 `CODEX_HOME` |
-| `ANALYSIS_API_BASE_URL` | `http://api:5000` | `jira-gate-bug` 回写时调用的本服务地址（宿主网络改为 `http://127.0.0.1:5000`） |
-| `ANALYSIS_API_TOKEN` | `local-dev-analysis-token` | 技能脚本调用 `/analysis`、`/logfile` 等接口的内部令牌；生产环境必须替换 |
+| `ANALYSIS_API_BASE_URL` | `http://127.0.0.1:5000` | `jira-gate-bug` 回写时调用的同机故障分析服务地址，端口与 `API_PORT` 一致 |
+| `ANALYSIS_API_TRUST_LOOPBACK` | `true` | 同机技能经回环地址调用分析接口时免令牌；显式设为 `false` 可强制令牌 |
+| `ANALYSIS_API_TOKEN` | 无 | 仅非回环地址调用分析、上传接口时需要的服务间令牌；回环内部调用不必配置 |
 
 **技能运行参数来源锁定**：后端在启动技能前，用上面的配置值覆盖同名环境变量并注入 `SKILLRUN_ENV_LOCKED=1`；
 技能脚本（`jira.mjs`、`jira-cli.mjs` 等）读到该标记后只认环境变量，不再回落到令牌文件、`--token` / `--base-url` 入参与内置默认站点。

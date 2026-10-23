@@ -1,4 +1,5 @@
 """middleware 模块负责本文件相关的业务流程、数据转换与依赖协作。"""
+import ipaddress
 import secrets
 
 from flask import g, jsonify, request
@@ -30,6 +31,8 @@ API_TOKEN_CONFIGS = (
         "/analysis,/logfile,/product/get,/module/get,/module/search",
     ),
 )
+
+ANALYSIS_API_DEFAULT_PATHS = "/analysis,/logfile,/product/get,/module/get,/module/search"
 
 
 class ExternalApiPrincipal:
@@ -64,6 +67,13 @@ def extract_api_token(headers):
     return extract_bearer_token(headers.get("Authorization"))
 
 
+def path_matches_prefix(path, prefix):
+    """按路径段匹配前缀，避免 /analysis 意外放行 /analysis-admin。"""
+    target = "/" + str(path or "").strip("/")
+    allowed = "/" + str(prefix or "").strip("/")
+    return allowed == "/" or target == allowed or target.startswith(allowed + "/")
+
+
 def match_api_token(app, path, headers):
     """判断当前请求是否携带了可用于该路径的接口令牌，命中时返回调用方标识。"""
     provided = extract_api_token(headers)
@@ -75,11 +85,31 @@ def match_api_token(app, path, headers):
             continue
         raw_paths = str(app.config.get(paths_key) or default_paths)
         allowed_paths = [item.strip() for item in raw_paths.split(",") if item.strip()]
-        if allowed_paths and not any(str(path or "").startswith(prefix) for prefix in allowed_paths):
+        if allowed_paths and not any(path_matches_prefix(path, prefix) for prefix in allowed_paths):
             continue
         if secrets.compare_digest(provided, configured):
             return str(app.config.get(username_key) or fallback_username)
     return None
+
+
+def is_loopback_address(value):
+    """判断请求来源是否为本机回环地址。"""
+    try:
+        return ipaddress.ip_address(str(value or "").strip()).is_loopback
+    except ValueError:
+        return False
+
+
+def is_analysis_api_path(app, path):
+    """判断路径是否属于技能与故障分析服务之间的内部接口。"""
+    raw_paths = str(app.config.get("ANALYSIS_API_TOKEN_PATHS") or ANALYSIS_API_DEFAULT_PATHS)
+    allowed_paths = [item.strip() for item in raw_paths.split(",") if item.strip()]
+    return any(path_matches_prefix(path, prefix) for prefix in allowed_paths)
+
+
+def is_trusted_loopback_analysis_call(app, path, remote_addr):
+    """同机技能经回环地址调用分析接口时，视为受信任的内部服务调用。"""
+    return bool(app.config.get("ANALYSIS_API_TRUST_LOOPBACK")) and is_loopback_address(remote_addr) and is_analysis_api_path(app, path)
 
 
 def register_ticket_verifier(path_prefix: str, verifier) -> None:
@@ -110,6 +140,13 @@ def install_authentication(app, session_service):
         if request.method == "OPTIONS" or request.endpoint in ANONYMOUS_ENDPOINTS:
             return None
         if app.testing and app.config.get("AUTH_TEST_BYPASS"):
+            return None
+
+        # worker 中的技能与故障分析服务在同一主机：仅回环地址、且仅分析所需路径免令牌。
+        # 来自其它主机或访问未纳入分析路径的业务接口时，仍执行统一令牌/登录校验。
+        if is_trusted_loopback_analysis_call(app, request.path, request.remote_addr):
+            g.current_user = ExternalApiPrincipal("analysis-loopback")
+            g.auth_token = None
             return None
 
         # 外部系统与技能脚本可使用独立接口令牌调用指定接口，避免与登录会话令牌混用。

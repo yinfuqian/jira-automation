@@ -140,7 +140,10 @@ class AuthRoutesTests(unittest.TestCase):
         client = app.test_client()
 
         self.assertEqual(client.get("/health/live").status_code, 200)
-        self.assertEqual(client.get("/product/get").status_code, 401)
+        self.assertEqual(
+            client.get("/product/get", environ_base={"REMOTE_ADDR": "10.10.14.228"}).status_code,
+            401,
+        )
 
     def test_application_starts_fail_closed_when_user_file_is_unavailable(self):
         from app import create_app
@@ -160,7 +163,10 @@ class AuthRoutesTests(unittest.TestCase):
 
         self.assertEqual(client.get("/health/live").status_code, 200)
         self.assertEqual(client.get("/health/ready").status_code, 503)
-        self.assertEqual(client.get("/product/get").status_code, 401)
+        self.assertEqual(
+            client.get("/product/get", environ_base={"REMOTE_ADDR": "10.10.14.228"}).status_code,
+            401,
+        )
         login = client.post("/auth/login", json={"username": "alice", "password": "secret"})
         self.assertEqual(login.status_code, 503)
         self.assertEqual(login.get_json()["code"], "auth_configuration_unavailable")

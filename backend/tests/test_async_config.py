@@ -61,6 +61,17 @@ class AsyncConfigTests(unittest.TestCase):
         self.assertIn('os.getenv("OPENAI_MODEL", "gpt-5.6-sol")', source)
         self.assertIn('os.getenv("OPENAI_REASONING_EFFORT", "high")', source)
 
+    def test_analysis_loopback_trust_defaults_to_enabled_and_can_be_disabled(self):
+        """同机分析调用默认视为内部服务调用；需要强制令牌时仍可显式关闭。"""
+        with patch.dict(os.environ, {}, clear=False):
+            os.environ.pop("ANALYSIS_API_TRUST_LOOPBACK", None)
+            enabled = load_config_module().Config.ANALYSIS_API_TRUST_LOOPBACK
+        with patch.dict(os.environ, {"ANALYSIS_API_TRUST_LOOPBACK": "false"}, clear=False):
+            disabled = load_config_module().Config.ANALYSIS_API_TRUST_LOOPBACK
+
+        self.assertTrue(enabled)
+        self.assertFalse(disabled)
+
     def test_database_defaults_to_requested_mysql_database(self):
         env = {
             "MYSQL_HOST": "180.184.70.137",

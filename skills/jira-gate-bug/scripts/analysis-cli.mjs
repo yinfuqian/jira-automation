@@ -9,7 +9,8 @@
  *       [--branch <仓库地址>] [--version <Tag>] [--related <模块:Tag> ...] [--config <映射文件>] [--out <报告.html>] [--key <缺陷单号>] [--jira-url <地址>] \
  *       [--image-tag log_image] [--image-description <说明>] [--date-filter <YYYY-MM-DD>] [--timeout 1800]
  *
- * 接口地址与令牌：--base-url/--token 优先，其次 ANALYSIS_API_BASE_URL / ANALYSIS_API_TOKEN 环境变量。
+ * 接口地址：--base-url 优先，其次 ANALYSIS_API_BASE_URL；同机未配置时按 API_PORT 自动使用回环地址。
+ * 令牌：--token 或 ANALYSIS_API_TOKEN 仅在非回环地址调用时需要，回环内部调用可为空。
  */
 
 import { readFileSync } from "node:fs";
