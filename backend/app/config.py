@@ -1,5 +1,6 @@
 """config 模块负责本文件相关的业务流程、数据转换与依赖协作。"""
 import os
+from datetime import timedelta
 from pathlib import Path
 from urllib.parse import quote_plus
 
@@ -247,6 +248,15 @@ class Config:
     GITLAB_API_RETRY_DELAY = int(os.getenv("GITLAB_API_RETRY_DELAY", "1"))
     GITLAB_DB_MAX_RETRIES = int(os.getenv("GITLAB_DB_MAX_RETRIES", "2"))
     GITLAB_SYNC_SKIP_EXISTING_REPOS = os.getenv("GITLAB_SYNC_SKIP_EXISTING_REPOS", "true").lower() == "true"
+    GITLAB_SYNC_ENABLED = os.getenv("GITLAB_SYNC_ENABLED", "true").lower() == "true"
+    GITLAB_SYNC_ON_STARTUP = os.getenv("GITLAB_SYNC_ON_STARTUP", "true").lower() == "true"
+    try:
+        _gitlab_sync_interval_hours = float(os.getenv("GITLAB_SYNC_INTERVAL_HOURS", "12"))
+    except ValueError:
+        _gitlab_sync_interval_hours = 12.0
+    GITLAB_SYNC_INTERVAL_HOURS = (
+        _gitlab_sync_interval_hours if _gitlab_sync_interval_hours > 0 else 12.0
+    )
 
     # AI 模型与深度推理配置。所有文本和图片分析共用这一组参数。
     OPENAI_KEY = _resolve_openai_api_key()
@@ -348,3 +358,13 @@ class Config:
         "retry_on_timeout": True,
         "health_check_interval": REDIS_HEALTH_CHECK_INTERVAL,
     }
+    CELERY_BEAT_SCHEDULE = (
+        {
+            "gitlab-project-sync": {
+                "task": "git.sync_projects",
+                "schedule": timedelta(hours=GITLAB_SYNC_INTERVAL_HOURS),
+            }
+        }
+        if GITLAB_SYNC_ENABLED
+        else {}
+    )

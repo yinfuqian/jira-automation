@@ -344,8 +344,9 @@ class GitRoutesTests(unittest.TestCase):
         if "celery.result" in sys.modules and not hasattr(sys.modules["celery.result"], "GroupResult"):
             del sys.modules["celery.result"]
 
-        with patch.object(git_routes, "sync_gitlab_projects_from_config") as sync:
+        with patch.object(git_routes, "run_gitlab_sync_once") as sync:
             sync.return_value = {
+                "status": "succeeded",
                 "fetched_projects": 1,
                 "synced_projects": 1,
                 "created_products": 1,
@@ -368,19 +369,31 @@ class GitRoutesTests(unittest.TestCase):
         if "celery.result" in sys.modules and not hasattr(sys.modules["celery.result"], "GroupResult"):
             del sys.modules["celery.result"]
 
-        with patch.object(git_routes, "acquire_sync_lock", return_value=False) as acquire_lock:
-            with patch.object(git_routes, "release_sync_lock") as release_lock:
-                with patch.object(git_routes, "sync_gitlab_projects_from_config") as sync:
-                    app = create_test_app()
+        with patch.object(git_routes, "run_gitlab_sync_once") as sync:
+            sync.return_value = {"status": "skipped", "reason": "sync_in_progress"}
+            app = create_test_app()
 
-                    response = app.test_client().post("/git/sync-projects")
+            response = app.test_client().post("/git/sync-projects")
 
-                    self.assertEqual(response.status_code, 409)
-                    payload = response.get_json()
-                    self.assertEqual(payload["code"], "GIT_SYNC_IN_PROGRESS")
-                    sync.assert_not_called()
-                    acquire_lock.assert_called_once()
-                    release_lock.assert_not_called()
+            self.assertEqual(response.status_code, 409)
+            payload = response.get_json()
+            self.assertEqual(payload["code"], "GIT_SYNC_IN_PROGRESS")
+            sync.assert_called_once()
+
+    def test_git_sync_projects_endpoint_reports_missing_base_url(self):
+        if "flask" in sys.modules and not hasattr(sys.modules["flask"], "g"):
+            del sys.modules["flask"]
+        if "celery.result" in sys.modules and not hasattr(sys.modules["celery.result"], "GroupResult"):
+            del sys.modules["celery.result"]
+
+        with patch.object(git_routes, "run_gitlab_sync_once") as sync:
+            sync.return_value = {"status": "skipped", "reason": "git_base_url_missing"}
+            app = create_test_app()
+
+            response = app.test_client().post("/git/sync-projects")
+
+            self.assertEqual(response.status_code, 503)
+            self.assertEqual(response.get_json()["code"], "GIT_BASE_URL_MISSING")
 
     def test_git_sync_projects_endpoint_releases_sync_lock_after_success(self):
         if "flask" in sys.modules and not hasattr(sys.modules["flask"], "g"):
@@ -388,16 +401,19 @@ class GitRoutesTests(unittest.TestCase):
         if "celery.result" in sys.modules and not hasattr(sys.modules["celery.result"], "GroupResult"):
             del sys.modules["celery.result"]
 
-        with patch.object(git_routes, "acquire_sync_lock", return_value=True):
-            with patch.object(git_routes, "release_sync_lock") as release_lock:
-                with patch.object(git_routes, "sync_gitlab_projects_from_config") as sync:
-                    sync.return_value = {"fetched_projects": 1, "synced_projects": 1}
-                    app = create_test_app()
+        with patch.object(git_routes, "run_gitlab_sync_once") as sync:
+            sync.return_value = {
+                "status": "succeeded",
+                "fetched_projects": 1,
+                "synced_projects": 1,
+            }
+            app = create_test_app()
 
-                    response = app.test_client().post("/git/sync-projects")
+            response = app.test_client().post("/git/sync-projects")
 
-                    self.assertEqual(response.status_code, 200)
-                    release_lock.assert_called_once()
+            self.assertEqual(response.status_code, 200)
+            self.assertEqual(response.get_json()["synced_projects"], 1)
+            sync.assert_called_once()
 
 
 if __name__ == "__main__":

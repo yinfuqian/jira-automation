@@ -50,7 +50,9 @@ Master 生产环境使用 `docker-compose-prod.yaml` 与 `.env.production`：
 bash restart-master.sh
 ```
 
-两个脚本都使用 `docker compose up -d --force-recreate` 重建指定服务，因此修改 `.env` / `.env.production` 后会立即生效；`docker compose restart` 不会重新读取环境文件。脚本支持传入 Compose 服务名，例如 `bash restart-dev.sh api` 或 `bash restart-master.sh worker`。如确需临时覆盖配置文件，可使用 `COMPOSE_FILE`、`ENV_FILE` 环境变量。
+两个脚本都使用 `docker compose up -d --force-recreate` 重建指定服务，因此修改 `.env` / `.env.production` 后会立即生效；默认重建 `api`、`worker` 和 `beat`，`docker compose restart` 不会重新读取环境文件。脚本支持传入 Compose 服务名，例如 `bash restart-dev.sh api` 或 `bash restart-master.sh worker`。如确需临时覆盖配置文件，可使用 `COMPOSE_FILE`、`ENV_FILE` 环境变量。
+
+GitLab 产品与模块会在 worker 启动时自动同步一次，Celery Beat 随后按 `GITLAB_SYNC_INTERVAL_HOURS` 周期同步，默认 12 小时。`POST /git/sync-projects` 继续作为 Windows 客户端的手动同步入口。
 
 首次生产启动前至少修改 `.env` 中的以下内容：
 

@@ -134,6 +134,28 @@ services:
     depends_on:
       - api
 
+  # Celery Beat 只负责周期投递 GitLab 产品/模块同步任务；worker 启动时还会额外投递一次。
+  # 调度周期由 GITLAB_SYNC_INTERVAL_HOURS 控制，默认 12 小时。
+  beat:
+    image: ${BACKEND_IMAGE}
+    network_mode: "host"
+    env_file:
+      - ${ENV_FILE:-.env}
+    environment:
+      PYTHONUNBUFFERED: "1"
+    command:
+      - celery
+      - -A
+      - celery_worker.celery_app
+      - beat
+      - --loglevel=INFO
+      - --schedule=/data/celerybeat/celerybeat-schedule
+    volumes:
+      - ./data/celerybeat:/data/celerybeat
+    restart: unless-stopped
+    depends_on:
+      - worker
+
   migrate:
     image: ${BACKEND_IMAGE}
     network_mode: "host"

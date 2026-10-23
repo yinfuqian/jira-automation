@@ -21,7 +21,7 @@ docker compose --env-file .env.production -f docker-compose-prod.yaml up -d
 docker compose --env-file .env.production -f docker-compose-prod.yaml ps -a
 ```
 
-`migrate` 是一次性迁移容器，成功完成后显示为 `Exited (0)` 属于正常状态。`api` 和 `worker` 应保持运行。
+`migrate` 是一次性迁移容器，成功完成后显示为 `Exited (0)` 属于正常状态。`api`、`worker` 和 `beat` 应保持运行。
 
 API 存活检查为 `http://服务器地址:${API_PORT:-5000}/health/live`。前端如单独部署，再访问对应的前端地址。
 
@@ -40,11 +40,11 @@ Jira Automation 使用请求头 `X-API-Token: <SKILL_API_TOKEN>`；Jira 原生 w
 发布端构建并推送新的后端镜像后，只修改 `.env.production` 的 `BACKEND_IMAGE`，然后执行：
 
 ```bash
-docker compose --env-file .env.production -f docker-compose-prod.yaml pull migrate api worker
-docker compose --env-file .env.production -f docker-compose-prod.yaml up -d migrate api worker
+docker compose --env-file .env.production -f docker-compose-prod.yaml pull migrate api worker beat
+docker compose --env-file .env.production -f docker-compose-prod.yaml up -d migrate api worker beat
 ```
 
-迁移、API 和 Worker 共用同一个后端镜像，更新后端时必须一起更新。
+迁移、API、Worker 和 Beat 共用同一个后端镜像，更新后端时必须一起更新。
 
 ## 完整更新
 
@@ -61,7 +61,9 @@ docker compose --env-file .env.production -f docker-compose-prod.yaml up -d
 bash restart-master.sh
 ```
 
-该脚本默认用 `docker compose up -d --force-recreate` 重建 `api` 和 `worker`，会重新读取 `.env.production`，但不会重启或删除数据库。需要指定服务时，可传入 Compose 服务名，例如 `bash restart-master.sh api`。
+该脚本默认用 `docker compose up -d --force-recreate` 重建 `api`、`worker` 和 `beat`，会重新读取 `.env.production`，但不会重启或删除数据库。需要指定服务时，可传入 Compose 服务名，例如 `bash restart-master.sh api`。
+
+GitLab 产品与模块会在 worker 启动时自动同步一次，Celery Beat 随后按 `GITLAB_SYNC_INTERVAL_HOURS` 周期同步，默认 12 小时。Windows 客户端仍可通过 `POST /git/sync-projects` 手动触发同步。
 
 ## 离线导入镜像
 

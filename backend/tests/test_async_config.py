@@ -124,6 +124,27 @@ class AsyncConfigTests(unittest.TestCase):
         self.assertGreaterEqual(config.CELERY_RESULT_BACKEND_TRANSPORT_OPTIONS["socket_connect_timeout"], 5)
         self.assertGreaterEqual(config.CELERY_RESULT_BACKEND_TRANSPORT_OPTIONS["socket_timeout"], 30)
 
+    def test_gitlab_project_sync_runs_every_twelve_hours_by_default(self):
+        with patch.dict(os.environ, {}, clear=False):
+            os.environ.pop("GITLAB_SYNC_ENABLED", None)
+            os.environ.pop("GITLAB_SYNC_INTERVAL_HOURS", None)
+            config = load_config_module().Config
+
+        schedule = config.CELERY_BEAT_SCHEDULE["gitlab-project-sync"]
+        self.assertEqual(schedule["task"], "git.sync_projects")
+        self.assertEqual(schedule["schedule"].total_seconds(), 12 * 60 * 60)
+
+    def test_gitlab_project_sync_interval_is_environment_driven(self):
+        with patch.dict(
+            os.environ,
+            {"GITLAB_SYNC_ENABLED": "true", "GITLAB_SYNC_INTERVAL_HOURS": "6"},
+            clear=False,
+        ):
+            config = load_config_module().Config
+
+        schedule = config.CELERY_BEAT_SCHEDULE["gitlab-project-sync"]
+        self.assertEqual(schedule["schedule"].total_seconds(), 6 * 60 * 60)
+
     def test_celery_broker_timeout_is_independent_from_short_redis_client_timeout(self):
         env = {
             "REDIS_SOCKET_TIMEOUT": "60",

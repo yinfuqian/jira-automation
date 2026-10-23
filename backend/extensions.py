@@ -37,6 +37,7 @@ def init_celery(app):
         broker_connection_retry=True,
         broker_connection_retry_on_startup=True,
         broker_connection_max_retries=None,
+        beat_schedule=app.config.get("CELERY_BEAT_SCHEDULE", {}),
         task_track_started=True,
         task_serializer="json",
         result_serializer="json",

@@ -12,7 +12,7 @@ class ComposeContractTests(unittest.TestCase):
     def test_online_compose_declares_expected_service_graph(self):
         source = DEV_COMPOSE_PATH.read_text(encoding="utf-8")
 
-        for service in ("api", "worker", "migrate"):
+        for service in ("api", "worker", "beat", "migrate"):
             self.assertRegex(source, rf"(?m)^  {re.escape(service)}:\s*$")
         self.assertNotRegex(source, r"(?m)^  (mysql|redis|frontend):\s*$")
 
@@ -20,13 +20,13 @@ class ComposeContractTests(unittest.TestCase):
         source = DEV_COMPOSE_PATH.read_text(encoding="utf-8")
 
         self.assertNotIn("build:", source)
-        self.assertEqual(source.count("image: ${BACKEND_IMAGE}"), 3)
-        self.assertEqual(source.count('network_mode: "host"'), 3)
+        self.assertEqual(source.count("image: ${BACKEND_IMAGE}"), 4)
+        self.assertEqual(source.count('network_mode: "host"'), 4)
 
     def test_online_compose_mounts_runtime_data_and_skills(self):
         source = DEV_COMPOSE_PATH.read_text(encoding="utf-8")
 
-        self.assertEqual(source.count("env_file:\n      - ${ENV_FILE:-.env}"), 3)
+        self.assertEqual(source.count("env_file:\n      - ${ENV_FILE:-.env}"), 4)
         for mount in (
             "./data/users.csv:/users.csv",
             "./data/upload:/data/upload",

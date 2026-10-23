@@ -231,7 +231,12 @@ def sync_gitlab_projects_from_config(config):
     )
     fetched_count = len(projects)
     skipped_existing = 0
-    if config.get("GITLAB_SYNC_SKIP_EXISTING_REPOS", True):
+    skip_existing = config.get("GITLAB_SYNC_SKIP_EXISTING_REPOS", True)
+    if skip_existing and Product.query.first() is None:
+        # 产品表为空说明尚未完成首次注册。即使历史分支记录已存在，也必须全量重建
+        # 产品、模块和关联关系，否则启动同步会被“跳过已有仓库”误判成无事可做。
+        skip_existing = False
+    if skip_existing:
         projects, skipped_existing = filter_projects_missing_repositories(projects)
 
     stats = sync_gitlab_projects(projects, db_max_retries=config.get("GITLAB_DB_MAX_RETRIES", 2))

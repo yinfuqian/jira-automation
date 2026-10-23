@@ -8,17 +8,15 @@ from datetime import datetime
 from urllib.parse import quote, urlparse, urlunparse
 
 from flask import Blueprint, current_app as app, jsonify, request
-from sqlalchemy import text
 from sqlalchemy.exc import IntegrityError, OperationalError, SQLAlchemyError
 
-from app.git.gitlab_sync import GitLabSyncError, sync_gitlab_projects_from_config
+from app.git.gitlab_sync import GitLabSyncError
 from app.git.models import GitRef
+from app.git.tasks import run_gitlab_sync_once
 from extensions import db
 
 
 git_bp = Blueprint("git", __name__)
-GIT_SYNC_LOCK_NAME = "jira_automation:gitlab_sync"
-_local_sync_lock = threading.Lock()
 _repo_ref_locks = {}
 _repo_ref_locks_guard = threading.Lock()
 
@@ -227,44 +225,6 @@ def list_remote_refs(repo_url, username=None, password=None, timeout=30):
     return parse_ls_remote_refs(result.stdout)
 
 
-def acquire_sync_lock(timeout=0):
-    """处理 acquire_sync_lock 对应的业务步骤，并向调用方返回所需结果。"""
-    bind = db.session.get_bind()
-    dialect_name = getattr(getattr(bind, "dialect", None), "name", "")
-
-    if dialect_name.startswith("mysql"):
-        connection = db.engine.connect()
-        acquired = connection.execute(
-            text("SELECT GET_LOCK(:name, :timeout)"),
-            {"name": GIT_SYNC_LOCK_NAME, "timeout": timeout},
-        ).scalar()
-        if acquired == 1:
-            return connection
-        connection.close()
-        return None
-
-    if _local_sync_lock.acquire(blocking=False):
-        return _local_sync_lock
-    return None
-
-
-def release_sync_lock(lock_token):
-    """处理 release_sync_lock 对应的业务步骤，并向调用方返回所需结果。"""
-    try:
-        if hasattr(lock_token, "execute"):
-            lock_token.execute(
-                text("SELECT RELEASE_LOCK(:name)"),
-                {"name": GIT_SYNC_LOCK_NAME},
-            )
-            return
-
-        if lock_token is _local_sync_lock:
-            lock_token.release()
-    finally:
-        if hasattr(lock_token, "close"):
-            lock_token.close()
-
-
 @git_bp.route("/branches", methods=["GET"])
 def get_remote_branches():
     """读取并返回 get_remote_branches 对应的业务数据，保持现有调用约定。"""
@@ -315,16 +275,21 @@ def get_remote_branches():
 
 @git_bp.route("/sync-projects", methods=["POST"])
 def sync_gitlab_projects():
-    """更新 sync_gitlab_projects 对应的业务数据，保持现有调用约定。"""
-    lock_token = acquire_sync_lock()
-    if not lock_token:
-        return jsonify({
-            "error": "Git 项目正在同步中，请稍后重试",
-            "code": "GIT_SYNC_IN_PROGRESS",
-        }), 409
-
+    """保留给 Windows 客户端的手动同步入口。"""
     try:
-        stats = sync_gitlab_projects_from_config(app.config)
+        result = run_gitlab_sync_once(app.config)
+        if result.get("status") == "skipped" and result.get("reason") == "sync_in_progress":
+            return jsonify({
+                "error": "Git 项目正在同步中，请稍后重试",
+                "code": "GIT_SYNC_IN_PROGRESS",
+                **result,
+            }), 409
+        if result.get("status") == "skipped" and result.get("reason") == "git_base_url_missing":
+            return jsonify({
+                "error": "未配置 GIT_BASE_URL，无法同步 GitLab 项目",
+                "code": "GIT_BASE_URL_MISSING",
+                **result,
+            }), 503
     except GitLabSyncError as exc:
         app.logger.exception("GitLab 项目同步失败")
         return jsonify({
@@ -335,8 +300,6 @@ def sync_gitlab_projects():
         db.session.rollback()
         app.logger.exception("GitLab 项目同步写入数据库失败")
         return jsonify({"error": "GitLab 项目同步写入数据库失败"}), 500
-    finally:
-        release_sync_lock(lock_token)
 
-    return jsonify({"message": "GitLab 项目同步完成", **stats}), 200
+    return jsonify({"message": "GitLab 项目同步完成", **result}), 200
 

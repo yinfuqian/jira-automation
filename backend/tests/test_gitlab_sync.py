@@ -18,6 +18,7 @@ from app.git.gitlab_sync import (
     fetch_gitlab_projects,
     normalize_gitlab_project,
     sync_gitlab_projects,
+    sync_gitlab_projects_from_config,
 )
 from app.modules.models import Module
 from app.product.models import Product
@@ -144,6 +145,28 @@ class GitLabSyncTests(unittest.TestCase):
         self.assertEqual(skipped_count, 1)
         self.assertEqual(len(missing), 1)
         self.assertEqual(missing[0]["name"], "new")
+
+    def test_empty_products_table_forces_full_bootstrap_even_when_branch_exists(self):
+        repo_url = "https://code.in.wezhuiyi.com/aiforce/aiforce2.git"
+        db.session.add(Branch(address=repo_url, tag_version="master"))
+        db.session.commit()
+        projects = [{
+            "name": "aiforce2",
+            "path_with_namespace": "aiforce/aiforce2",
+            "http_url_to_repo": repo_url,
+            "default_branch": "master",
+        }]
+        config = {
+            "GIT_BASE_URL": "https://code.in.wezhuiyi.com/",
+            "GITLAB_SYNC_SKIP_EXISTING_REPOS": True,
+        }
+
+        with patch.object(gitlab_sync, "fetch_gitlab_projects", return_value=projects):
+            result = sync_gitlab_projects_from_config(config)
+
+        self.assertEqual(result["created_products"], 1)
+        self.assertEqual(result["created_modules"], 1)
+        self.assertEqual(result["existing_repositories_skipped"], 0)
 
 
 if __name__ == "__main__":
