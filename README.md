@@ -23,7 +23,7 @@
 | `api-dev` | Flask API、认证、上传、Git 和分析任务提交（开发环境） | `6000` |
 | `worker-analysis-dev` | Celery 日志分析、图片识别与 GitLab 维护任务（开发环境） | 无宿主机端口 |
 | `worker-skill-dev` | Celery 技能（Codex Agent）执行（开发环境） | 无宿主机端口 |
-| `beat-dev` | 开发环境定时任务调度，默认每 12 小时同步 GitLab 产品与模块 | 无宿主机端口 |
+| `beat-dev` | 开发环境定时任务调度：每分钟清理排队过期技能任务，并按配置周期同步 GitLab 产品与模块 | 无宿主机端口 |
 | `migrate` | 创建数据库并执行 `flask db upgrade` | 一次性容器 |
 | `mysql` | 业务数据、知识库和用户操作日志 | `3306` |
 | `redis` | 登录会话、限流状态、Celery Broker 和结果存储 | `6379` |
@@ -389,7 +389,8 @@ PRD—原型一致性审核报告，只把评论草稿与这两份报告打成
 `<工作目录>/outputs/<KEY>-G1预检包-<时间戳>.zip` 供下载）、
 `review-jira-req`（按 OpenSpec 好需求标准评审需求质量，同时读取 Jira 附件并抽取文本/图片证据，
 产出 Markdown 报告，对 Jira 只读）、`review-jira-qa`（三段式 QA 交付技能；由 G1 调用时只执行
-阶段一需求准入门禁，按 B1–B7 / C1–C6 产出 HTML 清单、上传附件并写 QA 评论；阶段二/三仅供人工触发）、
+阶段一需求准入门禁，按 B1–B7 / C1–C6 产出 HTML 清单、上传附件并写 QA 评论；运营性失败使用
+`--non-blocking` 返回调用方，不阻塞 G1 后续交付；阶段二/三仅供人工触发）、
 `review-jira-design`（对照定稿 PRD 审核产品原型初稿，
 检查需求完整性、PRD—原型一致性、流程与状态覆盖，产出简洁可执行的自包含 HTML 报告；对 Jira 只读，
 由 `jira-gate-1` 与 `jira-gate-1-mock` 在需求质量评审之后调用）与 `jira-code`（读取需求单的「开发方案」附件，从方案指定的基线分支拉出
@@ -850,10 +851,14 @@ docker compose -f docker-compose-dev.yaml exec worker-skill-dev codex --version
 `CODEX_WIRE_API` 与中转服务的接口协议不匹配（`responses` 对应 `/v1/responses`，`chat` 对应 `/v1/chat/completions`）。
 任务的阶段、最近事件与错误信息可通过 `GET /skill/task/<task_id>` 或 `skill_run_records` 表查看。
 
-两类问题会自动识别，无需等满 `CODEX_SKILL_TIMEOUT`：
+三类问题会自动识别，无需等满 `CODEX_SKILL_TIMEOUT`：
 
 - **网络不可达**：Codex 反复输出 `Reconnecting... waiting for network` 时，连续达到 `CODEX_NETWORK_RETRY_LIMIT`
   （默认 10 次，按指数退避约 15 分钟）即提前终止，任务记为 `failed`，`stage=network_unreachable`，错误信息给出中转地址、
   出网与代理的排查方向。若该任务是从沙箱或离线环境启动的进程提交的，请改用正常网络环境重启 `worker-skill-dev`。
 - **worker 重启遗留**：`worker-skill` 启动时若 `SKILL_RECOVER_ORPHANS=true`（默认），会把上一次运行中残留的
   `running` 任务标记为 `failed`，`stage=worker_restarted`；仍被其它 worker 正常执行的任务不会被误改。
+- **排队长期未消费**：技能任务入队时带 60 分钟过期时间（`SKILL_QUEUE_TTL_SECONDS=3600`）。Celery Beat 每分钟
+  触发一次清理（`SKILL_QUEUE_SWEEP_INTERVAL_SECONDS=60`），按 task id 从 Redis `skill` 队列精确移除超过 60 分钟
+  仍未被消费的消息，并把对应记录标记为 `failed`、`stage=queue_expired`；统计表 `failure_kind=queue_expired`。
+  清理任务由分析 worker 消费 `maintenance` 队列执行，因此 skill worker 假死时也能收敛排队状态。

@@ -95,16 +95,27 @@ def update_record(record: SkillRunRecord, **fields) -> SkillRunRecord:
     return record
 
 
-def mark_running(record: SkillRunRecord, workspace_dir: str) -> SkillRunRecord:
-    # 把记录置为执行中并登记工作目录。
-    record = update_record(
-        record,
-        status=SkillRunRecord.STATUS_RUNNING,
-        stage="starting",
-        workspace_dir=workspace_dir,
-        started_at=datetime.utcnow(),
-        error_message=None,
+def mark_running(record: SkillRunRecord, workspace_dir: str) -> SkillRunRecord | None:
+    # 只有仍处于排队状态的记录才能进入执行中，避免过期清理与 worker 取任务并发时互相覆盖。
+    updated = (
+        SkillRunRecord.query.filter(
+            SkillRunRecord.id == record.id,
+            SkillRunRecord.status == SkillRunRecord.STATUS_QUEUED,
+        ).update(
+            {
+                SkillRunRecord.status: SkillRunRecord.STATUS_RUNNING,
+                SkillRunRecord.stage: "starting",
+                SkillRunRecord.workspace_dir: workspace_dir,
+                SkillRunRecord.started_at: datetime.utcnow(),
+                SkillRunRecord.error_message: None,
+            },
+            synchronize_session=False,
+        )
     )
+    db.session.commit()
+    db.session.refresh(record)
+    if not updated:
+        return None
     usage.mark_running(record)
     return record
 

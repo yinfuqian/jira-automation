@@ -61,6 +61,11 @@ class SkillJiraGateFlowTests(unittest.TestCase):
         self.assertIn("build-report.mjs", payload["prompt_template"])
         self.assertIn("只执行阶段一", payload["prompt_template"])
         self.assertIn("ok=false", payload["prompt_template"])
+        # QA 失败不能阻塞 G1：必须记录失败步骤并继续交付。
+        self.assertIn("--non-blocking", payload["prompt_template"])
+        self.assertIn("failedStep", payload["prompt_template"])
+        self.assertIn("--run-id manual", payload["prompt_template"])
+        self.assertIn("继续写 G1 评论", payload["prompt_template"])
 
     def test_skill_integrates_qa_gate_and_merges_conclusions(self):
         """G1 必须调用 review-jira-qa，并规定任一准出不通过即退回补充。"""
@@ -75,6 +80,11 @@ class SkillJiraGateFlowTests(unittest.TestCase):
         self.assertIn('QA_WORKSPACE="$PWD/work/jira-gate/<KEY>/review-jira-qa"', text)
         self.assertIn("QA 清单附件", text)
         self.assertIn("QA 评论", text)
+        # QA 运营性失败只记「未完成」，G1 后续交付与流转必须继续。
+        self.assertIn("--non-blocking", text)
+        self.assertIn("failedStep/error", text)
+        self.assertIn("继续执行 G1 的评论", text)
+        self.assertIn("不得中断 G1 后续交付", text)
 
     def test_skill_integrates_design_review_between_req_and_qa(self):
         """G1 必须在需求评审之后、QA 之前调用 review-jira-design，并上传设计报告。"""

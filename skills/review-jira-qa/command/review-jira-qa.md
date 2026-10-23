@@ -48,7 +48,7 @@ node "${CLAUDE_SKILL_DIR}/bin/render-gate.mjs" --spec ".qa/runs/<RUN_ID>/gate.sp
 node "${CLAUDE_SKILL_DIR}/bin/validate-gate.mjs" --html <HTML> --spec ".qa/runs/<RUN_ID>/gate.spec.json"
 ```
 
-校验失败：按错误修正 spec 后重试，最多两次；仍失败则停止，不上传。
+校验失败：按错误修正 spec 后重试，最多两次；仍失败则不上传，记录 `failedStep=validate-gate` 后进入第 7 步输出结果，不阻塞调用方。
 
 6. 上传附件并同步评论：
 
@@ -60,13 +60,15 @@ node "${CLAUDE_SKILL_DIR}/bin/jira-comment.mjs" --key <KEY> --body <COMMENT> --r
 7. 输出运行结果：
 
 ```bash
-node "${CLAUDE_SKILL_DIR}/bin/result.mjs" --stage risk-analysis --key <KEY> --run-id "<RUN_ID>" --spec ".qa/runs/<RUN_ID>/gate.spec.json"
+node "${CLAUDE_SKILL_DIR}/bin/result.mjs" --stage risk-analysis --key <KEY> --run-id "<RUN_ID>" --spec ".qa/runs/<RUN_ID>/gate.spec.json" --non-blocking
 ```
+
+任何前置步骤失败（凭据、读单、下载、材料、渲染、校验、上传、评论）都不要退出整个任务：记录失败步骤与错误，停止本技能剩余依赖步骤，然后用同一条 `result.mjs` 命令补上 `--error "<原因>" --failed-step "<步骤>" --non-blocking`。该模式仍写 `ok=false` 的结果，但以 0 退出并把控制权交还调用方。若失败发生在 `jira-read` 之前、尚未取得 `RUN_ID`，使用 `--run-id manual`。
 
 ## 约束
 
 - 结论只有「通过 / 暂不通过」；不通过项编号 1..N 连续，类型只有「材料冲突 / 材料未明确」。
 - 每条不通过项必须有材料原文依据；不写具体改法。
 - 结论=暂不通过时仍正常结束（exit 0），供 Jira 规则据 `QA_RESULT_JSON.conclusion` 决定是否退回「评审中」。
-- **阶段一结束即停止**，不执行 `/qa-design`；通过时只提示下一步命令。
+- **阶段一结束即返回调用方**，不执行 `/qa-design`；通过时只提示下一步命令，失败时也不阻塞父技能的后续流程。
 - 不修改需求描述、不改状态、不删除产品材料；旧版本只删除同交付物族。

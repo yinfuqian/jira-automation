@@ -16,6 +16,18 @@ export JIRA_PAT="${JIRA_PAT:-$JIRA_TOKEN}"
 
 **被 `jira-gate-1` 调用时只执行阶段一，且必须执行完 `result.mjs`；不得自动进入阶段二或阶段三。**
 
+## 非阻塞执行（硬约束）
+
+本技能被 `jira-gate-1` 或其它父技能调用时，是**一次子流程**，不是整个任务的终点。无论阶段一成功、业务暂不通过还是运营性失败，都必须把控制权交还调用方，不能退出、不能等待人工确认、不能阻塞父流程继续执行。
+
+- 不要用 `set -e` 串行执行步骤；每一步单独捕获退出码，失败只影响本技能剩余步骤。
+- 任一脚本失败（preflight、下载、渲染、校验、上传、评论等）时：先记录 `failedStep` 与错误原因，停止本技能后续依赖步骤，然后**必须执行** `result.mjs --non-blocking` 写结果；失败不阻断父流程。若失败发生在 `jira-read` 之前、尚未取得 `RUN_ID`，使用 `--run-id manual` 写结果。
+- `--non-blocking` 只改变退出行为：`ok=false` 仍会写入 `result.json` 和 `QA_RESULT_JSON`，调用方必须据此把 QA 标记为「未完成」，不能写成「通过」。
+- 业务结论「暂不通过」仍属正常完成（`ok=true`）；它只阻止本技能进入阶段二/三，不阻止父技能完成自己的后续交付。
+- 不重试到超时：校验类错误最多按规则修正两次；其它失败最多重试一次，仍失败就记录并返回。
+- 若 `result.mjs` 自身无法执行，必须在最终消息中原样输出一行 `QA_RESULT_JSON` 和一个包含 `ok:false`、`error`、`failedStep` 的 JSON 对象，然后返回调用方。
+- 本规则只约束「返回调用方」，不授权跳过业务判定，也不授权自动执行阶段二或阶段三。
+
 ## 何时触发
 
 - 用户给出 Jira Issue Key/URL，要求「需求准入 / 风险分析 / 整改清单」→ 阶段一。
@@ -77,7 +89,7 @@ node "${CLAUDE_SKILL_DIR}/bin/render-gate.mjs" --spec <gate.spec.json>
 node "${CLAUDE_SKILL_DIR}/bin/validate-gate.mjs" --html <html> --spec <gate.spec.json>
 node "${CLAUDE_SKILL_DIR}/bin/jira-upload.mjs" --key <KEY> --file <html> --run-id <runId>
 node "${CLAUDE_SKILL_DIR}/bin/jira-comment.mjs" --key <KEY> --body <comment.md> --run-id <runId>
-node "${CLAUDE_SKILL_DIR}/bin/result.mjs" --stage risk-analysis --key <KEY> --run-id <runId> --spec <gate.spec.json>
+node "${CLAUDE_SKILL_DIR}/bin/result.mjs" --stage risk-analysis --key <KEY> --run-id <runId> --spec <gate.spec.json> --non-blocking
 ```
 
 规则：
@@ -86,7 +98,7 @@ node "${CLAUDE_SKILL_DIR}/bin/result.mjs" --stage risk-analysis --key <KEY> --ru
 - 结论只有「通过 / 暂不通过」。不通过项编号 1..N 连续，类型只有「材料冲突 / 材料未明确」。
 - 模型只写 `gate.spec.json`，**不直接写 HTML**；HTML 由 `render-gate.mjs` 生成。
 - 同一材料重复运行结论与编号一致；`--now` 固定分析时间。
-- 阶段一结束即停止；结论为「通过」也不自动进入阶段二，只提示 `/qa-design <KEY>`。
+- 阶段一结束即返回调用方；结论为「通过」也不自动进入阶段二，只提示 `/qa-design <KEY>`。
 
 ## 与 jira-gate-1 的集成（固定契约）
 
@@ -104,7 +116,7 @@ export QA_WORKSPACE="$PWD/work/jira-gate/<KEY>/review-jira-qa"
 
 - `ok=true` + `conclusion=通过`：本技能通过，不额外阻断 G1。
 - `ok=true` + `conclusion=暂不通过`：G1 最终结论必须为「退回补充」，并沿用 G1 的「评审中」流转规则。
-- `ok=false` 或任一脚本非零退出：属于运营性失败，**不得声称 QA 已通过**；G1 停止写评论、回写门禁字段、上传报告和流转状态，保留现场并说明失败原因。
+- `ok=false` 或任一脚本非零退出：属于运营性失败，**不得声称 QA 已通过**；本技能用 `result.mjs --non-blocking` 记录 `failedStep`/`error` 后返回，**G1 继续完成评论、门禁字段、报告上传与必要的状态流转**，并在评论中把 QA 写成「未完成（原因）」。
 
 本技能自行上传 HTML 并写 `QA-需求准入门禁结果` 评论；G1 评论只引用其结论、附件名和评论 ID，不复制完整清单。本技能不改 Jira 状态。
 
@@ -151,7 +163,7 @@ QA_RESULT_JSON
 同时写入 `${QA_WORKSPACE}/.qa/runs/<runId>/result.json`。
 
 - `ok=true` 表示业务完成；`conclusion=暂不通过` 仍是 `ok=true`，供 Jira 规则据结论决定是否退回「评审中」。
-- 运营性失败 `ok=false`，退出码非零；不产出半截门禁结论。
+- 运营性失败 `ok=false`；父技能调用时用 `--non-blocking` 以 0 退出，不产出半截门禁结论，也不阻断父流程。
 
 ## 机器可读结果（仅顶层调用时）
 

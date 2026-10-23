@@ -15,7 +15,7 @@ from flask import Blueprint, current_app, g, jsonify, request, send_file
 
 from extensions import celery
 
-from .. import artifacts, env_lock, store, tickets, usage
+from .. import artifacts, env_lock, queue_expiry, store, tickets, usage
 from ..models.model import SkillRunRecord
 from ..registry import SkillError, list_skills, resolve_skill
 from ..tasks import run_skill_task
@@ -99,7 +99,12 @@ def _create_and_enqueue_skill(skill, jira_url: str, inputs: dict, requested_by: 
         trigger_source=trigger_source,
     )
     try:
-        run_skill_task.apply_async(args=[record.id], task_id=task_id)
+        queue_ttl = int(
+            current_app.config.get("SKILL_QUEUE_TTL_SECONDS")
+            or queue_expiry.DEFAULT_QUEUE_TTL_SECONDS
+        )
+        # 消息在队列中超过 TTL 后即使被取出也不再执行；数据库记录由周期清理任务同步置为失败。
+        run_skill_task.apply_async(args=[record.id], task_id=task_id, expires=queue_ttl)
     except Exception as exc:  # noqa: BLE001 - 入队失败需要立刻反馈而不是留下假排队记录
         logging.exception("技能任务入队失败：task_id=%s", task_id)
         store.mark_finished(

@@ -1,6 +1,10 @@
 """review-jira-qa 契约测试：锁定技能目录、阶段一边界、运行配置与凭据安全。"""
 import json
+import os
+import shutil
+import subprocess
 import sys
+import tempfile
 import unittest
 from pathlib import Path
 
@@ -12,6 +16,7 @@ if str(BACKEND_DIR) not in sys.path:
 PROJECT_ROOT = BACKEND_DIR.parent
 SKILLS_ROOT = PROJECT_ROOT / "skills"
 SKILL_DIR = SKILLS_ROOT / "review-jira-qa"
+NODE = shutil.which("node")
 
 
 class ReviewJiraQaVendoringTests(unittest.TestCase):
@@ -62,6 +67,11 @@ class ReviewJiraQaVendoringTests(unittest.TestCase):
         self.assertIn("不得自动进入阶段二或阶段三", text)
         self.assertIn("G1 最终结论必须为「退回补充」", text)
         self.assertIn("运营性失败", text)
+        # 子流程必须非阻塞：失败也只写结果并返回，不能中断父技能。
+        self.assertIn("--non-blocking", text)
+        self.assertIn("failedStep", text)
+        self.assertIn("不能阻塞父流程继续执行", text)
+        self.assertIn("--run-id manual", text)
 
     def test_runtime_defaults_to_stage1_only(self):
         """服务端直接调用该技能时也只能跑阶段一，并强制读取 Jira 链接。"""
@@ -74,6 +84,10 @@ class ReviewJiraQaVendoringTests(unittest.TestCase):
         self.assertIn("preflight", prompt)
         self.assertIn("validate-gate", prompt)
         self.assertIn("QA_RESULT_JSON", prompt)
+        self.assertIn("--non-blocking", prompt)
+        self.assertIn("failedStep", prompt)
+        self.assertIn("不阻塞", prompt)
+        self.assertIn("--run-id manual", prompt)
         # runtime 模板必须是真实换行，不能把字面量 \n 塞给模型。
         self.assertIn("\n", prompt)
         self.assertNotIn("\\n", prompt)
@@ -104,6 +118,50 @@ class ReviewJiraQaVendoringTests(unittest.TestCase):
             source = path.read_text(encoding="utf-8")
             self.assertNotIn("/transitions", source, f"{path} 不应调用状态流转接口")
             self.assertNotIn("setGateResult", source, f"{path} 不应写 G1 门禁字段")
+
+
+@unittest.skipUnless(NODE, "未安装 node，跳过 result.mjs 非阻塞测试")
+class ResultNonBlockingTests(unittest.TestCase):
+    """非阻塞模式必须写出 ok=false 结果，同时以 0 退出把控制权交还父技能。"""
+
+    def test_non_blocking_error_returns_zero_and_writes_result(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            env = os.environ.copy()
+            env["QA_WORKSPACE"] = tmp
+            result = subprocess.run(
+                [
+                    NODE,
+                    str(SKILL_DIR / "bin" / "result.mjs"),
+                    "--stage",
+                    "risk-analysis",
+                    "--key",
+                    "QA-101",
+                    "--run-id",
+                    "manual",
+                    "--error",
+                    "模拟脚本失败",
+                    "--failed-step",
+                    "preflight",
+                    "--non-blocking",
+                ],
+                capture_output=True,
+                encoding="utf-8",
+                errors="replace",
+                cwd=tmp,
+                env=env,
+                check=False,
+                timeout=60,
+            )
+
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertIn("QA_RESULT_JSON", result.stdout)
+            payload = json.loads(
+                (Path(tmp) / ".qa" / "runs" / "manual" / "result.json").read_text(encoding="utf-8")
+            )
+            self.assertFalse(payload["ok"])
+            self.assertEqual(payload["failedStep"], "preflight")
+            self.assertEqual(payload["error"], "模拟脚本失败")
+            self.assertTrue(payload["nonBlocking"])
 
 
 if __name__ == "__main__":

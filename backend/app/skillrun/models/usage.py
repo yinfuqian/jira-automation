@@ -48,6 +48,7 @@ class SkillCallRecord(db.Model):
     FAILURE_NO_FINAL_MESSAGE = "no_final_message"
     FAILURE_CANCELLED = "cancelled"
     FAILURE_WORKER_RESTART = "worker_restart"
+    FAILURE_QUEUE_EXPIRED = "queue_expired"
 
     id = db.Column(
         db.BigInteger().with_variant(db.Integer, "sqlite"),
