@@ -39,6 +39,41 @@ CREATE TABLE IF NOT EXISTS skill_run_records (
 """
 
 
+SKILL_CALL_RECORDS_DDL = """
+CREATE TABLE IF NOT EXISTS skill_call_records (
+    id BIGINT NOT NULL AUTO_INCREMENT,
+    task_id VARCHAR(64) NOT NULL,
+    record_id INTEGER,
+    skill_id VARCHAR(64) NOT NULL,
+    skill_version VARCHAR(64),
+    issue_key VARCHAR(64),
+    jira_url VARCHAR(500),
+    trigger_source VARCHAR(32) NOT NULL DEFAULT 'api',
+    requested_by VARCHAR(255),
+    execution_status VARCHAR(32) NOT NULL DEFAULT 'queued',
+    outcome VARCHAR(16) NOT NULL DEFAULT 'unknown',
+    conclusion_text VARCHAR(128),
+    conclusion_source VARCHAR(16) NOT NULL DEFAULT 'none',
+    failure_kind VARCHAR(32),
+    blocking_count INTEGER,
+    summary VARCHAR(500),
+    duration_ms INTEGER,
+    created_at DATETIME NOT NULL,
+    started_at DATETIME,
+    finished_at DATETIME,
+    updated_at DATETIME NOT NULL,
+    PRIMARY KEY (id),
+    UNIQUE KEY uq_skill_call_task (task_id),
+    UNIQUE KEY uq_skill_call_record (record_id),
+    KEY ix_skill_call_skill_created (skill_id, created_at),
+    KEY ix_skill_call_status_created (execution_status, created_at),
+    KEY ix_skill_call_outcome_created (outcome, created_at),
+    KEY ix_skill_call_issue_created (issue_key, created_at),
+    KEY ix_skill_call_source_created (conclusion_source, created_at)
+)
+"""
+
+
 DDL_STATEMENTS = [
     """
     CREATE TABLE IF NOT EXISTS branches (
@@ -397,6 +432,12 @@ def column_data_type(cursor, table_name, column_name):
     return (row[0] or "").lower() if row else ""
 
 
+def ensure_skill_call_records_schema(cursor):
+    # 缺表时自动创建技能调用统计表；不改动原任务表结构。
+    if not table_exists(cursor, "skill_call_records"):
+        cursor.execute(SKILL_CALL_RECORDS_DDL)
+
+
 def ensure_skill_run_records_schema(cursor):
     """保证技能执行记录表可用：缺表时自动建档，老库把 progress 从 TEXT 升级为 LONGTEXT。"""
     if not table_exists(cursor, "skill_run_records"):
@@ -420,6 +461,7 @@ def bootstrap_schema():
                 cursor.execute(ddl)
             ensure_query_records_schema(cursor)
             ensure_skill_run_records_schema(cursor)
+            ensure_skill_call_records_schema(cursor)
             cursor.execute(
                 "CREATE TABLE IF NOT EXISTS alembic_version ("
                 "version_num VARCHAR(32) NOT NULL, "

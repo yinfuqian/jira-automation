@@ -25,12 +25,34 @@ skills/
 
 未提供 `runtime.json` 时使用接口内置的默认模板，并把 `skill_id`、`jira_url`、`inputs` 一起交给 Codex。
 
+## 调用统计结果约定
+
+平台每次通过 `/skill/run` 或 Jira webhook 发起任务时，都会在 `skill_call_records` 表记录一条**顶层技能**调用。完整统计口径见仓库根 `README.md` 的「技能调用统计」。
+
+顶层技能必须在所有交付动作完成、清理工作区之前，把最终业务结果写到任务根目录（当前工作目录）的 `.skill-result.json`：
+
+```json
+{
+  "schemaVersion": 1,
+  "skillId": "jira-gate-1",
+  "issueKey": "CALL-1941",
+  "conclusion": "通过",
+  "summary": "G1、设计准入与 QA 均通过，未流转状态",
+  "blockingCount": 0
+}
+```
+
+- `conclusion` 由各技能按业务口径填写，例如 `通过`、`退回补充`、`暂不通过`、`合格`、`需修改`、`不合格`、`已自动分析`、`打回`、`已完成`、`失败`、`不适用`。
+- 该文件只用于统计入库，不是交付物，不写入 Jira；平台读取成功后自动删除。
+- 被父技能内部调用的子技能（如 `jira-gate-1` 内的 `review-jira-qa`）**不得写任务根目录 `.skill-result.json`**，只保留自己的运行结果，避免重复统计。
+- 无法形成业务结论的运营性失败不要伪造「通过」；平台会把缺少结果文件的任务记为 `outcome=unknown`。
+
 ## 已内置技能
 
 - `jira-gate-1`：Jira G1 需求准入检查（PRD 准入，入口参考「需求设计」）。**只处理类型为「故事」的单子**，先跑 `scripts/jira-cli.mjs precheck`，类型不符直接跳过；按 `references/checklist.md`（PRD 需求准入 Checklist）逐项判定，再依次调用 `review-jira-req`（需求质量评审）、`review-jira-design`（原型设计准入）与 `review-jira-qa` 阶段一（QA 需求准入门禁）；把综合结论与检查项写入需求单评论（满足 `(/)` 绿勾、不满足 `(x)` 红叉，元信息区带设计准入结论、设计报告附件名、QA 结论、阻断项、附件名与评论 ID）。`review-jira-req` 生成 OpenSpec 评审报告（以「宋立志」结尾）、`review-jira-design` 生成原型设计准入 HTML，两份报告都由 G1 上传为附件；`review-jira-qa` 自行上传需求准入门禁清单 HTML 并写 QA 评论。**三条准出都通过时不流转；任一不通过时流转到「评审中」并在评论里 @ 流转人**。交付全部完成后用 `scripts/workdir-cleanup.mjs --key <KEY>` 清理本次任务的工作区中间产物（含 `design/` 与 `review-jira-qa/` 子工作区），`reports/` 不在清理范围内。
 - `jira-gate-2`：Jira G2 技术方案准出检查（入口参考「开发设计中」；通过不流转，退回补充→「开发设计中」）。**只处理类型为「故事」的单子**，按 `references/checklist.md`（技术方案准出 Checklist）执行 10 项 `MUST`（G2-M01 ~ G2-M10）与命中的 `CONDITIONAL`（G2-C01 ~ G2-C11），把结论与检查项写入需求单评论（满足 `(/)` 绿勾、不满足 `(x)` 红叉）；**通过时不流转，退回补充时流转到「开发设计中」并在评论里 @ 流转人**。只写评论与 G2 门禁字段，不生成报告、不上传附件；收尾用 `scripts/workdir-cleanup.mjs` 清理 `work/jira-gate-2/<KEY>/`。
 - `review-jira-req`：按 OpenSpec 好需求标准评审需求质量，自动下载 Jira 附件并抽取 Office/HTML/文本，图片交给模型直接查看，产出带附件检查总览的 Markdown 报告。**对 Jira 只读**，由 `jira-gate-1` 调用；报告落盘后由 `jira-gate-1` 的 `scripts/jira-cli.mjs attach` 上传为附件。
-- `review-jira-qa`：三段式 QA 交付技能，仓库内目录为 `skills/review-jira-qa`。由 `jira-gate-1` 调用时**只执行阶段一需求准入门禁**：读取 Jira 最新需求附件，按 B1–B7 / C1–C6 判定「通过 / 暂不通过」，生成自包含 HTML 清单、上传 Jira 并写独立 QA 评论；`ok=false` 视为运营性失败，不能当作门禁结论。阶段二（测试方案 + XMind）与阶段三（Excel + Xray CSV）仅供人工单独触发，G1 不调用。
+- `review-jira-qa`：三段式 QA 交付技能，仓库内目录为 `skills/review-jira-qa`。由 `jira-gate-1` 调用时**只执行阶段一需求准入门禁**：读取 Jira 最新需求附件，按 B1–B7 / C1–C6 判定「通过 / 暂不通过」，生成自包含 HTML 清单、上传 Jira 并写独立 QA 评论；`ok=false` 视为运营性失败，不能当作门禁结论，但使用 `--non-blocking` 返回调用方，不阻塞 G1 继续写评论、回写门禁字段、上传报告与执行必要流转。阶段二（测试方案 + XMind）与阶段三（Excel + Xray CSV）仅供人工单独触发，G1 不调用。
 - `review-jira-design`：对照定稿 PRD 审核产品原型初稿是否具备进入设计精修的条件，检查需求完整性、PRD—原型一致性、流程与状态覆盖，产出简洁、可执行、自包含的 HTML 审核结论（含可选的内联截图证据）。**对 Jira 只读**，只读本地 PRD 与原型文件；`scripts/capture_prototype_evidence.mjs` 在桌面端用 Playwright/Chrome 截取证据，容器内没有浏览器时按「无法截取时」记「截图未验证」。报告不手写：先按 `references/content-example.json` 填内容 JSON，再用 `scripts/build-report.mjs`（只用 Node 内置模块，无需 `npm install`）配合 `references/report-template.html` 合成自包含 HTML，正文不出现编号与代码，编号只放在点击浮层里。由 `jira-gate-1` 与 `jira-gate-1-mock` 在需求质量评审之后调用。
 - `jira-gate-1-mock`：`jira-gate-1` 的**只读预演版**。**只处理类型为「故事」的单子**，先跑 `scripts/jira-cli.mjs precheck`；类型门禁、取数范围、按 PRD 需求准入 Checklist 的逐项判定、结论口径**与 `jira-gate-1` 的主判定一致**，评论草稿同样用 `(/)` 绿勾与 `(x)` 红叉展示检查项。评审环节依次调用 `review-jira-req`（需求质量评审报告 md）与 `review-jira-design`（原型设计准入报告 html）；当前预演包不调用 `review-jira-qa`，该 QA 准入门禁只在正式版 `jira-gate-1` 中执行。差异只在交付：**不写 Jira**——不写评论、不回写门禁字段、不上传附件、不流转状态，也不实际 `@` 流转人（只在草稿里给出建议对象与建议流转状态）。交付物是一个压缩包 `<工作目录>/outputs/<KEY>-G1预检包-<时间戳>.zip`，内含评论草稿 `<KEY>-G1预检评论.txt`（Jira wiki 标记，可直接粘贴）、`<KEY>-需求评审报告-宋立志.md` 与 `<KEY>-原型设计准入报告.html`，由 `scripts/pack-deliverables.mjs` 打包（自研 ZIP 实现，容器与桌面端都不依赖系统 `zip` 命令）。只读是**脚本层保证**：`scripts/jira.mjs` 的 `request()` 固定 GET 且无写函数，`scripts/jira-cli.mjs` 只有读命令。适合先演练准入检查、或不想在需求单上留痕的场景；需要在单子上留痕时改用 `jira-gate-1`。交付物压缩包用 `GET /skill/task/<task_id>` 返回的 `artifacts[].download_url` 下载：该地址自带短时效签名票据，可直接在浏览器打开（`GET /skill/task/<task_id>/artifacts/<文件名>` 也支持用 `X-API-Token` 请求头鉴权）。
 - `jira-code`：读取需求单的「开发方案」附件，从方案指定的基线分支拉出 `feature/<单号>` 分支，按方案实现代码并推送到远端；推送完成后按方案里写的**流水线环境地址**做**热更新**（走 `pipeline-integration-mcp`，流程以 `devops-mcp-invoker` 为准）。顺序固定为「推送 → 热更新 → 清理检出目录」：热更新要用检出目录里的部署文件（`docker-compose.yml` / `deployments/kubernetes/*.yaml`）和刚构建的制品，先删目录就传不了。进度与异常都只更新在同一条 Jira 评论上（评论带标记 `jira-code:progress:<KEY>`，默认每 5 分钟自动刷新）；评论里固定有一行「热更新」结论（已完成／未执行／失败），由 `progress.mjs --hotreload` 上报驱动，热更新被跳过或失败时不会被写成「全部完成」。热更新处理完之后会把刚拉下来的检出目录删掉，不在技能工作区留代码副本。**对 Jira 只读不写状态**：不流转、不写自定义字段、不上传附件；方案里读不到仓库或分支时会在评论里说明并中断。

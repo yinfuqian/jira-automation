@@ -45,6 +45,7 @@ class SkillPromptTests(unittest.TestCase):
         self.assertIn("jira-gate-1", prompt)
         self.assertIn("https://jira.example.com/browse/CALL-1", prompt)
         self.assertIn("review_round", prompt)
+        self.assertIn(".skill-result.json", prompt)
 
     def test_custom_template_keeps_unknown_placeholders(self):
         """自定义模板中的未知占位符保持原样，不会导致任务失败。"""
@@ -54,7 +55,21 @@ class SkillPromptTests(unittest.TestCase):
             "https://jira.example.com/browse/CALL-2",
         )
 
-        self.assertEqual(prompt, "技能 jira-gate-1 处理 https://jira.example.com/browse/CALL-2，未知 {unknown_key}")
+        self.assertTrue(
+            prompt.startswith("技能 jira-gate-1 处理 https://jira.example.com/browse/CALL-2，未知 {unknown_key}")
+        )
+        self.assertIn(".skill-result.json", prompt)
+        self.assertIn("不写入 Jira", prompt)
+
+    def test_result_contract_is_not_appended_twice(self):
+        """技能模板已包含结果文件约定时，不再重复追加。"""
+        prompt = build_skill_prompt(
+            self.make_skill("完成后写 .skill-result.json"),
+            {},
+            "https://jira.example.com/browse/CALL-3",
+        )
+
+        self.assertEqual(prompt.count(".skill-result.json"), 1)
 
 
 class CodexCommandTests(unittest.TestCase):

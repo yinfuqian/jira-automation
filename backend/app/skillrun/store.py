@@ -7,6 +7,7 @@ from datetime import datetime
 
 from extensions import db
 
+from . import usage
 from .models.model import SkillRunRecord
 
 
@@ -38,6 +39,7 @@ def create_record(
     inputs: dict = None,
     requested_by: str = "",
     task_id: str = None,
+    trigger_source: str = "api",
 ) -> SkillRunRecord:
     """创建一条排队中的技能执行记录。"""
     record = SkillRunRecord(
@@ -50,6 +52,7 @@ def create_record(
     )
     db.session.add(record)
     db.session.commit()
+    usage.ensure_call(record, trigger_source=trigger_source)
     return record
 
 
@@ -92,23 +95,46 @@ def update_record(record: SkillRunRecord, **fields) -> SkillRunRecord:
     return record
 
 
-def mark_running(record: SkillRunRecord, workspace_dir: str) -> SkillRunRecord:
-    """把记录置为执行中并登记工作目录。"""
-    return update_record(
-        record,
-        status=SkillRunRecord.STATUS_RUNNING,
-        stage="starting",
-        workspace_dir=workspace_dir,
-        started_at=datetime.utcnow(),
-        error_message=None,
+def mark_running(record: SkillRunRecord, workspace_dir: str) -> SkillRunRecord | None:
+    # 只有仍处于排队状态的记录才能进入执行中，避免过期清理与 worker 取任务并发时互相覆盖。
+    updated = (
+        SkillRunRecord.query.filter(
+            SkillRunRecord.id == record.id,
+            SkillRunRecord.status == SkillRunRecord.STATUS_QUEUED,
+        ).update(
+            {
+                SkillRunRecord.status: SkillRunRecord.STATUS_RUNNING,
+                SkillRunRecord.stage: "starting",
+                SkillRunRecord.workspace_dir: workspace_dir,
+                SkillRunRecord.started_at: datetime.utcnow(),
+                SkillRunRecord.error_message: None,
+            },
+            synchronize_session=False,
+        )
     )
+    db.session.commit()
+    db.session.refresh(record)
+    if not updated:
+        return None
+    usage.mark_running(record)
+    return record
 
-
-def mark_finished(record: SkillRunRecord, status: str, **fields) -> SkillRunRecord:
-    """把记录置为终态并写入结束时间。"""
-    return update_record(
+def mark_finished(
+    record: SkillRunRecord,
+    status: str,
+    failure_kind: str = None,
+    **fields,
+) -> SkillRunRecord:
+    # 把记录置为终态并同步技能调用统计。
+    record = update_record(
         record,
         status=status,
         finished_at=datetime.utcnow(),
         **fields,
     )
+    usage.finish_from_result(
+        record,
+        execution_status=status,
+        failure_kind=failure_kind,
+    )
+    return record

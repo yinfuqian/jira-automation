@@ -167,9 +167,20 @@ class AsyncConfigTests(unittest.TestCase):
             {
                 "analysis.analyze_log_task": {"queue": "analysis"},
                 "skillrun.run_skill": {"queue": "skill"},
+                "skillrun.expire_queued_tasks": {"queue": "maintenance"},
                 "git.sync_projects": {"queue": "maintenance"},
             },
         )
+
+    def test_skill_queue_expiry_is_scheduled_every_minute(self):
+        """技能队列过期清理必须由 Beat 周期执行，不能依赖 worker 重启。"""
+        config = load_config_module().Config
+
+        self.assertEqual(config.SKILL_QUEUE_TTL_SECONDS, 60 * 60)
+        self.assertEqual(config.SKILL_QUEUE_SWEEP_INTERVAL_SECONDS, 60)
+        schedule = config.CELERY_BEAT_SCHEDULE["skill-queue-expiry"]
+        self.assertEqual(schedule["task"], "skillrun.expire_queued_tasks")
+        self.assertEqual(schedule["schedule"].total_seconds(), 60)
 
     def test_database_engine_uses_pre_ping_for_remote_mysql(self):
         config = load_config_module().Config

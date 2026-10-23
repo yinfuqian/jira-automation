@@ -315,6 +315,12 @@ class Config:
     CODEX_NETWORK_RETRY_LIMIT = int(_env_or("CODEX_NETWORK_RETRY_LIMIT", "10"))
     # worker 启动时是否把上一次运行遗留的“执行中”任务标记为失败。
     SKILL_RECOVER_ORPHANS = _env_or("SKILL_RECOVER_ORPHANS", "true").lower() == "true"
+    # 技能任务在队列中的最长等待时间：超过后由 cleanup 任务移出 Redis 并标记失败。
+    SKILL_QUEUE_TTL_SECONDS = max(1, int(os.getenv("SKILL_QUEUE_TTL_SECONDS", "3600")))
+    # 过期队列扫描周期；默认每分钟一次。
+    SKILL_QUEUE_SWEEP_INTERVAL_SECONDS = max(
+        1, int(os.getenv("SKILL_QUEUE_SWEEP_INTERVAL_SECONDS", "60"))
+    )
     # 技能回写故障分析：worker 内的技能脚本使用内部令牌调用本服务的上传与故障分析接口。
     # 令牌留空表示关闭该内部通道；路径前缀用于限制令牌可访问的接口范围。
     ANALYSIS_API_TOKEN = os.getenv("ANALYSIS_API_TOKEN", "")
@@ -350,6 +356,7 @@ class Config:
     CELERY_TASK_ROUTES = {
         "analysis.analyze_log_task": {"queue": "analysis"},
         "skillrun.run_skill": {"queue": "skill"},
+        "skillrun.expire_queued_tasks": {"queue": "maintenance"},
         "git.sync_projects": {"queue": "maintenance"},
     }
     CELERY_BROKER_TRANSPORT_OPTIONS = {
@@ -366,13 +373,15 @@ class Config:
         "retry_on_timeout": True,
         "health_check_interval": REDIS_HEALTH_CHECK_INTERVAL,
     }
-    CELERY_BEAT_SCHEDULE = (
-        {
-            "gitlab-project-sync": {
-                "task": "git.sync_projects",
-                "schedule": timedelta(hours=GITLAB_SYNC_INTERVAL_HOURS),
-            }
+    CELERY_BEAT_SCHEDULE = {
+        # 技能队列过期清理必须常驻，避免未被消费的任务永久留在 Redis。
+        "skill-queue-expiry": {
+            "task": "skillrun.expire_queued_tasks",
+            "schedule": timedelta(seconds=SKILL_QUEUE_SWEEP_INTERVAL_SECONDS),
         }
-        if GITLAB_SYNC_ENABLED
-        else {}
-    )
+    }
+    if GITLAB_SYNC_ENABLED:
+        CELERY_BEAT_SCHEDULE["gitlab-project-sync"] = {
+            "task": "git.sync_projects",
+            "schedule": timedelta(hours=GITLAB_SYNC_INTERVAL_HOURS),
+        }

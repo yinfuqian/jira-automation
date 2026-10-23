@@ -10,7 +10,7 @@ from sqlalchemy import text
 
 from extensions import celery, db
 
-from . import codex_runner, env_lock, mcp_config, store
+from . import codex_runner, env_lock, mcp_config, queue_expiry, store, usage
 from .models.model import SkillRunRecord
 from .registry import SkillError, resolve_skill
 
@@ -19,6 +19,8 @@ from .registry import SkillError, resolve_skill
 PROGRESS_FLUSH_SECONDS = 2.0
 # 进度里保留的最近事件条数。
 PROGRESS_EVENT_LIMIT = 30
+# 技能队列过期清理任务的名称必须与 config.CELERY_TASK_ROUTES / Beat 配置一致。
+QUEUE_EXPIRY_TASK_NAME = "skillrun.expire_queued_tasks"
 
 # 事件类型到任务阶段的中文标签映射。
 STAGE_LABELS = {
@@ -91,6 +93,12 @@ def _split_extra_args(value) -> list:
     return [item for item in str(value or "").split() if item]
 
 
+@celery.task(name=QUEUE_EXPIRY_TASK_NAME)
+def expire_queued_skill_tasks():
+    """周期清理排队超时的技能任务：移出 Redis 并标记为失败。"""
+    return queue_expiry.expire_stale_queued_tasks()
+
+
 @celery.task(bind=True, name="skillrun.run_skill")
 def run_skill_task(self, record_id: int):
     """执行一次技能任务：准备独立工作目录、调用 Codex Agent，并回写状态与结果。"""
@@ -100,6 +108,37 @@ def run_skill_task(self, record_id: int):
         return {"record_id": record_id, "status": "missing"}
 
     config = current_app.config
+    # 队列消息可能在 worker 长时间不可用后才被取出：终态或超时排队的任务不得再次执行。
+    if record.status in SkillRunRecord.TERMINAL_STATUSES:
+        logging.warning(
+            "技能任务已处于终态，跳过执行：task_id=%s status=%s", record.task_id, record.status
+        )
+        return {"task_id": record.task_id, "skill_id": record.skill_id, "status": record.status, "skipped": True}
+    queue_ttl = int(config.get("SKILL_QUEUE_TTL_SECONDS") or queue_expiry.DEFAULT_QUEUE_TTL_SECONDS)
+    if record.status == SkillRunRecord.STATUS_QUEUED and queue_expiry.is_queue_expired(record, queue_ttl):
+        message = queue_expiry.build_queue_expired_message(queue_ttl)
+        expired_record = queue_expiry.mark_queue_expired(record, message)
+        if expired_record is not None:
+            logging.warning("技能任务排队超时，已标记失败：task_id=%s", record.task_id)
+            return {
+                "task_id": record.task_id,
+                "skill_id": record.skill_id,
+                "status": SkillRunRecord.STATUS_FAILED,
+                "stage": queue_expiry.QUEUE_EXPIRED_STAGE,
+                "error": message,
+            }
+        # 清理任务或其它 worker 已先一步改变状态，当前消息不再执行。
+        return {
+            "task_id": record.task_id,
+            "skill_id": record.skill_id,
+            "status": record.status,
+            "skipped": True,
+        }
+    if record.status != SkillRunRecord.STATUS_QUEUED:
+        logging.warning(
+            "技能任务不是排队状态，跳过执行：task_id=%s status=%s", record.task_id, record.status
+        )
+        return {"task_id": record.task_id, "skill_id": record.skill_id, "status": record.status, "skipped": True}
     # 技能运行参数必须以服务端配置为唯一来源：缺失时直接失败，不做任何回落。
     missing_env = env_lock.missing_env_keys(config)
     if missing_env:
@@ -109,6 +148,7 @@ def run_skill_task(self, record_id: int):
             record,
             SkillRunRecord.STATUS_FAILED,
             stage="env_not_configured",
+            failure_kind=usage.FAILURE_ENV_MISSING,
             error_message=message,
         )
         return {
@@ -125,6 +165,7 @@ def run_skill_task(self, record_id: int):
             record,
             SkillRunRecord.STATUS_FAILED,
             stage="skill_unavailable",
+            failure_kind=usage.FAILURE_SKILL_NOT_FOUND,
             error_message=str(exc),
         )
         return {"task_id": record.task_id, "skill_id": record.skill_id, "status": "failed", "error": str(exc)}
@@ -132,7 +173,9 @@ def run_skill_task(self, record_id: int):
     workspace_root = config.get("SKILL_WORKSPACE_DIR") or os.path.join(os.path.sep, "tmp", "skill-workspace")
     workspace_dir = os.path.join(str(workspace_root), skill.skill_id, record.task_id)
     os.makedirs(workspace_dir, exist_ok=True)
-    store.mark_running(record, workspace_dir)
+    if store.mark_running(record, workspace_dir) is None:
+        logging.warning("技能任务状态已变化，放弃执行：task_id=%s", record.task_id)
+        return {"task_id": record.task_id, "skill_id": skill.skill_id, "status": record.status, "skipped": True}
 
     inputs = store.load_json(record.inputs, {})
     prompt = codex_runner.build_skill_prompt(skill, inputs, record.jira_url or "")
@@ -214,26 +257,33 @@ def run_skill_task(self, record_id: int):
             record,
             SkillRunRecord.STATUS_FAILED,
             stage="error",
+            failure_kind=usage.FAILURE_CODEX_EXCEPTION,
             error_message=f"技能执行异常：{exc}",
         )
         return {"task_id": record.task_id, "skill_id": skill.skill_id, "status": "failed", "error": str(exc)}
 
     # 网络不可达优先于退出码判断：它说明 agent 根本没跑起来，而不是业务判定失败。
+    failure_kind = None
     if run_result.network_failed:
         status, stage = SkillRunRecord.STATUS_FAILED, "network_unreachable"
+        failure_kind = usage.FAILURE_NETWORK
     elif run_result.timed_out:
         status, stage = SkillRunRecord.STATUS_TIMEOUT, "timeout"
+        failure_kind = usage.FAILURE_TIMEOUT
     elif run_result.exit_code == 0 and run_result.last_message:
         status, stage = SkillRunRecord.STATUS_SUCCEEDED, "finished"
     elif run_result.exit_code == 0:
         status, stage = SkillRunRecord.STATUS_FAILED, "failed"
+        failure_kind = usage.FAILURE_NO_FINAL_MESSAGE
         run_result.error = run_result.error or "Codex 未返回最终结论"
     else:
         status, stage = SkillRunRecord.STATUS_FAILED, "failed"
+        failure_kind = usage.FAILURE_NON_ZERO_EXIT
 
     store.mark_finished(
         record,
         status,
+        failure_kind=failure_kind,
         stage=stage,
         result_text=run_result.last_message or None,
         error_message=run_result.error,

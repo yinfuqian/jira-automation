@@ -8,6 +8,7 @@ from datetime import datetime
 
 from extensions import db
 
+from . import usage
 from .models.model import SkillRunRecord
 
 
@@ -96,6 +97,9 @@ def recover_orphan_tasks(
 
     if recovered:
         db.session.commit()
+        for record in records:
+            if record.task_id in recovered:
+                usage.mark_recovered(record)
         logging.warning("已回收 %s 个 worker 重启遗留的技能任务：%s", len(recovered), ", ".join(recovered))
     return recovered
 

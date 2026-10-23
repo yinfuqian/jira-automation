@@ -204,8 +204,8 @@ const files = await j.downloadAttachments(issue.key, "<工作目录>\\work\\jira
 - **退回补充**：任一适用 `MUST` 或命中 `CONDITIONAL` 不满足；或存在未闭合的核心业务歧义；或关键及 P0/P1 FR、用户可见的 LLM 结果缺少可客观判断的 AC。
 - `SHOULD` 缺失只记录取舍，不单独阻断；`OBSERVE` 不得替代缺失的业务事实。
 - 结论只允许两个取值：`通过` / `退回补充`。不要用总分、平均分或"基本通过"等模糊结论。
-- 该结论先按本 Checklist 得出；§11.1 跑完 `review-jira-design`、§11.2 跑完 `review-jira-qa` 后再合并：设计为「退回补齐 / 审核未完成」或 QA 为「暂不通过」时，最终 G1 结论强制改为**退回补充**；设计为「通过 / 有条件通过」且 QA 为「通过」时不改变 G1 自身结论。
-- `review-jira-design` 或 `review-jira-qa` 的脚本非零退出、内容 JSON / `result.json` 缺失、`ok=false` 属于运营性失败：停止后续 G1 交付并保留现场，不得写「通过」，也不得把脚本故障写成业务阻断项。
+- 该结论先按本 Checklist 得出；§11.1 跑完 `review-jira-design`、§11.2 跑完 `review-jira-qa` 后再合并：设计为「退回补齐 / 审核未完成」或 QA 为「暂不通过」时，最终 G1 结论强制改为**退回补充**；设计为「通过 / 有条件通过」且 QA 为「通过」时不改变 G1 自身结论。QA 运营性失败记为「未完成」，不改变 G1 自身结论。
+- `review-jira-design` 的脚本非零退出、内容 JSON 缺失属于运营性失败：停止后续 G1 交付并保留现场，不得写「通过」，也不得把脚本故障写成业务阻断项。`review-jira-qa` 的运营性失败不属于阻断：把 QA 记为「未完成（failedStep/error）」，继续完成 G1 评论、门禁字段、已生成报告的上传与必要的状态流转。
 
 ### 7. 组织评论内容
 
@@ -413,12 +413,14 @@ node "$SKILL_DIR/bin/render-gate.mjs" --spec <gate.spec.json>
 node "$SKILL_DIR/bin/validate-gate.mjs" --html <HTML> --spec <gate.spec.json>
 node "$SKILL_DIR/bin/jira-upload.mjs" --key <KEY> --file <HTML> --run-id <runId>
 node "$SKILL_DIR/bin/jira-comment.mjs" --key <KEY> --body <COMMENT> --run-id <runId>
-node "$SKILL_DIR/bin/result.mjs" --stage risk-analysis --key <KEY> --run-id <runId> --spec <gate.spec.json>
+node "$SKILL_DIR/bin/result.mjs" --stage risk-analysis --key <KEY> --run-id <runId> --spec <gate.spec.json> --non-blocking
 ```
+
+**非阻塞调用**：每一步单独捕获退出码，不要用 `set -e`。任一 QA 前置步骤失败时，要求 `review-jira-qa` 按它的非阻塞规则记录 `failedStep`/`error` 并用 `--non-blocking` 产出 `ok=false` 结果后立即返回；G1 不在这里退出或等待人工确认。
 
 **结果读取**：以 `QA_WORKSPACE/.qa/runs/<runId>/result.json` 为准，至少读取：
 
-- `ok`、`conclusion`（`通过` / `暂不通过`）、`failedItemCount`；
+- `ok`、`conclusion`（`通过` / `暂不通过`）、`failedItemCount`、`failedStep`、`error`；
 - `htmlPath`；
 - `attachmentId`（实际文件名取 `upload.json.files[0].filename`，作为 G1 评论里的「QA 清单附件」）；
 - `commentId`（取 `comment.json.commentId`，作为 G1 评论里的「QA 评论」）。
@@ -427,9 +429,31 @@ node "$SKILL_DIR/bin/result.mjs" --stage risk-analysis --key <KEY> --run-id <run
 
 - `ok=true` + `conclusion=通过`：QA 准出不阻断，G1 保持 §6 自身结论。
 - `ok=true` + `conclusion=暂不通过`：G1 最终结论强制为**退回补充**，按 §9 流转到「评审中」并 `@` 流转人；QA 的未关闭项计入 G1 评论的「QA 阻断项」。
-- 任一 QA 脚本非零退出、`result.json` 缺失、`ok=false`：属于运营性失败，**不得写成 QA 通过，也不得包装成业务阻断项**。停止后续 G1 交付（不写 G1 评论、不回写门禁字段、不上传评审报告、不流转状态），保留工作区现场，在对话里说明失败步骤与退出码。
+- 任一 QA 脚本非零退出、`result.json` 缺失、`ok=false`：属于运营性失败，**不得写成 QA 通过，也不得包装成业务阻断项**。把 QA 写成「未完成（failedStep/error）」，附件与评论写「未生成」，然后**继续执行 G1 的评论、门禁字段、需求评审报告与设计准入报告上传，以及按 G1/设计结论需要的状态流转**；不要停在 QA 技能里。
 - QA 结论为「暂不通过」仍是业务完成（退出码 0），必须继续完成 G1 评论与流转，不能因红叉而中断。
 - QA 只写自己的评论与 HTML，不改 Jira 状态；G1 的状态流转仍由本技能按 §9 执行。不要把 QA 的 HTML 再上传一次。
+- 若 QA 结果文件与 `QA_RESULT_JSON` 都缺失，按「QA 未完成（无结果，failedStep=unknown）」处理并继续 G1；只有 G1/设计自身的交付动作失败才保留现场并停止。
+
+### 写机器可读结果（清理前必做）
+
+本技能是平台 `/skill/run` 的顶层技能，必须在全部交付动作完成、清理工作区之前，把最终结果写到**任务根目录**（当前工作目录）的 `.skill-result.json`：
+
+```json
+{
+  "schemaVersion": 1,
+  "skillId": "jira-gate-1",
+  "issueKey": "CALL-1941",
+  "conclusion": "通过",
+  "summary": "G1、设计准入与 QA 均通过，未流转状态",
+  "blockingCount": 0
+}
+```
+
+- `conclusion` 只能写最终业务结论：`通过` 或 `退回补充`；单据类型不是「故事」而提前结束时写 `不适用`。
+- `summary` 用一句话写清 G1、设计准入、QA 三条准出和状态流转结果，不超过 500 字；`blockingCount` 是最终阻断项数量（没有阻断项写 `0`）。
+- 运营性失败（脚本非零退出、必需文件缺失）不要伪造「通过」，也不要把技术错误写成业务阻断；无法形成业务结论时可以不写该文件，平台会把结论记为未知。
+- 该文件只用于调用统计，不是交付物，不写入 Jira；平台读取入库后会自动删除，不要放进 `work/`、`reports/` 或压缩包。
+- 调用 `review-jira-req`、`review-jira-design`、`review-jira-qa` 时，必须在子任务指令里明确「不要写任务根目录 `.skill-result.json`」，避免把子技能误计为独立调用。
 
 ### 12. 收尾：清理本次任务的工作区中间产物
 
@@ -465,7 +489,7 @@ h3. G1 需求准入结论：{{通过（允许进入开发设计中） / 退回�
 * PRD：{{精确路径}}，版本：{{版本}}
 * 原型设计准入：{{通过 / 有条件通过（N 项待补齐） / 退回补齐 / 审核未完成（原因）}}
 * 设计报告附件：{{<KEY>-原型设计准入报告.html（已上传） / 未上传（原因）}}
-* QA 准入门禁：{{通过 / 暂不通过（N 项未关闭）}}
+* QA 准入门禁：{{通过 / 暂不通过（N 项未关闭） / 未完成（原因）}}
 * QA 阻断项：{{0 / N 项}}
 * QA 清单附件：{{<KEY>-<需求名称>-需求准入门禁清单-v<版本>.html（已上传） / 未上传（原因）}}
 * QA 评论：{{评论 ID / 未写入（原因）}}
@@ -642,10 +666,10 @@ h4. CONDITIONAL（命中场景逐条判定，未命中记 N/A）
 
 - **只处理类型为「故事」的单子**；类型不符时立即停止，不做任何 Jira 写操作，也不调用 `review-jira-req`、`review-jira-design` 或 `review-jira-qa`。
 - 状态流转规则：**综合结论通过不流转（保持当前状态）**；**综合结论退回补充 → 评审中**；不得流转到「需求设计」「待办」「开发中」等其他状态。不指派经办人。
-- **最终结论必须合并三条准出**：G1 Checklist、`review-jira-design`（通过 / 有条件通过才算通过）与 `review-jira-qa` 阶段一任一不通过，最终结论即为「退回补充」；设计或 QA 的运营性失败时停止交付并保留现场，不得写成通过或业务阻断项。
+- **最终结论必须合并三条准出**：G1 Checklist、`review-jira-design`（通过 / 有条件通过才算通过）与 `review-jira-qa` 阶段一任一不通过，最终结论即为「退回补充」。设计的运营性失败时停止交付并保留现场；QA 的运营性失败只记为「未完成（原因）」，不得写成通过或业务阻断项，也不得中断 G1 后续交付。
 - **唯一允许写入的字段是 G1 门禁字段**（`setGateResult()` 写入的准入结论/预检时间），它是评论结论的机器可读副本，不是新的事实来源；不得写 `G1需求难度`。
 - 不生成本地报告文档作为交付物（§11 的评审报告 md、§11.1 的设计报告 HTML 与 §11.2 的 QA 清单 HTML 是附件来源，属例外）；判定结果以 Jira 评论 + 附件留痕。
 - 不编造需求未写明的内容，不把推测写成已确认事实。
 - 不把单据字段缺失、测试数据未准备、纯技术细节当作不达标理由。
 - 不留下未完成的草稿评论。
-- 交付全部完成后按 §12 清理本次任务的工作区中间产物（只删 `work/jira-gate/<KEY>/`）；交付失败时保留现场，不要删。
+- 交付全部完成后先写任务根目录 `.skill-result.json`（见「写机器可读结果」），再按 §12 清理本次任务的工作区中间产物（只删 `work/jira-gate/<KEY>/`）；交付失败时保留现场，不要删。

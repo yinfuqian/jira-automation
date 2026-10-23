@@ -151,6 +151,23 @@ description: >
 5. **未接入 `apprt` 的模块，请不要在 `deployments/apprt/` 下放置 `apprt.json`**，否则流水线会误判。
 6. 若模块不需要 Ingress，可以不创建 `*_ingress.yaml`。
 
+## 机器可读结果（仅顶层调用时）
+
+- 当本技能是平台 `/skill/run` 的顶层技能（任务提示里的 skill_id 就是 `pipeline-adapter`）时，必须在接入文件生成与校验完成之后、清理工作区之前，把最终结果写到**任务根目录**（当前工作目录）的 `.skill-result.json`：
+
+```json
+{
+  "schemaVersion": 1,
+  "skillId": "pipeline-adapter",
+  "conclusion": "已完成",
+  "summary": "已生成 ci.yaml、app.json、Dockerfile 与 K8S 编排并通过校验",
+  "blockingCount": 0
+}
+```
+
+- `conclusion` 按实际结果写 `已完成` / `部分完成` / `失败` / `不适用`；没有 Jira 单号时省略 `issueKey`。
+- 该文件只用于调用统计，不是交付物，不写入 Jira，平台读取入库后会自动删除；无法形成业务结论时可以不写。
+
 ---
 
 ## FAQ / 常见问题

@@ -167,8 +167,8 @@ services:
     depends_on:
       - api-dev
 
-  # Celery Beat 只负责周期投递 GitLab 产品/模块同步任务；分析 worker 启动时还会额外投递一次。
-  # 调度周期由 GITLAB_SYNC_INTERVAL_HOURS 控制，默认 12 小时。
+  # Celery Beat 每分钟投递技能队列过期清理任务，并按 GITLAB_SYNC_INTERVAL_HOURS 周期同步 GitLab 产品/模块；
+  # 分析 worker 启动时还会额外投递一次 GitLab 同步。
   beat-dev:
     image: ${BACKEND_IMAGE}
     network_mode: "host"
