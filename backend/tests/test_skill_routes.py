@@ -145,6 +145,7 @@ class SkillRouteTests(unittest.TestCase):
         self.assertEqual(record.jira_url, "https://jira.in.wezhuiyi.com/browse/CALL-1446")
         self.assertEqual(store.load_json(record.inputs, {}), {"review_round": 2})
         task.apply_async.assert_called_once()
+        self.assertEqual(task.apply_async.call_args.kwargs["queue"], "skill")
 
     def test_submit_reports_enqueue_failure(self):
         """入队失败时记录失败状态并返回 503。"""
