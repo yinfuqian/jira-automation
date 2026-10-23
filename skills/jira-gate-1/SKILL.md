@@ -1,6 +1,6 @@
 ---
 name: jira-gate-1
-description: 对 Jira 需求单做 G1 需求准入检查（PRD 准入）。当用户给出 Jira 需求链接或单号（如 https://jira.in.wezhuiyi.com/browse/CALL-1446）并要求"检查需求是否达标 / 能不能进入开发设计 / 做需求准入检查 / PRD 写得全不全"时使用。只处理类型为「故事」的单子；按 PRD 需求准入 Checklist 逐项判定，把结论与检查项清单写入 Jira 评论（通过 (/) 绿勾、不通过 (x) 红叉）；通过时不流转状态，不通过时把状态流转到「评审中」并在评论中 @ 流转人；最后调用 review-jira-req 生成评审报告并上传为附件。
+description: 对 Jira 需求单做 G1 需求准入检查（PRD 准入）。当用户给出 Jira 需求链接或单号（如 https://jira.in.wezhuiyi.com/browse/CALL-1446）并要求"检查需求是否达标 / 能不能进入开发设计 / 做需求准入检查 / PRD 写得全不全"时使用。只处理类型为「故事」的单子；按 PRD 需求准入 Checklist 逐项判定，并依次调用 review-jira-req、review-jira-design、review-jira-qa 完成需求质量评审、原型设计准入审核与 QA 需求准入门禁；把综合结论与检查项清单写入 Jira 评论（通过 (/) 绿勾、不通过 (x) 红叉），上传需求评审报告与原型设计准入报告；通过时不流转状态，任一准出不通过时把状态流转到「评审中」并在评论中 @ 流转人。
 metadata:
   short-description: Jira G1 需求准入检查（PRD 准入）
 ---
@@ -13,18 +13,20 @@ metadata:
 
 **交付物有两个落点：Jira 评论 + Jira 附件**：
 
-1. Jira 评论：结论摘要 + 逐项打标记的检查项清单（`(/)` 通过、`(x)` 不通过）；通过与否用同一套结构（模板见本文档「输出模板」节）。**末尾固定带一行「报告附件」**，指向第 2 点的附件名。
-2. Jira 附件：调用同仓库的 `review-jira-req` 技能产出 OpenSpec 评审报告 Markdown，**上传到需求单附件区**，文件名**必须以「宋立志」结尾**（见 §11）。
-3. 对话里的摘要：单据类型 + 通过/退回补充 + 关键阻断项 + 状态流转结果，供用户即时看到结果。
+1. Jira 评论：结论摘要 + 逐项打标记的检查项清单（`(/)` 通过、`(x)` 不通过）；通过与否用同一套结构（模板见本文档「输出模板」节）。元信息区同时写出原型设计准入结论、设计报告附件名、QA 准入门禁结论、阻断项数量、QA 清单附件名与 QA 评论 ID；**末尾固定带一行「报告附件」**，指向第 2 点的附件名。
+2. Jira 附件（需求评审）：调用同仓库的 `review-jira-req` 技能产出 OpenSpec 评审报告 Markdown，**上传到需求单附件区**，文件名**必须以「宋立志」结尾**（见 §11）。
+3. Jira 附件（原型设计准入）：调用 `review-jira-design` 审核 PRD 与产品原型初稿，产出 `<KEY>-原型设计准入报告.html` 并上传（见 §11.1）；该技能对 Jira 只读。
+4. QA 门禁交付：调用 `review-jira-qa` 阶段一，由其上传需求准入门禁清单 HTML 并写独立 QA 评论（见 §11.2）；本技能不重复上传该 HTML。
+5. 对话里的摘要：单据类型 + 综合结论 + 关键阻断项 + 设计准入结论 + QA 结论 + 状态流转结果，供用户即时看到结果。
 
 **状态流转**（见 §9）：
 
-- 结论为**通过**：不流转状态，保持当前状态，允许进入技术方案设计。
-- 结论为**退回补充**：把需求单流转到「评审中」，并在评论里 `@` 流转人。
+- 结论为**通过**：G1 Checklist 通过，且 `review-jira-design` 为「通过 / 有条件通过」、QA 准入门禁为「通过」；不流转状态，保持当前状态，允许进入技术方案设计。
+- 结论为**退回补充**：G1 Checklist、`review-jira-design` 或 QA 准入门禁任一不通过；把需求单流转到「评审中」，并在评论里 `@` 流转人。
 
 评论以**可执行、可扫读**为目标：让人 30 秒内顺着红叉看清「卡在哪、要补什么」，绿勾项一眼带过。
 
-**不要在本地生成报告文档（Markdown/HTML/Word 等）作为交付物。** 唯一例外是 §11 的评审报告 md——它是附件来源，必须真正上传到需求单，不能只留在本地。除此之外结论只进 Jira 评论区；本地仅允许在临时目录存放附件与解析中间文件（如 `<工作目录>/work/jira-gate/<KEY>/attachments/`），这些中间文件不是交付物，也不要放进 outputs 目录。
+**不要在本地生成报告文档（Markdown/HTML/Word 等）作为交付物。** 唯一例外是 §11 的评审报告 md、§11.1 的原型设计准入报告 HTML 与 §11.2 的 QA 清单 HTML——它们是附件来源，必须真正上传到需求单，不能只留在本地。除此之外结论只进 Jira 评论区；本地仅允许在临时目录存放附件与解析中间文件（如 `<工作目录>/work/jira-gate/<KEY>/attachments/`），这些中间文件不是交付物，也不要放进 outputs 目录。
 
 **这些中间产物在交付完成后要清掉**（见 §12）：附件与解压产物按任务累积，大方案解压后有几十 MB，留在工作区只会占空间。清理只在**全部交付动作成功之后**执行；交付失败的场景保留现场，便于排查。
 
@@ -42,6 +44,7 @@ metadata:
 - `SHOULD` 不单独阻断，但需在清单里记录取舍；`OBSERVE` 只记录进入研发后仍需关注的假设或风险，不能代替缺失的业务事实。
 - 判定要过「**同一结果测试**」：同一业务条件下，两名合格研发仅依据 PRD 会得出不同的用户结果、权限、状态、数据含义、失败行为或 AC，即业务逻辑未闭环，必须退回补充。
 - 只判断产品业务逻辑能否唯一指导研发设计和测试验收；**不检查文档格式**，PRD 可以用段落、列表或表格，不强制状态权限矩阵、追溯矩阵、原型或图示。
+- **判定由三条准出共同组成**：本 Checklist 是 G1 主判定；`review-jira-design` 审核 PRD 与原型初稿的一致性；`review-jira-qa` 的阶段一按 B1–B7 / C1–C6 输出 QA 结论。三条都执行、都留痕，任一条「不通过 / 退回补齐 / 审核未完成 / 暂不通过」都使 G1 最终结论为**退回补充**；`review-jira-design` 的「有条件通过」不阻断。
 
 ## 执行步骤
 
@@ -62,17 +65,25 @@ metadata:
   # 下载附件到工作目录
   node <技能目录>/scripts/jira-cli.mjs attachments <KEY|URL> work/jira-gate/<KEY>/attachments
 
-  # --- 先跑 review-jira-req 五步流水线生成报告 md，再取评审结论（见 §11）---
+  # --- 1) review-jira-req 五步流水线生成报告 md，再取评审结论（见 §11）---
   # …（fetch / normalize / rulecheck / semantic / report.mjs 详见 §11）
   node <技能目录>/scripts/report-conclusion.mjs <报告路径> <KEY>   # → 不合格 / 需修改 / 合格
 
-  # 写入评论：正文先落文件再提交，避免多行标记转义问题；末尾那行要带上面的评审结论
+  # --- 2) review-jira-design 审核 PRD—原型，生成 HTML 报告（见 §11.1）---
+  # …（读 SKILL.md → 建编号索引 → 写内容 JSON → build-report.mjs）
+
+  # --- 3) review-jira-qa 阶段一，读取 QA_RESULT_JSON 得到 QA 结论（见 §11.2）---
+  # …（preflight / jira-read / jira-download / materials / render / validate / upload / comment / result）
+
+  # 写入评论：正文先落文件再提交，避免多行标记转义问题；元信息区带设计准入与 QA 摘要，末尾带评审结论
   node <技能目录>/scripts/jira-cli.mjs comment <KEY|URL> --file work/jira-gate/<KEY>/comment.txt
 
-  # --- 交付顺序：评论 → 门禁字段 → 附件 → 流转（仅退回补充，见 §9）---
+  # --- 交付顺序：三个评审技能 → 评论 → 门禁字段 → 附件 → 流转（仅退回补充，见 §9）---
   # 上传评审报告附件（见 §11）：文件名必须以「宋立志」结尾
   node <技能目录>/scripts/jira-cli.mjs attach <KEY|URL> <报告路径> --name <KEY>-需求评审报告-宋立志.md
-  # 读回确认附件真的挂上了（见 §11）
+  # 上传原型设计准入报告（见 §11.1）
+  node <技能目录>/scripts/jira-cli.mjs attach <KEY|URL> <设计报告路径> --name <KEY>-原型设计准入报告.html
+  # 读回确认两个附件都挂上了（见 §11 / §11.1）
   node <技能目录>/scripts/jira-cli.mjs attach-list <KEY|URL>
   # 最后一步：仅结论为退回补充时流转（→ 评审中，见 §9）；通过不流转
   node <技能目录>/scripts/jira-cli.mjs flow-owner <KEY|URL>
@@ -108,7 +119,7 @@ node <技能目录>/scripts/jira-cli.mjs precheck <KEY|URL>
 ```
 
 - `supported: true`（类型为 `故事`；英文站点返回 `Story` 时视为同一种类型）→ 继续 §2。
-- `supported: false` 或类型为空 → **立即停止**：不写评论、不回写门禁字段、不上传附件、不流转状态、不调用 `review-jira-req`，也不清理（本次没有产生中间产物）。只在对话里说明「该单类型为 X，不是『故事』，按规则跳过，未对 Jira 做任何写操作」。
+- `supported: false` 或类型为空 → **立即停止**：不写评论、不回写门禁字段、不上传附件、不流转状态、不调用 `review-jira-req`、`review-jira-design` 或 `review-jira-qa`，也不清理（本次没有产生中间产物）。只在对话里说明「该单类型为 X，不是『故事』，按规则跳过，未对 Jira 做任何写操作」。
 - 不要用概要、标签、模块或描述去猜测类型；只认 Jira 的 `issuetype` 字段。
 
 ### 2. 解析单号
@@ -182,9 +193,9 @@ const files = await j.downloadAttachments(issue.key, "<工作目录>\\work\\jira
 
 - 结论必须能指向具体证据；找不到证据就是"不满足"，不许写"已满足"。
 - 答案若已存在于需求单、附件或历史评论中，自己核对出结论，不要把检索工作反问给产品经理。
-- 现有资料无唯一答案、且不同答案会改变产品规则/行为/状态/权限/AC 的，列入"产品决策"（最多 5 张决策卡），并给出具体问题与推荐方案。
+- 现有资料无唯一答案、且不同答案会改变产品规则/行为/状态/权限/AC 的，列入"业务待决策事项"（最多 5 项），并给出具体问题与推荐方案。
 - 纯技术实现细节（Java 类、接口实现、数据库字段、SQL、组件、线程池、部署参数、模型 Schema、实验配置等）不作为 G1 阻断理由；缺这类内容只记为技术专项输入，交研发。
-- 原型、图示、文档排版、追溯矩阵等缺失，但 PRD 业务语义可唯一理解的，不作为阻断项。
+- 原型、图示、文档排版、追溯矩阵等缺失，但 PRD 业务语义可唯一理解的，不作为本 Checklist 的独立阻断项；原型缺失或不可读由 `review-jira-design` 按 §11.1 记为「审核未完成」并参与综合结论。
 - 不允许把 Jira 单据字段缺失、测试数据未准备包装成 G1 阻断项。
 
 ### 6. 得出准入结论
@@ -193,13 +204,16 @@ const files = await j.downloadAttachments(issue.key, "<工作目录>\\work\\jira
 - **退回补充**：任一适用 `MUST` 或命中 `CONDITIONAL` 不满足；或存在未闭合的核心业务歧义；或关键及 P0/P1 FR、用户可见的 LLM 结果缺少可客观判断的 AC。
 - `SHOULD` 缺失只记录取舍，不单独阻断；`OBSERVE` 不得替代缺失的业务事实。
 - 结论只允许两个取值：`通过` / `退回补充`。不要用总分、平均分或"基本通过"等模糊结论。
+- 该结论先按本 Checklist 得出；§11.1 跑完 `review-jira-design`、§11.2 跑完 `review-jira-qa` 后再合并：设计为「退回补齐 / 审核未完成」或 QA 为「暂不通过」时，最终 G1 结论强制改为**退回补充**；设计为「通过 / 有条件通过」且 QA 为「通过」时不改变 G1 自身结论。
+- `review-jira-design` 或 `review-jira-qa` 的脚本非零退出、内容 JSON / `result.json` 缺失、`ok=false` 属于运营性失败：停止后续 G1 交付并保留现场，不得写「通过」，也不得把脚本故障写成业务阻断项。
 
 ### 7. 组织评论内容
 
 按本文档「输出模板」节的模板组织正文。**通过与退回补充用同一套结构**，差别只在标题措辞、每项标记与阻断项说明。评论正文包含：
 
-- 顶部结论摘要：结论、结论说明、PRD 路径与版本、产品决策、架构师澄清、研发技术澄清、复审范围、确认人/时间、预检时间、状态流转。
-- 机器判定明细：按 `MUST` / `CONDITIONAL` / `SHOULD` 分组的逐项清单，每项一行、行首必须带标记。
+- 顶部结论摘要：结论、结论说明、PRD 路径与版本、原型设计准入结论、设计报告附件名、业务待决策事项、架构师澄清、研发技术澄清、复审范围、确认人/时间、预检时间、状态流转。
+- QA 门禁摘要：`review-jira-qa` 结论、阻断项数量、HTML 附件名、QA 评论 ID；未完成时写明运营性失败原因。
+- 检查项判定明细：按 `MUST` / `CONDITIONAL` / `SHOULD` 分组的逐项清单，每项一行、行首必须带标记。
 - 末尾固定一行「报告附件 + 评审结论」。
 
 **检查项清单的写法**
@@ -224,8 +238,10 @@ const files = await j.downloadAttachments(issue.key, "<工作目录>\\work\\jira
 - 复审同一张单子时，先 `findPreviousReviews(key)`；有历史预检评论时**只在原评论下回复复审结论**（按最新判定重新打标记：本次已补的项由 `(x)` 变为 `(/)`，仍缺的项保持 `(x)`），不要新增第二条完整预检评论。
 - 通过与否都写入同一套检查项清单：通过时标题写「通过（允许进入开发设计中）」，各项按实际判定打 `(/)` 或 `(x)`。
 - 结论为**退回补充**时，评论还要按 §9 在元信息区带上 `@` 流转人的「待处理人」行。
-- 评论**末尾固定带一行「报告附件」**（通过与否都要有）：附件名按 §11 规则确定，`评审结论` 用 `report-conclusion.mjs` 从报告 md 提取（不合格 / 需修改 / 合格），**不许自己猜**。因此这一行必须在报告 md 生成之后才写，写完评论再按 §11 上传附件。
-- 完整顺序见 §9 第 4 条：**写评论（含 @）→ 回写门禁字段 → 上传附件（§11）→ 流转状态（仅退回补充）**。
+- 评论**末尾固定带一行「报告附件」**（通过与否都要有）：附件名按 §11 规则确定，`评审结论` 用 `report-conclusion.mjs` 从报告 md 提取（不合格 / 需修改 / 合格），**不许自己猜**。因此这一行必须在报告 md 生成之后才写。
+- 设计准入摘要（结论、报告附件名）只能来自 §11.1 的内容 JSON 与实际上传结果，不许自己猜；设计审核未完成时不得写「通过」。
+- QA 摘要四行（结论、阻断项、附件名、QA 评论 ID）只能来自 §11.2 的 `result.json` / 脚本输出，不许自己猜；QA 未完成时不得写「通过」。
+- 完整顺序见 §9 第 4 条：**review-jira-req → review-jira-design → review-jira-qa → 写 G1 评论（含 @）→ 回写门禁字段 → 上传需求评审报告与设计准入报告 → 流转状态（仅退回补充）**。
 
 ### 9. 交付顺序与「仅退回补充时流转并 @ 流转人」
 
@@ -237,7 +253,7 @@ const files = await j.downloadAttachments(issue.key, "<工作目录>\\work\\jira
    - 结论为**通过**：不执行流转，也不要调用 `transitionToStatus()`；评论里写「未流转（通过，保持当前状态）」。
    - 结论为**退回补充**：`transition <KEY|URL> --to 评审中`（`node_repl` 里用 `transitionToStatus(key, "评审中")`）。
    - 目标状态名固定使用「评审中」，不要按项目改写成别的状态，也不要用「需求设计」「待办」等替代。
-4. **顺序固定为：写评论（含 @）→ 回写门禁字段 → 上传附件 → 流转状态（仅退回补充）**。流转放在最后一个动作：评论、门禁字段、附件都是判定留痕，任何一步失败都不会因为流转失败而丢结论。
+4. **顺序固定为：`review-jira-req` 五步流水线 → `review-jira-design` 原型设计准入 → `review-jira-qa` 阶段一 → 写 G1 评论（含 @）→ 回写门禁字段 → 上传需求评审报告与设计准入报告附件 → 流转状态（仅退回补充）**。三个评审技能都必须在 G1 评论之前跑完，因为评论要引用需求评审结论、设计准入结论与 QA 结论；QA 自己的评论和 HTML 上传由 `review-jira-qa` 在其阶段一内完成。流转放在最后一个动作：评论、门禁字段、附件都是判定留痕，任何一步失败都不会因为流转失败而丢结论。
 5. 评论里「状态流转：」的取值必须与真实结果一致。由于评论先于流转写出，**流转执行后必须核对返回值**：与评论里写的不一致时，用 `comment-update <KEY> <评论ID> --file <文件>` 把该行改成实际结论（删掉评论里的猜测值，不要留在单子上），并在对话摘要里说明。
 
 | 返回值 | 含义 | 评论里怎么写（流转后核对，不一致就用 `comment-update` 修正） |
@@ -318,7 +334,7 @@ node <技能目录>/scripts/jira-cli.mjs attach-list <KEY|URL>
 ```
 
 - `attach` 失败时会用**退出码 1** 和 `[附件上传失败] ...` 输出告警，不要把 `exit=0` 之外的情况当成功，也不要把失败说成成功。
-- 顺序固定为：**写评论 → 回写门禁字段 → 上传附件 → 流转状态（仅退回补充，见 §9）**。前三步对所有结论都执行，流转放最后；任何一步失败都不回滚已完成的部分。全部完成后按 §12 清理工作区中间产物。
+- 顺序固定为：**review-jira-req、review-jira-design 与 review-jira-qa 完成后 → 写评论 → 回写门禁字段 → 上传需求评审报告与设计准入报告 → 流转状态（仅退回补充，见 §9）**。前三步对所有结论都执行，流转放最后；任何一步失败都不回滚已完成的部分。全部完成后按 §12 清理工作区中间产物。
 - 附件名里不出现空格、斜杠等特殊字符；不要用「宋立志」以外的后缀，也不要省略它。
 - 报告 md 是附件来源与中间产物：不要贴进评论、不要放进 outputs 目录、不要当成本地交付物。
 
@@ -330,6 +346,91 @@ node <技能目录>/scripts/jira-cli.mjs attach-list <KEY|URL>
 | `{ok:false, reason:"file-not-found"}`（1） | 报告没生成成功 | 回到第 5 步确认报告路径 |
 | `{ok:false, reason:"http-error", status:其他}`（1） | 站点拒绝上传（如附件超限、文件名非法） | 如实报告 status 与 message，不要重试同一个文件名 |
 
+### 11.1 原型设计准入报告（review-jira-design）
+
+需求质量评审（§11）跑完后、QA 阶段一（§11.2）之前，调用同仓库的 `review-jira-design`：对照定稿 PRD 审核产品原型初稿，检查需求完整性、PRD—原型一致性、流程与状态覆盖。它**对 Jira 只读**，不发起任何网络写请求，输入只有本地 PRD 与原型文件。
+
+**技能位置**：容器内固定为 `/data/skills/review-jira-design`（桌面端为 `<仓库>/skills/review-jira-design`）。先完整读它的 `SKILL.md`、`references/review-checks.md` 与 `references/content-example.json`，严格按它的步骤、检查项与结论口径执行；不要改动它的脚本与报告模板。
+
+**输入取自本单附件**：
+
+- **定稿 PRD**：§3 已下载的附件里版本唯一可定位的那份（如 `work/jira-gate/<KEY>/attachments/PRD_DELIVERY.md` 或解压后的 `.../__unpacked/附件.rar/xxx_PRD_DELIVERY.md`）。存在多个候选时按需求单描述锁定唯一对象，**不要按文件名相似度自行挑选**。
+- **产品原型初稿**：附件里的业务 HTML（如 `work/jira-gate/<KEY>/attachments/Prototype.html`）及其必要资源；有多个原型时以需求单描述指定的入口为准。
+- 两者缺失或无法定位时，不要跳过本步骤、也不要自造「通过」：照常形成「审核未完成」结论并写明缺什么；如果连 `build-report.mjs` 的 `--prd` 输入都不存在，无法生成 HTML，则在 G1 评论里记录「设计审核未完成（缺少 PRD）」并跳过设计附件上传，不得伪造报告。
+
+**固定执行顺序**（报告落在 G1 本次任务目录内，便于 §12 统一清理）：
+
+```bash
+export DESIGN_SKILL_DIR=/data/skills/review-jira-design
+DESIGN_OUT="$PWD/work/jira-gate/<KEY>/design"
+mkdir -p "$DESIGN_OUT"
+node "$DESIGN_SKILL_DIR/scripts/build-report.mjs" --prd "<PRD绝对路径>" --dump-index
+# 按 references/content-example.json 写 <DESIGN_OUT>/content.json（只写模型判定，不手写 HTML）
+node "$DESIGN_SKILL_DIR/scripts/build-report.mjs" --prd "<PRD绝对路径>" \
+  --content "$DESIGN_OUT/content.json" --out "$DESIGN_OUT/<KEY>-原型设计准入报告.html"
+```
+
+**结果读取**：设计结论只从 `<DESIGN_OUT>/content.json` 的 `结论.审核结论.值` 读取，取值只能是 `通过` / `有条件通过` / `退回补齐` / `审核未完成`；同时读取 `汇总条` 与问题区的级别计数，用于 G1 评论摘要。不许根据报告标题或问题数量自己猜结论。
+
+**截图证据**：桌面端可用 `<技能目录>/scripts/capture_prototype_evidence.mjs` 取内联截图；容器内通常没有浏览器，按它的「无法截取时」处理——写清 HTML 路径、selector 与「截图未验证」原因，**不要伪造截图，也不要安装浏览器**。
+
+**合并规则（硬约束）**：
+
+- `通过`：设计准出不阻断，G1 保持 §6 自身结论。
+- `有条件通过`：非阻断事项不改变 G1 结论，但必须在 G1 评论的「原型设计准入」行注明「有条件通过（N 项待补齐）」。
+- `退回补齐`：G1 最终结论强制为**退回补充**，按 §9 流转到「评审中」并 `@` 流转人。
+- `审核未完成`：不得视为通过，G1 最终结论强制为**退回补充**；在评论里写明缺什么（PRD / 原型 / 对象无法唯一定位 / 证据不足），设计报告能生成就上传，不能生成就跳过并说明原因。
+- `build-report.mjs` 非零退出、内容 JSON 非法、报告未生成：属于运营性失败，停止后续 G1 交付（不写 G1 评论、不回写门禁字段、不上传附件、不流转状态），保留现场并说明失败原因；不得把脚本故障写成设计阻断项。
+- 设计报告 HTML 作为 Jira 附件上传，文件名固定为 `<KEY>-原型设计准入报告.html`；上传前用 `mypermissions` 检查 `CREATE_ATTACHMENTS`，上传后与需求评审报告一起用 `attach-list` 读回确认。权限不足或上传失败时，用 `comment-update` 把评论里的「设计报告附件」行改成「未上传（原因）」，设计结论保持不变，不要重试或改名绕开。
+- 设计技能自身不改 Jira 状态，流转仍由本技能按 §9 执行。
+
+### 11.2 QA 需求准入门禁（review-jira-qa）
+
+G1 还要调用同仓库的 `review-jira-qa` 技能执行 **阶段一 QA 需求准入门禁**。它按 B1–B7 / C1–C6 独立判定，产出需求准入门禁清单 HTML、写一条 `QA-需求准入门禁结果` 评论并输出机器可读 result。**只执行阶段一**，禁止进入测试方案、XMind、Excel、Xray CSV 等阶段二/三。
+
+**技能位置**：容器内固定为 `/data/skills/review-jira-qa`（桌面端为 `<仓库>/skills/review-jira-qa`）。先完整读它的 `SKILL.md`、`prompts/stage1-gate.md` 与 `prompts/contract.md`，严格按其中阶段一流程执行，不要改动它的脚本或判定标准。
+
+**环境与工作区**：QA 工作区必须放在 G1 本次任务目录内，这样 §12 的清理能一并收尾；不得指向技能安装目录：
+
+```bash
+export SKILL_DIR=/data/skills/review-jira-qa
+export CLAUDE_SKILL_DIR="$SKILL_DIR"
+export JIRA_PAT="${JIRA_PAT:-$JIRA_TOKEN}"
+export JIRA_BASE_URL="${JIRA_BASE_URL:-https://jira.in.wezhuiyi.com}"
+export QA_WORKSPACE="$PWD/work/jira-gate/<KEY>/review-jira-qa"
+```
+
+**固定执行顺序**（`<runId>` 取 `jira-read.mjs` 输出的 `RUN_ID=`；`<gate.spec.json>`、`<HTML>`、`<COMMENT>` 按脚本实际输出路径替换）：
+
+```bash
+node "$SKILL_DIR/bin/preflight.mjs" --key <KEY> --stage 1
+node "$SKILL_DIR/bin/jira-read.mjs" --key <KEY>
+node "$SKILL_DIR/bin/jira-download.mjs" --key <KEY> --run-id <runId>
+node "$SKILL_DIR/bin/materials.mjs" --run-id <runId>
+# 读 prompts/stage1-gate.md 与 .qa/runs/<runId>/materials-digest.md，完整核读全部需求侧材料
+# 只写 .qa/runs/<runId>/gate.spec.json，不手写 HTML
+node "$SKILL_DIR/bin/render-gate.mjs" --spec <gate.spec.json>
+node "$SKILL_DIR/bin/validate-gate.mjs" --html <HTML> --spec <gate.spec.json>
+node "$SKILL_DIR/bin/jira-upload.mjs" --key <KEY> --file <HTML> --run-id <runId>
+node "$SKILL_DIR/bin/jira-comment.mjs" --key <KEY> --body <COMMENT> --run-id <runId>
+node "$SKILL_DIR/bin/result.mjs" --stage risk-analysis --key <KEY> --run-id <runId> --spec <gate.spec.json>
+```
+
+**结果读取**：以 `QA_WORKSPACE/.qa/runs/<runId>/result.json` 为准，至少读取：
+
+- `ok`、`conclusion`（`通过` / `暂不通过`）、`failedItemCount`；
+- `htmlPath`；
+- `attachmentId`（实际文件名取 `upload.json.files[0].filename`，作为 G1 评论里的「QA 清单附件」）；
+- `commentId`（取 `comment.json.commentId`，作为 G1 评论里的「QA 评论」）。
+
+**合并规则（硬约束）**：
+
+- `ok=true` + `conclusion=通过`：QA 准出不阻断，G1 保持 §6 自身结论。
+- `ok=true` + `conclusion=暂不通过`：G1 最终结论强制为**退回补充**，按 §9 流转到「评审中」并 `@` 流转人；QA 的未关闭项计入 G1 评论的「QA 阻断项」。
+- 任一 QA 脚本非零退出、`result.json` 缺失、`ok=false`：属于运营性失败，**不得写成 QA 通过，也不得包装成业务阻断项**。停止后续 G1 交付（不写 G1 评论、不回写门禁字段、不上传评审报告、不流转状态），保留工作区现场，在对话里说明失败步骤与退出码。
+- QA 结论为「暂不通过」仍是业务完成（退出码 0），必须继续完成 G1 评论与流转，不能因红叉而中断。
+- QA 只写自己的评论与 HTML，不改 Jira 状态；G1 的状态流转仍由本技能按 §9 执行。不要把 QA 的 HTML 再上传一次。
+
 ### 12. 收尾：清理本次任务的工作区中间产物
 
 全部应执行的交付动作（评论、门禁字段、附件，以及退回补充时的流转）完成之后，把本次任务落在工作区的中间产物删掉，别让附件副本按任务堆积：
@@ -338,7 +439,7 @@ node <技能目录>/scripts/jira-cli.mjs attach-list <KEY|URL>
 node <技能目录>/scripts/workdir-cleanup.mjs --key <KEY>
 ```
 
-- 清理范围只有 `<工作目录>/work/jira-gate/<KEY>/` 一个目录（附件、`__unpacked/` 解压产物、`attachments.txt`、`comment.txt`、`gate.json`、`issue.md` 等中间文件）。
+- 清理范围只有 `<工作目录>/work/jira-gate/<KEY>/` 一个目录（附件、`__unpacked/` 解压产物、`attachments.txt`、`comment.txt`、`gate.json`、`issue.md`、`design/` 下的设计内容 JSON 与报告 HTML，以及 `review-jira-qa/` 下的 QA 工作区与运行态）。
 - **`reports/` 不在清理范围内**：评审报告 md 是附件来源，由 §11 自己负责，本脚本不碰。
 - 脚本按单号定位目录（单号不区分大小写），解析后的父目录必须正好是 `work/jira-gate`，否则拒绝执行——路径写错时不会误删工作区。
 - 收尾是幂等的：目录已经不存在时返回 `{ok:true, removed:false, reason:"not-found"}`，不算失败。
@@ -352,7 +453,7 @@ node <技能目录>/scripts/workdir-cleanup.mjs --key <KEY>
 
 ## 输出模板（Jira 评论）
 
-结论以 Jira 评论留痕；需求质量的细读结论另见 §11 的报告附件。通过与否结构相同，只在标题措辞、每项标记与阻断说明上不同。
+结论以 Jira 评论留痕；需求质量的细读结论另见 §11 的报告附件，原型设计准入结论见 §11.1 的 HTML 附件，QA 准入门禁的完整清单见 §11.2 的 HTML 附件与 QA 评论。通过与否结构相同，只在标题措辞、每项标记与阻断说明上不同。
 
 **通用结构**
 
@@ -362,7 +463,13 @@ h3. G1 需求准入结论：{{通过（允许进入开发设计中） / 退回�
 * 结论：{{通过 / 退回补充}}
 * 结论说明：{{一句话}}
 * PRD：{{精确路径}}，版本：{{版本}}
-* 产品决策：{{无；或见下方最多 5 张决策卡}}
+* 原型设计准入：{{通过 / 有条件通过（N 项待补齐） / 退回补齐 / 审核未完成（原因）}}
+* 设计报告附件：{{<KEY>-原型设计准入报告.html（已上传） / 未上传（原因）}}
+* QA 准入门禁：{{通过 / 暂不通过（N 项未关闭）}}
+* QA 阻断项：{{0 / N 项}}
+* QA 清单附件：{{<KEY>-<需求名称>-需求准入门禁清单-v<版本>.html（已上传） / 未上传（原因）}}
+* QA 评论：{{评论 ID / 未写入（原因）}}
+* 业务待决策事项：{{无；或见下方最多 5 项}}
 * 架构师澄清：{{数量；G2 前关闭时点}}
 * 研发技术澄清：{{数量；G2 前关闭时点}}
 * 复审范围：{{全量 / 受影响章节}}
@@ -412,10 +519,10 @@ h4. SHOULD（不阻断 G1，记录取舍）
 - 因为末尾要写这个结论，**五步流水线必须在写评论之前跑到第 5 步**（§11），拿到 md 再用 `report-conclusion.mjs` 提取；不许先猜一个值写进评论。
 - 上传失败时用 `comment-update` 把括号里改成「未上传（原因）」，并在『评审结论』处保留提取到的真实取值——两者互不影响，附件没传上不代表没有结论。
 
-**退回补充时的决策卡**（最多 5 张，按「目标范围、核心链路、规则状态、异常恢复、验收」归并；不得出现 Java 类、接口设计、数据库类型、SQL、缓存 Key、Topic、线程池、部署参数、组件选型、模型 Schema 或环境配置）：
+**退回补充时的业务待决策事项**（最多 5 项，按「目标范围、核心链路、规则状态、异常恢复、验收」归并；不得出现 Java 类、接口设计、数据库类型、SQL、缓存 Key、Topic、线程池、部署参数、组件选型、模型 Schema 或环境配置）：
 
 ```text
-h5. 产品决策卡 1：{{业务场景}}
+h5. 业务待决策事项 1：{{业务场景}}
 * 当前歧义：{{两种都合理的解释}}
 * 两种可能结果及影响：{{A / B}}
 * 推荐方案及依据：{{推荐 A，因为…}}
@@ -442,7 +549,13 @@ h3. G1 需求准入结论：退回补充（流转至评审中）
 * 结论：退回补充
 * 结论说明：核心权限与异常恢复未闭环，研发需要自行选择产品规则
 * PRD：需求附件/PRD_DELIVERY.md，版本：v1.0
-* 产品决策：2 张决策卡（见下）
+* 原型设计准入：退回补齐（2 项阻断）
+* 设计报告附件：CALL-1941-原型设计准入报告.html（已上传）
+* QA 准入门禁：暂不通过（2 项未关闭）
+* QA 阻断项：2 项
+* QA 清单附件：CALL-1941-需求准入门禁清单-v1.0.html（已上传）
+* QA 评论：123456
+* 业务待决策事项：2 项（见下）
 * 架构师澄清：0 项
 * 研发技术澄清：1 项（Schema 由研发补充，不阻断 G1）
 * 复审范围：全量
@@ -513,7 +626,7 @@ h4. CONDITIONAL（命中场景逐条判定，未命中记 N/A）
 - 不因难度或工作量而放宽 `MUST` 与 `CONDITIONAL`。
 - 不擅自修改需求单字段、不指派经办人（按 §9 流转状态）。
 - 不 @ 无关人员：评论里的 `@` 只给流转人（默认经办人），也不因流转失败而删除 `@`。
-- 不生成报告类文档作为交付物；**唯一例外是 §11 的评审报告 md**（它必须上传为附件）。不在需求单中留下未完成的草稿评论。
+- 不生成报告类文档作为交付物；**唯一例外是 §11 的评审报告 md、§11.1 的原型设计准入报告 HTML 与 §11.2 的 QA 清单 HTML**（三者都必须上传为附件）。不在需求单中留下未完成的草稿评论。
 
 ## 令牌配置
 
@@ -527,10 +640,11 @@ h4. CONDITIONAL（命中场景逐条判定，未命中记 N/A）
 
 ## 硬性约束
 
-- **只处理类型为「故事」的单子**；类型不符时立即停止，不做任何 Jira 写操作，也不调用 `review-jira-req`。
-- 状态流转规则：**通过不流转（保持当前状态）**；**退回补充 → 评审中**；不得流转到「需求设计」「待办」「开发中」等其他状态。不指派经办人。
+- **只处理类型为「故事」的单子**；类型不符时立即停止，不做任何 Jira 写操作，也不调用 `review-jira-req`、`review-jira-design` 或 `review-jira-qa`。
+- 状态流转规则：**综合结论通过不流转（保持当前状态）**；**综合结论退回补充 → 评审中**；不得流转到「需求设计」「待办」「开发中」等其他状态。不指派经办人。
+- **最终结论必须合并三条准出**：G1 Checklist、`review-jira-design`（通过 / 有条件通过才算通过）与 `review-jira-qa` 阶段一任一不通过，最终结论即为「退回补充」；设计或 QA 的运营性失败时停止交付并保留现场，不得写成通过或业务阻断项。
 - **唯一允许写入的字段是 G1 门禁字段**（`setGateResult()` 写入的准入结论/预检时间），它是评论结论的机器可读副本，不是新的事实来源；不得写 `G1需求难度`。
-- 不生成本地报告文档作为交付物（§11 的评审报告 md 是附件来源，属例外）；判定结果以 Jira 评论 + 附件留痕。
+- 不生成本地报告文档作为交付物（§11 的评审报告 md、§11.1 的设计报告 HTML 与 §11.2 的 QA 清单 HTML 是附件来源，属例外）；判定结果以 Jira 评论 + 附件留痕。
 - 不编造需求未写明的内容，不把推测写成已确认事实。
 - 不把单据字段缺失、测试数据未准备、纯技术细节当作不达标理由。
 - 不留下未完成的草稿评论。

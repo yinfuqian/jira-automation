@@ -119,11 +119,11 @@ class ReportAttachmentContractTests(unittest.TestCase):
         self.assertIn("不要把失败说成成功", text)
 
     def test_execution_order_puts_transition_last(self):
-        """执行顺序固定为 评论 → 门禁字段 → 附件 → 流转，流转必须是最后一个动作。"""
+        """执行顺序固定为 三个评审技能 → 评论 → 门禁字段 → 附件 → 流转。"""
         skill_text = (GATE_SKILL_DIR / "SKILL.md").read_text(encoding="utf-8")
         doc_text = (GATE_SKILL_DIR / "references" / "jira-api.md").read_text(encoding="utf-8")
 
-        skill_order = "写评论（含 @）→ 回写门禁字段 → 上传附件 → 流转状态"
+        skill_order = "写 G1 评论（含 @）→ 回写门禁字段 → 上传需求评审报告与设计准入报告附件 → 流转状态"
         doc_order = "评论（含 @）→ 门禁字段 → 附件 → 流转"
         self.assertIn(skill_order, skill_text)
         self.assertIn(doc_order, doc_text)

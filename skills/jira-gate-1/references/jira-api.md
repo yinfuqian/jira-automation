@@ -110,7 +110,7 @@ nodeRepl.write(["ADD_COMMENTS", "EDIT_ISSUES", "TRANSITION_ISSUES"].map(n => `${
 
 `TRANSITION_ISSUES` 是退回补充时流转状态（→ 评审中）所需的权限。为 `false` 时**跳过流转动作**，评论里写「未流转（缺少流转权限）」，同样不要反复重试。结论为通过时不调用流转接口，因此不依赖该权限。
 
-`CREATE_ATTACHMENTS` 是「上传评审报告附件」所需的权限（见 §10）。为 `false` 时跳过上传，并在对话里如实说明缺权限。
+`CREATE_ATTACHMENTS` 是「上传需求评审报告、原型设计准入报告与 QA 准入门禁清单」所需的权限（见 §10、§10.1、§10.2）。为 `false` 时跳过上传，并在对话里如实说明缺权限。
 
 ## 8. 评论写入实操
 
@@ -118,6 +118,8 @@ nodeRepl.write(["ADD_COMMENTS", "EDIT_ISSUES", "TRANSITION_ISSUES"].map(n => `${
 - 评论只列检查点：结论摘要 + 检查项清单；每项行首必须有标记——通过写 `(/)`（绿勾），不通过写 `(x)`（红叉）。不通过项每条一行、80 字以内；判定过程留在对话回复里。
 - 不达标时元信息区多一行「待处理人」：`* 待处理人：[~登录名]｜流转：<实际流转结果>`，`@` 写法见 §9。
 - 评论**末尾固定一行**「报告附件 + 评审结论」：`* 报告附件：<KEY>-需求评审报告-宋立志.md（已上传）｜评审结论：需修改`，与检查项清单之间空一行；达标与不达标都要有（见 §10 第 8 条）。`评审结论` 只取 `不合格 / 需修改 / 合格`，且只能由 `report-conclusion.mjs` 从报告 md 提取，不许自己判。
+- 元信息区固定写设计准入摘要：`原型设计准入`、`设计报告附件`；取值来自 `review-jira-design` 的 `content.json` 与实际上传结果，不许自己猜。
+- 元信息区固定写 QA 摘要：`QA 准入门禁`、`QA 阻断项`、`QA 清单附件`、`QA 评论`；取值来自 `review-jira-qa` 的 `result.json` / `upload.json` / `comment.json`，不许自己猜。
 - 写入后读回验证，确认渲染正常、无截断：
 
 ```javascript
@@ -129,11 +131,11 @@ nodeRepl.write(last.id + " | " + last.author + " | " + last.body.slice(0, 120));
 
 - Jira wiki 表格的单元格内容必须在一行内写完；单元格里出现 `|` 需转义为 `\|`，否则表格列会错位。
 - 评论正文中避免出现未转义的花括号组合（`{color}` 之类会被当作宏）。
-- 结论只以评论留痕，不生成报告文档；本地仅保留附件与解析中间文件。
+- 结论只以评论留痕；本地仅保留附件与解析中间文件，唯三例外是 §10 的评审报告 md、§10.1 的设计报告 HTML 与 §10.2 的 QA 清单 HTML。
 
 ## 9. 交付顺序与「仅退回补充时流转并 @ 流转人」
 
-第 6 条的交付顺序对所有结论都适用（评论 → 门禁字段 → 附件 → 流转）。前三步对所有结论执行，**状态流转只在结论为「退回补充」时执行**：
+交付顺序对所有结论都适用：三个评审技能（`review-jira-req` → `review-jira-design` → `review-jira-qa`）→ G1 评论（含 @）→ 门禁字段 → 附件 → 流转。前三步对所有结论执行，**状态流转只在综合结论为「退回补充」时执行**：
 
 - 结论「通过」：**不流转状态**，保持当前状态，允许进入技术方案设计；不 @ 人。
 - 结论「退回补充」：流转到 **评审中**，并在评论里 @ 流转人。
@@ -183,11 +185,53 @@ node scripts/jira-cli.mjs attach-list <KEY|URL>   # 读回确认：列表里出�
 
 5. **成功判定看返回体不看退出码**：`attach` 成功返回 `{ok:true, id, filename, size}`；失败返回 `{ok:false, reason}` 并**置退出码 1** 且在 stderr 打 `[附件上传失败] ...`。上传完后**必须**用 `attach-list` 读回，确认 `fields.attachment` 里出现目标文件名——`ok:true` 只说明站点接受了这次 POST，读回才是"附件真的挂在该单上"的证据。注意附件的 `author` 是令牌账号，不是写评论的人，这一点不是异常。
 6. **降级**：本地文件缺失、403（缺 `CREATE_ATTACHMENTS`）、404（该单未启用附件）、网络错误都返回 `{ok:false, reason}` 而不抛错：**跳过上传并如实说明，不要重试、不要改文件名绕开**。
-7. **顺序**：评论 → 门禁字段 → 上传附件 → 流转状态（仅不达标，见 §9）。流转放最后，前序步骤的留痕不因流转失败而回滚。
+7. **顺序**：`review-jira-req` 流水线 → `review-jira-design` → `review-jira-qa` 阶段一 → 评论 → 门禁字段 → 上传需求评审报告与设计准入报告 → 流转状态（仅退回补充，见 §9）。流转放最后，前序步骤的留痕不因流转失败而回滚。
 8. **评论末尾固定带附件行 + 评审结论**：评论里写 `* 报告附件：<KEY>-需求评审报告-宋立志.md（已上传 / 未上传（原因））｜评审结论：<不合格/需修改/合格>`。
    - 附件名按第 3 条规则可提前确定；`评审结论`用本技能的 `scripts/report-conclusion.mjs` 从刚生成的报告 md 里提取（`node scripts/report-conclusion.mjs "<报告路径>" <KEY>`），**它是唯一来源，不许自己判**。取值只有三个，脚本遇到非法取值或找不到该 KEY 会以退出码 1 报错，此时如实说明，不要猜。
-   - 为了让结论可提取，**五步流水线必须在写评论之前跑到第 5 步**；附件上传仍是写评论之后的事。
+   - 为了让结论可提取，**五步流水线必须在写评论之前跑到第 5 步**；`review-jira-design` 与 `review-jira-qa` 也必须在写 G1 评论之前跑完；两份报告的上传仍是写 G1 评论之后的事。
    - 上传失败时用 `comment-update` 把括号里改成「未上传（原因）」，`评审结论`保留提取到的真实取值——附件没传上不代表没有结论。
+
+## 10.1 原型设计准入报告（review-jira-design）
+
+需求质量评审报告生成后、QA 阶段一之前，调用 `/data/skills/review-jira-design`。它**对 Jira 只读**，输入只有本单已下载的 PRD 与产品原型 HTML；本技能负责把生成的 HTML 上传成需求单附件。
+
+1. **输入**：§3 下载到 `work/jira-gate/<KEY>/attachments/` 的定稿 PRD 与原型 HTML（压缩包解压后在 `__unpacked/` 下）。多个候选时按需求单描述锁定唯一对象，不要按文件名相似度猜。
+2. **执行**：按它的 `SKILL.md` 建 PRD 编号索引、写 `work/jira-gate/<KEY>/design/content.json`，再由 `build-report.mjs` 生成 `work/jira-gate/<KEY>/design/<KEY>-原型设计准入报告.html`；不要手写 HTML，也不要改模板。
+3. **结论**：只读 `content.json` 的 `结论.审核结论.值`，取值 `通过 / 有条件通过 / 退回补齐 / 审核未完成`。`退回补齐` 与 `审核未完成` 使 G1 最终结论为「退回补充」；`有条件通过` 不阻断但要在评论里注明待补齐项数量。
+4. **上传与读回**：
+
+```bash
+node scripts/jira-cli.mjs attach <KEY|URL> "work/jira-gate/<KEY>/design/<KEY>-原型设计准入报告.html"   --name "<KEY>-原型设计准入报告.html"
+node scripts/jira-cli.mjs attach-list <KEY|URL>   # 与需求评审报告一起读回确认
+```
+
+5. **降级**：PRD 或原型缺失、无法读取、对象无法唯一定位时，设计结论写「审核未完成」，不得自造「通过」；连 `build-report.mjs --prd` 都无法执行时跳过设计附件并在评论里写明原因。权限不足或附件上传失败时，用 `comment-update` 把评论里的「设计报告附件」行改成「未上传（原因）」，不改变设计结论。脚本非零退出、内容 JSON 非法属于运营性失败，停止 G1 后续交付并保留现场。
+
+## 10.2 QA 需求准入门禁（review-jira-qa）
+
+G1 在写完 `review-jira-req` 报告、完成 `review-jira-design`、尚未写 G1 评论时，必须执行 `/data/skills/review-jira-qa` 的**阶段一**，禁止进入阶段二/三：
+
+```bash
+export SKILL_DIR=/data/skills/review-jira-qa
+export CLAUDE_SKILL_DIR="$SKILL_DIR"
+export JIRA_PAT="${JIRA_PAT:-$JIRA_TOKEN}"
+export QA_WORKSPACE="$PWD/work/jira-gate/<KEY>/review-jira-qa"
+node "$SKILL_DIR/bin/preflight.mjs" --key <KEY> --stage 1
+node "$SKILL_DIR/bin/jira-read.mjs" --key <KEY>
+node "$SKILL_DIR/bin/jira-download.mjs" --key <KEY> --run-id <RUN_ID>
+node "$SKILL_DIR/bin/materials.mjs" --run-id <RUN_ID>
+# 写 .qa/runs/<RUN_ID>/gate.spec.json 后：
+node "$SKILL_DIR/bin/render-gate.mjs" --spec <gate.spec.json>
+node "$SKILL_DIR/bin/validate-gate.mjs" --html <HTML> --spec <gate.spec.json>
+node "$SKILL_DIR/bin/jira-upload.mjs" --key <KEY> --file <HTML> --run-id <RUN_ID>
+node "$SKILL_DIR/bin/jira-comment.mjs" --key <KEY> --body <COMMENT> --run-id <RUN_ID>
+node "$SKILL_DIR/bin/result.mjs" --stage risk-analysis --key <KEY> --run-id <RUN_ID> --spec <gate.spec.json>
+```
+
+- `QA_RESULT_JSON.ok=true` + `conclusion=通过`：QA 不阻断，G1 用自己的结论。
+- `QA_RESULT_JSON.ok=true` + `conclusion=暂不通过`：G1 最终结论强制为「退回补充」。
+- `ok=false` 或脚本非零退出：运营性失败，停止 G1 后续交付并保留现场；不得宣称 QA 通过。
+- QA 自行写 `QA-需求准入门禁结果` 评论并上传 HTML；G1 不再重复上传 QA HTML、不改 Jira 状态。
 
 ## 11. 故障排查
 
@@ -210,6 +254,8 @@ node scripts/jira-cli.mjs attach-list <KEY|URL>   # 读回确认：列表里出�
 | 上传返回 `ok:true` 但单子上看不到附件 | 站点接受了 POST 不等于挂上了；用 `attach-list` 读回 `fields.attachment` 确认，并核对是否看的是同一站点（生产/测试的 Key 可能同名） |
 | 附件作者与评论作者不是同一人 | 附件按**令牌账号**记录作者，评论按令牌账号写入，属正常现象 |
 | `JIRA_PAT` 缺失导致 review-jira-req 直接退出 | 桌面端忘了设置凭据；容器锁定模式应检查 `JIRA_TOKEN`，见 §10 的凭据桥接 |
+| `build-report.mjs` 报「找不到 PRD」或内容 JSON 非法 | 设计审核输入缺失或 `content.json` 结构不对；按 §10.1 记为「审核未完成」或修好 JSON，不得手写 HTML 绕过 |
+| 设计报告缺少结论区块 | `content.json` 没按 `references/content-example.json` 填 `结论.审核结论.值`；补齐后重新生成，不要上传半成品 |
 | `report-conclusion.mjs` 报「匹配到 N 条结论」 | 报告里有多个 issue；评论那行只服务单个需求，必须带上 `<KEY>` 参数后重跑 |
 | `report-conclusion.mjs` 报「报告里找不到 XXX 的小节」 | 报告不是这份 Key 的（常见于复用了上一轮的报告路径）；用本轮 `report.mjs` 刚输出的那个 md 路径 |
 | `report-conclusion.mjs` 报「结论取值非法」 | 报告结构变了（非「- 结论：**X**」格式）；核对报告版本，不要手工塞一个结论进评论 |

@@ -1,0 +1,4 @@
+interface:
+  display_name: "Jira QA 需求准入门禁"
+  short_description: "读取 Jira 最新需求附件，按 B1-B7 / C1-C6 判定需求准入门禁；生成自包含 HTML、上传附件并写 QA 评论"
+  default_prompt: "用 $review-jira-qa 对这个 Jira 需求单执行 QA 需求准入门禁（只执行阶段一）。完整核读 Jira 最新需求侧材料，输出「通过 / 暂不通过」，生成并校验需求准入门禁清单 HTML，上传到 Jira 并同步 QA 评论。不要进入测试方案、XMind 或 Excel/CSV 阶段，也不要修改 Jira 状态。"

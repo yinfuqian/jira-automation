@@ -26,6 +26,8 @@ class SkillJiraGateFlowTests(unittest.TestCase):
         self.assertIn("评审中", text)
         self.assertIn("--to 评审中", text)
         self.assertIn("通过不流转", text)
+        self.assertIn("业务待决策事项", text)
+        self.assertNotIn("决策卡", text)
         self.assertIn("只处理类型为「故事」", text)
         self.assertIn("precheck", text)
         self.assertNotIn("--to 开发设计中", text)
@@ -45,7 +47,7 @@ class SkillJiraGateFlowTests(unittest.TestCase):
         self.assertIn("同一结果测试", text)
 
     def test_runtime_prompt_requires_precheck_return_flow_and_report(self):
-        """服务端调用时必须先做类型预检，并完整执行 G1 的退回流转与报告附件。"""
+        """服务端调用时必须先做类型预检，并完整执行 G1、三个评审技能与退回流转。"""
         payload = json.loads((SKILL_DIR / "runtime.json").read_text(encoding="utf-8"))
 
         self.assertEqual(payload["required_inputs"], ["jira_url"])
@@ -53,6 +55,57 @@ class SkillJiraGateFlowTests(unittest.TestCase):
         self.assertIn("评审中", payload["prompt_template"])
         self.assertIn("结论「通过」不流转状态", payload["prompt_template"])
         self.assertIn("review-jira-req", payload["prompt_template"])
+        self.assertIn("review-jira-design", payload["prompt_template"])
+        self.assertIn("review-jira-qa", payload["prompt_template"])
+        self.assertIn("调用顺序固定为 review-jira-req → review-jira-design → review-jira-qa", payload["prompt_template"])
+        self.assertIn("build-report.mjs", payload["prompt_template"])
+        self.assertIn("只执行阶段一", payload["prompt_template"])
+        self.assertIn("ok=false", payload["prompt_template"])
+
+    def test_skill_integrates_qa_gate_and_merges_conclusions(self):
+        """G1 必须调用 review-jira-qa，并规定任一准出不通过即退回补充。"""
+        text = SKILL_PATH.read_text(encoding="utf-8")
+
+        self.assertIn("### 11.2 QA 需求准入门禁（review-jira-qa）", text)
+        self.assertIn("/data/skills/review-jira-qa", text)
+        self.assertIn("只执行阶段一", text)
+        self.assertIn("G1 最终结论强制为**退回补充**", text)
+        self.assertIn("运营性失败", text)
+        self.assertIn("不得写成 QA 通过", text)
+        self.assertIn('QA_WORKSPACE="$PWD/work/jira-gate/<KEY>/review-jira-qa"', text)
+        self.assertIn("QA 清单附件", text)
+        self.assertIn("QA 评论", text)
+
+    def test_skill_integrates_design_review_between_req_and_qa(self):
+        """G1 必须在需求评审之后、QA 之前调用 review-jira-design，并上传设计报告。"""
+        text = SKILL_PATH.read_text(encoding="utf-8")
+        payload = json.loads((SKILL_DIR / "runtime.json").read_text(encoding="utf-8"))
+
+        self.assertIn("### 11.1 原型设计准入报告（review-jira-design）", text)
+        self.assertIn("/data/skills/review-jira-design", text)
+        self.assertIn("build-report.mjs", text)
+        self.assertIn("content.json", text)
+        self.assertIn("<KEY>-原型设计准入报告.html", text)
+        self.assertIn("审核未完成", text)
+        self.assertIn("有条件通过", text)
+        self.assertIn("原型设计准入", text)
+        self.assertIn("设计报告附件", text)
+        # 调用顺序必须是 req → design → qa，且都在 G1 评论之前。
+        req_pos = text.index("### 11. 评审报告（review-jira-req）")
+        design_pos = text.index("### 11.1 原型设计准入报告（review-jira-design）")
+        qa_pos = text.index("### 11.2 QA 需求准入门禁（review-jira-qa）")
+        self.assertLess(req_pos, design_pos)
+        self.assertLess(design_pos, qa_pos)
+        self.assertIn("review-jira-design", payload["prompt_template"])
+
+    def test_delivery_order_runs_three_review_skills_before_comment(self):
+        """三个评审技能必须在 G1 评论前完成，QA 评论/HTML 由 QA 技能自身交付。"""
+        text = SKILL_PATH.read_text(encoding="utf-8")
+
+        self.assertIn("review-jira-req` 五步流水线 → `review-jira-design` 原型设计准入 → `review-jira-qa` 阶段一", text)
+        self.assertIn("QA 自己的评论和 HTML 上传由 `review-jira-qa` 在其阶段一内完成", text)
+        self.assertIn("不要把 QA 的 HTML 再上传一次", text)
+        self.assertIn("上传需求评审报告与设计准入报告", text)
 
     def test_comment_template_mentions_flow_owner(self):
         """不达标评论模板必须带 @ 流转人的「待处理人」行，且注明达标时省略。"""
