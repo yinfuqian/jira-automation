@@ -13,15 +13,17 @@
 - 除登录和账号申请外，服务接口必须携带有效登录令牌。
 - 用户操作写入数据库审计表，便于按操作人和请求编号追踪。
 - 内置 Codex Agent 技能执行接口：提交 Jira 链接与 `skill_id`，由服务端跑技能完成需求准入检查，写回 Jira 评论、按需流转状态，并把 OpenSpec 评审报告上传成需求单附件。
-- Docker Compose 提供数据库迁移、API、Worker、前端和 OCR 运行环境，并可通过 `local-deps` Profile 启动本地 MySQL、Redis。
+- Docker Compose 提供数据库迁移、API、分析 Worker、技能 Worker、前端和 OCR 运行环境，并可通过 `local-deps` Profile 启动本地 MySQL、Redis。
 
 ## 服务架构
 
 | 服务 | 职责 | 默认端口 |
 | --- | --- | --- |
 | `frontend` | Nginx 静态页面和 `/api` 反向代理 | `8080` |
-| `api` | Flask API、认证、上传、Git 和分析任务提交 | `5000` |
-| `worker` | Celery 异步深度分析、图片识别与技能（Codex Agent）执行 | 无宿主机端口 |
+| `api-dev` | Flask API、认证、上传、Git 和分析任务提交（开发环境） | `6000` |
+| `worker-analysis-dev` | Celery 日志分析、图片识别与 GitLab 维护任务（开发环境） | 无宿主机端口 |
+| `worker-skill-dev` | Celery 技能（Codex Agent）执行（开发环境） | 无宿主机端口 |
+| `beat-dev` | 开发环境定时任务调度，默认每 12 小时同步 GitLab 产品与模块 | 无宿主机端口 |
 | `migrate` | 创建数据库并执行 `flask db upgrade` | 一次性容器 |
 | `mysql` | 业务数据、知识库和用户操作日志 | `3306` |
 | `redis` | 登录会话、限流状态、Celery Broker 和结果存储 | `6379` |
@@ -30,11 +32,11 @@
 
 环境要求：Docker Desktop 或 Docker Engine，且支持 Docker Compose v2。
 
-当前 dev 与 master 分别使用 `docker-compose-dev.yaml` 和 `docker-compose-prod.yaml`，两份文件内容相同；MySQL、Redis 使用外部地址：
+当前 dev 与 master 分别使用 `docker-compose-dev.yaml` 和 `docker-compose-prod.yaml`。两套配置使用不同的服务名和数据目录；MySQL、Redis 均使用外部地址：
 
 ```powershell
 Copy-Item .env.example .env
-docker compose --env-file .env -f docker-compose-dev.yaml up -d
+docker compose --env-file .env -f docker-compose-dev.yaml up -d api-dev worker-analysis-dev worker-skill-dev beat-dev
 docker compose -f docker-compose-dev.yaml ps -a
 ```
 
@@ -50,9 +52,21 @@ Master 生产环境使用 `docker-compose-prod.yaml` 与 `.env.production`：
 bash restart-master.sh
 ```
 
-两个脚本都使用 `docker compose up -d --force-recreate` 重建指定服务，因此修改 `.env` / `.env.production` 后会立即生效；默认重建 `api`、`worker` 和 `beat`，`docker compose restart` 不会重新读取环境文件。脚本支持传入 Compose 服务名，例如 `bash restart-dev.sh api` 或 `bash restart-master.sh worker`。如确需临时覆盖配置文件，可使用 `COMPOSE_FILE`、`ENV_FILE` 环境变量。
+两个脚本都使用 `docker compose up -d --force-recreate` 重建指定服务，因此修改 `.env` / `.env.production` 后会立即生效；dev 默认重建 `api-dev`、`worker-analysis-dev`、`worker-skill-dev` 和 `beat-dev`，生产默认重建 `api`、`worker-analysis`、`worker-skill` 和 `beat`。`docker compose restart` 不会重新读取环境文件。脚本支持传入 Compose 服务名，例如 `bash restart-dev.sh api-dev`、`bash restart-dev.sh worker-skill-dev` 或 `bash restart-master.sh worker-analysis`。如确需临时覆盖配置文件，可使用 `COMPOSE_FILE`、`ENV_FILE` 环境变量。
 
-GitLab 产品与模块会在 worker 启动时自动同步一次，Celery Beat 随后按 `GITLAB_SYNC_INTERVAL_HOURS` 周期同步，默认 12 小时。`POST /git/sync-projects` 继续作为 Windows 客户端的手动同步入口。
+GitLab 产品与模块会在 `worker-analysis-dev` 启动时自动同步一次，beat-dev 随后按 `GITLAB_SYNC_INTERVAL_HOURS` 周期同步，默认 12 小时。`POST /git/sync-projects` 继续作为 Windows 客户端的手动同步入口。
+
+API 只需按机器容量调整 `.env` 中的 `WEB_CONCURRENCY` 和 `WEB_THREADS`，默认 `4 x 8`。
+Gunicorn 使用 `gthread` 和 300 秒超时的固定运行参数，不再通过环境变量维护。
+`/git/sync-projects` 为防止重复写产品、模块和关联关系，仍采用单飞锁：同一时刻只允许一次同步，
+后到的请求会返回 `409 GIT_SYNC_IN_PROGRESS`。单次同步内部的 GitLab 分页拉取可并发，
+并发数由 `GITLAB_SYNC_FETCH_CONCURRENCY` 控制，默认 4；数据库写入仍按项目串行提交。
+
+日志分析与技能执行使用独立 Celery 队列和 Worker，两个 Worker 的并发均固定为 2；
+两类任务互不占槽。需要扩展时直接增加对应 Worker 实例，不再维护并发环境变量。
+
+每个请求都会记录开始、结束、状态码、耗时、线程名和 `X-Request-ID`；GitLab 同步还会记录锁状态、
+分页进度、写库进度和重试原因。dev 日志位于 `./data/logs-dev/app.log`，并同时输出到容器标准输出。
 
 首次生产启动前至少修改 `.env` 中的以下内容：
 
@@ -149,7 +163,7 @@ OPENAI_REASONING_EFFORT=high
 验证 OCR 运行环境：
 
 ```powershell
-docker compose -f docker-compose-dev.yaml exec api python verify_runtime.py --ocr
+docker compose -f docker-compose-dev.yaml exec api-dev python verify_runtime.py --ocr
 ```
 
 关闭本地 OCR 后，若模型识别没有返回可用文字，结果中会明确说明“图片识别模型未返回可用结果”，并保留原图继续多模态分析。
@@ -181,11 +195,12 @@ docker compose -f docker-compose-dev.yaml logs migrate
 - `GET /health/ready`：检查数据库、Redis、`users.csv` 和运行目录。
 
 ```powershell
-Invoke-WebRequest http://127.0.0.1:5000/health/live
-Invoke-WebRequest http://127.0.0.1:5000/health/ready
+Invoke-WebRequest http://127.0.0.1:6000/health/live
+Invoke-WebRequest http://127.0.0.1:6000/health/ready
 Invoke-WebRequest http://127.0.0.1:8080/health
-docker compose -f docker-compose-dev.yaml exec api python verify_runtime.py --runtime
-docker compose -f docker-compose-dev.yaml exec worker celery -A celery_worker.celery_app inspect ping
+docker compose -f docker-compose-dev.yaml exec api-dev python verify_runtime.py --runtime
+docker compose -f docker-compose-dev.yaml exec worker-analysis-dev celery -A celery_worker.celery_app inspect ping
+docker compose -f docker-compose-dev.yaml exec worker-skill-dev celery -A celery_worker.celery_app inspect ping
 ```
 
 构建期完整自检：
@@ -202,9 +217,9 @@ docker run --rm jira-automation-frontend:test nginx -t
 
 本项目明确区分本地构建与线上运行：
 
-- `docker-compose-dev.yaml` 和 `docker-compose-prod.yaml` 内容完全相同，分别用于 dev 和 master 生产环境；dev 默认读取 `.env`，生产默认读取 `.env.production`。生产服务器不需要也不应该保存源码仓库或完整源码包。镜像仍会包含程序运行所需的应用文件，因此镜像仓库权限必须严格控制；Docker 镜像本身不是加密或防反编译方案。
+- `docker-compose-dev.yaml` 和 `docker-compose-prod.yaml` 分别用于 dev 和 master 生产环境，服务名与数据目录隔离；dev 默认读取 `.env`，生产默认读取 `.env.production`。生产服务器不需要也不应该保存源码仓库或完整源码包。镜像仍会包含程序运行所需的应用文件，因此镜像仓库权限必须严格控制；Docker 镜像本身不是加密或防反编译方案。
 
-这两份 Compose 的 `api`、`worker`、`migrate` 统一使用 host 网络，API 直接监听宿主机端口 `${API_PORT:-5000}`。MySQL、Redis 必须配置为宿主机可访问的真实地址，不能使用 Compose 服务名。前端如单独部署，应把 `/api` 代理到对应的宿主机端口。
+这两份 Compose 都使用 host 网络。dev 的 `api-dev` 固定监听宿主机 `6000`，生产 `api` 监听 `${API_PORT:-5000}`。MySQL、Redis 必须配置为宿主机可访问的真实地址，不能使用 Compose 服务名。前端如单独部署，应把 `/api` 代理到对应的宿主机端口。
 
 ### 本地开发
 
@@ -233,7 +248,7 @@ powershell -ExecutionPolicy Bypass -File scripts\build_release_images.ps1 backen
   -Push
 ```
 
-后端的 `migrate`、`api`、`worker` 共用一个后端镜像；前端使用独立镜像。因此后端代码变化只发布一个后端镜像，前端代码变化只发布一个前端镜像。
+后端的 `migrate`、`api`、`worker-analysis`、`worker-skill` 共用一个后端镜像；前端使用独立镜像。因此后端代码变化只发布一个后端镜像，前端代码变化只发布一个前端镜像。
 
 ### 离线 apt 系统依赖
 
@@ -252,8 +267,8 @@ ARM 服务器需要额外导出 `-Architecture arm64`。详细说明见 `backend
 
 ### 容器内 JDK 与 Maven 编译环境
 
-技能需要在容器内编译 Java 代码，因此后端镜像内置两套 JDK 与一套 Maven，`migrate`、`api`、`worker`
-三个容器都能直接用：
+技能需要在容器内编译 Java 代码，因此后端镜像内置两套 JDK 与一套 Maven，`worker-skill/worker-skill-dev`
+直接使用；其他服务虽然也基于同一镜像，但不会承担代码编译：
 
 - JDK 8：`/opt/java/jdk8`（`JAVA8_HOME`，也是默认 `JAVA_HOME`）
 - JDK 21：`/opt/java/jdk21`（`JAVA21_HOME`）
@@ -264,14 +279,14 @@ ARM 服务器需要额外导出 `-Architecture arm64`。详细说明见 `backend
 `jdk` 助手做显式切换，避免编译时悄悄用错版本：
 
 ```bash
-docker compose -f docker-compose-dev.yaml exec worker sh -c "jdk list"
+docker compose -f docker-compose-dev.yaml exec worker-skill-dev sh -c "jdk list"
 
 # 技能执行 JDK 8 或 JDK 21 构建。
-docker compose -f docker-compose-dev.yaml exec worker sh -c "cd /tmp/<项目> && jdk 8 mvn -DskipTests package"
-docker compose -f docker-compose-dev.yaml exec worker sh -c "cd /tmp/<项目> && jdk 21 mvn -DskipTests package"
+docker compose -f docker-compose-dev.yaml exec worker-skill-dev sh -c "cd /tmp/<项目> && jdk 8 mvn -DskipTests package"
+docker compose -f docker-compose-dev.yaml exec worker-skill-dev sh -c "cd /tmp/<项目> && jdk 21 mvn -DskipTests package"
 
 # 等价写法，直接指定 JAVA_HOME。
-docker compose -f docker-compose-dev.yaml exec worker sh -c "cd /tmp/<项目> && JAVA_HOME=/opt/java/jdk8 mvn -DskipTests package"
+docker compose -f docker-compose-dev.yaml exec worker-skill-dev sh -c "cd /tmp/<项目> && JAVA_HOME=/opt/java/jdk8 mvn -DskipTests package"
 ```
 
 `MAVEN_OPTS=-Dfile.encoding=UTF-8` 已内置：`javac` 默认跟随 JVM 平台编码，运行环境缺少可用 `LANG` 时会退化成
@@ -287,15 +302,15 @@ docker compose -f docker-compose-dev.yaml exec worker sh -c "cd /tmp/<项目> &&
 
 镜像内 Maven 默认没有任何镜像配置，只会访问 Maven Central；业务仓库依赖公司内网私有制品
 （如 `com.zhuiyi.prompt:llm-prompt-jar`、`com.cmos.dialogos:dialogos-api`），在容器里必然解析失败，
-jira-code 的编译验证与热更新制品构建就只能整段跳过。所以 Compose 给 `worker` 额外挂了两个路径：
+jira-code 的编译验证与热更新制品构建就只能整段跳过。所以 dev Compose 给 `worker-skill-dev` 额外挂了两个路径：
 
 - `config/maven/settings.xml` → `/root/.m2/settings.xml`（只读）：把 `mirrorOf=*` 指向内网 Nexus
   聚合仓库 `http://pkg.in.wezhuiyi.com/repository/maven-public/`。该仓库匿名可读，文件里不含任何凭据，
   可以随仓库与部署包分发。
-- `./data/m2/repository` → `/root/.m2/repository`：Maven 本地仓库缓存。放在宿主机 `data` 目录下，
+- `./data/m2-dev/repository` → `/root/.m2/repository`：dev 专用 Maven 本地仓库缓存。放在宿主机 `data` 目录下，
   容器重建不会丢，也已被 `.gitignore` 忽略。
 
-本地仓库首次需要预热：把开发机 `C:\Users\86183\.m2\repository` 的内容拷到部署机 `./data/m2/repository`，
+本地仓库首次需要预热：把开发机 `C:\Users\86183\.m2\repository` 的内容拷到部署机 `./data/m2-dev/repository`，
 业务仓库的私有依赖才能离线命中（整份缓存约 3.8 GB）。只拷私有依赖也能用，但首次构建仍需联网补齐其余依赖。
 
 ```powershell
@@ -305,7 +320,7 @@ scp -r C:\Users\86183\.m2\repository user@server:/srv/jira-automation/data/m2/
 
 ```bash
 # 部署机上确认挂载与缓存都已生效
-docker compose -f docker-compose-dev.yaml exec worker sh -c "ls -l /root/.m2/settings.xml && ls /root/.m2/repository | head"
+docker compose -f docker-compose-dev.yaml exec worker-skill-dev sh -c "ls -l /root/.m2/settings.xml && ls /root/.m2/repository | head"
 ```
 
 ### 生成精简生产部署包
@@ -343,9 +358,9 @@ docker compose --env-file .env.production -f docker-compose-prod.yaml up -d
 以后正常更新不再复制源码包。只需修改 `.env.production` 中发生变化的镜像版本，然后拉取并重建对应容器：
 
 ```bash
-# 只更新后端；迁移、API 和 Worker 使用同一镜像一起更新。
-docker compose --env-file .env.production -f docker-compose-prod.yaml pull migrate api worker
-docker compose --env-file .env.production -f docker-compose-prod.yaml up -d migrate api worker
+# 只更新后端；迁移、API 和两个 Worker 使用同一镜像一起更新。
+docker compose --env-file .env.production -f docker-compose-prod.yaml pull migrate api worker-analysis worker-skill
+docker compose --env-file .env.production -f docker-compose-prod.yaml up -d migrate api worker-analysis worker-skill
 
 # 前端镜像不由这份生产 Compose 管理；如单独部署前端，请在其部署目录执行对应更新。
 ```
@@ -420,7 +435,7 @@ Jira Automation 的“Send web request”动作可使用下面的请求体；Jir
 提交任务（外部系统建议使用独立令牌 `X-API-Token`，避免共享登录会话）：
 
 ```bash
-curl -X POST http://127.0.0.1:5000/skill/run \
+curl -X POST http://127.0.0.1:6000/skill/run \
   -H "X-API-Token: <SKILL_API_TOKEN>" \
   -H "Content-Type: application/json" \
   -d '{
@@ -430,7 +445,7 @@ curl -X POST http://127.0.0.1:5000/skill/run \
       }'
 
 # 缺陷单门禁 + 自动故障分析：产品与模块既可用名称，也可用工具里的 ID
-curl -X POST http://127.0.0.1:5000/skill/run \
+curl -X POST http://127.0.0.1:6000/skill/run \
   -H "X-API-Token: <SKILL_API_TOKEN>" \
   -H "Content-Type: application/json" \
   -d '{
@@ -449,7 +464,7 @@ curl -X POST http://127.0.0.1:5000/skill/run \
 查询结果，`status` 取值 `queued`、`running`、`succeeded`、`failed`、`timeout`、`cancelled`：
 
 ```bash
-curl -H "X-API-Token: <SKILL_API_TOKEN>" http://127.0.0.1:5000/skill/task/SKL-8F3C1D2E4A5B6071
+curl -H "X-API-Token: <SKILL_API_TOKEN>" http://127.0.0.1:6000/skill/task/SKL-8F3C1D2E4A5B6071
 ```
 
 登录用户也可以直接用 `Authorization: Bearer <登录令牌>` 调用同一组接口。任务与进度同时写入数据库表
@@ -464,7 +479,7 @@ curl -H "X-API-Token: <SKILL_API_TOKEN>" http://127.0.0.1:5000/skill/task/SKL-8F
 
 `download_url` 末尾的 `ticket` 是服务端用 HMAC 签名、与「任务 + 文件名」绑定的短时效票据，
 浏览器地址栏、`<a download>` 或 `window.open` 这类**无法自定义请求头**的下载方式可以直接打开
-`http://127.0.0.1:5000` + `download_url` 完成下载（响应带 `Content-Disposition: attachment`，
+`http://127.0.0.1:6000` + `download_url` 完成下载（响应带 `Content-Disposition: attachment`，
 浏览器按原名保存；命令行加 `curl -o "CALL-1941-G1预检包.zip" "<上址>"` 即可）。
 
 票据默认 30 分钟过期，可通过 `SKILL_ARTIFACT_TICKET_TTL` 调整；票据只在 URL 里出现、不落库，
@@ -482,45 +497,22 @@ curl -H "X-API-Token: <SKILL_API_TOKEN>" http://127.0.0.1:5000/skill/task/SKL-8F
 
 配置来源统一为**仓库根目录的 `.env`**（容器内由 `docker compose -f docker-compose-dev.yaml --env-file .env` 注入）。应用启动时先读 `backend/.env` 再读根 `.env`，因此根 `.env` 里配置过的键一律以根 `.env` 为准；`backend/.env` 只保留本地开发路径（`SKILLS_DIR`、`SKILL_WORKSPACE_DIR`、`CODEX_HOME`）。真实进程环境变量优先级最高，任何 `.env` 都不会覆盖它。
 
-除 `CODEX_API_KEY`、`JIRA_TOKEN`、`JIRA_BASE_URL` 三项必须自行填写外，其余技能配置均已内置已验证可用的默认值，部署时无需在 `.env` 中重复填写。
+日常只需要维护下面这些值；模型协议、超时、票据、Webhook 过滤、技能目录和同机分析回环等高级参数均由代码默认值接管。
 
-| 变量 | 默认值 | 说明 |
-| --- | --- | --- |
-| `SKILL_API_TOKEN` | `local-dev-token` | 外部系统调用 `/skill` 接口的独立令牌；默认值仅供本地验证，生产环境必须替换为随机强令牌 |
-| `SKILL_URL_ALLOWED_HOSTS` | `jira.in.wezhuiyi.com` | `jira_url` 主机白名单，逗号分隔；留空表示不限制 |
-| `SKILL_ARTIFACT_TICKET_SECRET` | 留空 | 交付物下载票据的签名密钥；留空回退 `SKILL_API_TOKEN`，单独配置便于轮换票据而不影响接口调用 |
-| `SKILL_ARTIFACT_TICKET_TTL` | `1800` | 交付物下载票据有效期（秒），让 `download_url` 能直接在浏览器打开且不会长期有效 |
-| `SKILL_WORKSPACE_DIR` | `/data/skill-workspace` | 技能工作目录 |
-| `CODEX_SKILL_TIMEOUT` | 留空 | 单次技能执行超时秒数；留空表示按技能自身 `runtime.json` 声明（`jira-code` 7200、`jira-defect-gate` 3600、其余 1800），填写后统一覆盖 |
-| `CODEX_MODEL` | `codex/deepseek-flash` | Codex 使用的模型，后端以 `-c model=...` 覆盖，技能执行以该值为准 |
-| `CODEX_MODEL_PROVIDER` | `skillrun` | 模型提供方标识，后端以 `-c model_provider=...` 传给 Codex |
-| `CODEX_BASE_URL` | `https://newapi.in.wezhuiyi.com/v1` | 模型中转地址，后端以 `-c model_providers.<provider>.base_url=...` 覆盖；未配置时回退 `OPENAI_URL` |
-| `CODEX_API_KEY` | 无（**必填**） | 模型中转令牌；未配置时回退 `OPENAI_KEY` |
-| `CODEX_WIRE_API`、`CODEX_REASONING_EFFORT` | `responses`、`high` | Codex 请求协议与推理强度 |
-| `CODEX_SANDBOX` | `danger-full-access` | Codex 子进程沙箱模式，隔离边界由容器提供 |
-| `CODEX_NETWORK_RETRY_LIMIT` | `10` | 连续网络错误达到该次数即判定模型/Jira 不可达并提前终止，不再空转到超时 |
-| `SKILL_RECOVER_ORPHANS` | `true` | worker 启动时把上一次运行遗留的 `running` 任务标记为失败 |
-| `CODEX_HOME` | `/data/codex` | Codex 运行目录基址，挂载 `codex-home` 卷。每次技能任务使用独立的 `runs/<task_id>` 子目录，避免继承共享的 `skills/` 与 MCP 配置 |
-| `SKILLS_DIR` | `/data/skills` | 技能目录，容器内由 `./skills` 只读挂载而来，Codex 运行时不会改写它 |
-| `JIRA_TOKEN` | 无（**必填**） | 注入给技能脚本的 Jira 个人访问令牌；运行时锁定为唯一来源，技能不会回落到 `skills/.jira-token` 等令牌文件 |
-| `JIRA_BASE_URL` | 无（**必填**） | 注入给技能脚本的 Jira 站点地址；技能只允许访问该站点，传入其它站点的单号链接会被拒绝 |
-| `JIRA_WEBHOOK_SECRET` | 无 | Jira 原生 webhook 的 HMAC-SHA256 签名密钥；不使用原生签名时留空，Jira Automation 改用 `X-API-Token` |
-| `JIRA_WEBHOOK_SKILL_ID` | `jira-gate-bug` | Jira 事件自动提交的技能标识 |
-| `JIRA_WEBHOOK_EVENTS` | `jira:issue_created,issue_created` | 允许触发的问题事件，逗号分隔；默认不处理评论和字段更新 |
-| `JIRA_WEBHOOK_ISSUE_TYPES` | `缺陷,Bug` | 允许自动触发的问题类型；留空表示不按类型过滤 |
-| `GITLAB_PRIVATE_TOKEN` | 无 | `jira-code` 拉分支与推送代码用的 GitLab 令牌，需要仓库写权限；缺失时技能只会中断并如实上报 |
-| `GIT_BASE_URL` | 无 | GitLab 站点地址；方案里只写 `group/repo` 时用它补全克隆地址 |
-| `GIT_USER`、`GIT_PASSWORD` | 无 | 没有 `GITLAB_PRIVATE_TOKEN` 时的账号密码兜底 |
-| `DEVOPS_MCP_TOKEN` | 无 | 流水线平台个人中心签发的 API Token；只给 `jira-code`、`devops-mcp-invoker` 注册 `pipeline-integration-mcp`，配置写入任务独立 `CODEX_HOME` 的 `config.toml`；缺失时清掉该 server 配置，技能按「跳过并说明」处理 |
-| `DEVOPS_MCP_URL` | `https://devops.ks1.wezhuiyi.com/mcp` | 流水线 MCP server 地址，与 `DEVOPS_MCP_TOKEN` 一起写入需要该 MCP 的任务独立 `CODEX_HOME` |
-| `ANALYSIS_API_BASE_URL` | `http://127.0.0.1:5000` | `jira-gate-bug` 回写时调用的同机故障分析服务地址，端口与 `API_PORT` 一致 |
-| `ANALYSIS_API_TRUST_LOOPBACK` | `true` | 同机技能经回环地址调用分析接口时免令牌；显式设为 `false` 可强制令牌 |
-| `ANALYSIS_API_TOKEN` | 无 | 仅非回环地址调用分析、上传接口时需要的服务间令牌；回环内部调用不必配置 |
+| 变量 | 说明 |
+| --- | --- |
+| `SKILL_API_TOKEN` | 外部调用 `/skill` 的令牌；生产环境必须替换默认值 |
+| `SKILL_URL_ALLOWED_HOSTS` | 允许技能访问的 Jira 主机，通常只填生产 Jira 域名 |
+| `JIRA_BASE_URL`、`JIRA_TOKEN` | Jira 站点地址和该站点签发的个人访问令牌 |
+| `OPENAI_URL`、`OPENAI_KEY` | 故障分析模型地址和密钥 |
+| `CODEX_BASE_URL`、`CODEX_API_KEY` | 技能执行模型地址和密钥；密钥留空时可复用 `OPENAI_KEY` |
+| `GIT_BASE_URL`、`GIT_USER`、`GIT_PASSWORD`、`GITLAB_PRIVATE_TOKEN` | `jira-code` 拉取和推送代码所需凭据 |
+| `DEVOPS_MCP_TOKEN` | 可选；配置后才启用流水线热更新 |
 
 **技能运行参数来源锁定**：后端在启动技能前，用上面的配置值覆盖同名环境变量并注入 `SKILLRUN_ENV_LOCKED=1`；
 技能脚本（`jira.mjs`、`jira-cli.mjs` 等）读到该标记后只认环境变量，不再回落到令牌文件、`--token` / `--base-url` 入参与内置默认站点。
 必填项（`JIRA_BASE_URL`、`JIRA_TOKEN`、`DEVOPS_MCP_URL`、`CODEX_MODEL`、`CODEX_MODEL_PROVIDER`、`CODEX_BASE_URL`）缺失时，
-`POST /skill/run` 直接返回 503 并列出缺哪一项，worker 也会把任务标记为失败，不会带着来源不明的参数继续跑；
+`POST /skill/run` 直接返回 503 并列出缺哪一项，技能 worker 也会把任务标记为失败，不会带着来源不明的参数继续跑；
 `DEVOPS_MCP_TOKEN` 留空表示不启用热更新，此时后端会在任务目录里清掉同名 MCP 配置。缺陷门禁等非流水线技能不会注册该 MCP，也看不到流水线工具。
 
 技能运行参数由后端以 `codex exec -c ...` 传入（模型、中转地址、请求协议、推理强度等），容器内无需维护 `config.toml`；
@@ -535,22 +527,22 @@ Codex 自己生成的状态文件全部落在 `codex-home` 卷（本地运行对
   构建阶段会校验这些命令存在，缺失会导致镜像构建失败。
 - 后端镜像已内置 JDK 8、JDK 21 与 Maven 3.9.9，技能可直接在容器内编译 Java 代码；默认 `JAVA_HOME` 为
   JDK 8（业务仓库以 Java 8 为主），Java 21 项目用镜像内的 `jdk 21 <命令>` 显式切换。构建阶段会校验 JDK 8／JDK 21／Maven 三者可用，缺失会导致镜像构建失败。
-- `docker compose --env-file .env -f docker-compose-dev.yaml up -d` 会挂载 `./skills:/data/skills:ro`，并使用 `./data/codex`、`./data/skill-workspace` 等宿主机目录。
+- `docker compose --env-file .env -f docker-compose-dev.yaml up -d api-dev worker-analysis-dev worker-skill-dev beat-dev` 会由技能 worker 挂载 `./skills:/data/skills:ro`，并使用 `./data/codex-dev`、`./data/skill-workspace-dev` 等 dev 专用宿主机目录。
 - 首次部署后自检技能运行环境：
 
 ```bash
-docker compose -f docker-compose-dev.yaml exec worker node /data/skills/jira-gate-1/scripts/jira-cli.mjs selftest
+docker compose -f docker-compose-dev.yaml exec worker-skill-dev node /data/skills/jira-gate-1/scripts/jira-cli.mjs selftest
 # jira-code 额外自检 GitLab 凭据（只回显来源，不打印令牌）
-docker compose -f docker-compose-dev.yaml exec worker node /data/skills/jira-code/scripts/git-flow.mjs creds
+docker compose -f docker-compose-dev.yaml exec worker-skill-dev node /data/skills/jira-code/scripts/git-flow.mjs creds
 # 配了 DEVOPS_MCP_TOKEN 时确认最近的任务配置已注册 MCP（不打印令牌）
-docker compose -f docker-compose-dev.yaml exec worker sh -c 'for f in /data/codex/runs/*/config.toml; do grep -q pipeline-integration-mcp "$f" && echo "$f"; done'
+docker compose -f docker-compose-dev.yaml exec worker-skill-dev sh -c 'for f in /data/codex/runs/*/config.toml; do grep -q pipeline-integration-mcp "$f" && echo "$f"; done'
 ```
 
-- API 只负责提交任务，Codex 实际执行发生在 `worker` 容器，请确保 `worker` 能访问 Jira 与模型中转。
-- 要走 `jira-code` 的热更新，`worker` 还需要能访问 `devops.ks1.wezhuiyi.com`（流水线 MCP）与
+- API 只负责提交任务，Codex 实际执行发生在 `worker-skill-dev` 容器，请确保该容器能访问 Jira 与模型中转。
+- 要走 `jira-code` 的热更新，`worker-skill-dev` 还需要能访问 `devops.ks1.wezhuiyi.com`（流水线 MCP）与
   `pkg.in.wezhuiyi.com`（热更新工具下载与制品上传）；只做代码推送不需要这两个域名。
-- 技能任务与日志分析共享 `worker` 并发槽位，单次技能可能运行数分钟；并发要求高时可单独部署一个监听同一队列的 Worker，或调整 `CELERY_WORKER_CONCURRENCY`。
-- 技能工作目录保留在 `skill-workspace` 卷中便于排查，长期运行请按需清理。
+- 技能任务和日志分析分别由独立 Worker 消费，默认各并发 2 个任务，两者互不占用槽位。
+- dev 技能工作目录保留在 `./data/skill-workspace-dev`，便于排查，长期运行请按需清理。
 
 ### 本地验证（不使用 Docker）
 
@@ -579,10 +571,11 @@ cd backend
 .\.venv-win\Scripts\python.exe -m flask --app app.py db upgrade
 ```
 
-4. 启动 Worker 与 API（两个终端分别执行，均在 `backend` 目录下）：
+4. 启动两个 Worker 与 API（三个终端分别执行，均在 `backend` 目录下）：
 
 ```powershell
-.\.venv-win\Scripts\python.exe -m celery -A celery_worker.celery_app worker --loglevel=INFO --concurrency=1 --pool=solo
+.\.venv-win\Scripts\python.exe -m celery -A celery_worker.celery_app worker -Q analysis,maintenance --loglevel=INFO --concurrency=1 --pool=solo
+.\.venv-win\Scripts\python.exe -m celery -A celery_worker.celery_app worker -Q skill --loglevel=INFO --concurrency=1 --pool=solo
 .\.venv-win\Scripts\python.exe -m flask --app app.py run --no-reload --port 5000
 ```
 
@@ -610,8 +603,8 @@ node ..\skills\jira-gate-bug\scripts\jira-cli.mjs selftest
 node ..\skills\jira-gate-bug\scripts\analysis-cli.mjs selftest
 node ..\skills\jira-gate-bug\scripts\jira-cli.mjs scope <KEY|URL>
 node ..\skills\jira-gate-bug\scripts\analysis-cli.mjs resolve --product yibot --module yibot-server
-curl -H "X-API-Token: local-dev-token" http://127.0.0.1:5000/health/ready
-curl -H "X-API-Token: local-dev-token" http://127.0.0.1:5000/skill/list
+curl -H "X-API-Token: local-dev-token" http://127.0.0.1:6000/health/ready
+curl -H "X-API-Token: local-dev-token" http://127.0.0.1:6000/skill/list
 ```
 
 `jira-gate-bug` 的产品从 Jira「问题发现产品」读取；模块和版本优先取调用方输入，其次读取固定评论块
@@ -695,7 +688,7 @@ python windows-client\log_analyzer_client.py
 WINDOWS_CLIENT_BACKEND_URL=https://example.com/logapi
 ```
 
-未配置时，打包客户端默认访问 `http://127.0.0.1:5000`。打包：
+未配置时，打包客户端默认访问 `http://127.0.0.1:5000`；本地 dev Compose 暴露 `6000`，使用客户端时请配置 `WINDOWS_CLIENT_BACKEND_URL=http://127.0.0.1:6000`。打包：
 
 ```powershell
 windows-client\build-exe.bat
@@ -754,26 +747,26 @@ powershell -ExecutionPolicy Bypass -File scripts\clean_generated.ps1 -KeepReleas
 检查 `users.csv` 的表头、编码和状态值，确认 API 能读取挂载文件：
 
 ```powershell
-docker compose -f docker-compose-dev.yaml exec api python verify_runtime.py --runtime
-docker compose -f docker-compose-dev.yaml logs api
+docker compose -f docker-compose-dev.yaml exec api-dev python verify_runtime.py --runtime
+docker compose -f docker-compose-dev.yaml logs api-dev
 ```
 
 ### 迁移提示 MySQL 认证失败
 
-当前依赖已使用 `PyMySQL[rsa]` 支持 MySQL 8 `caching_sha2_password`。确认使用最新后端镜像，并重新拉取、重启 API：`docker compose --env-file .env -f docker-compose-dev.yaml pull api && docker compose --env-file .env -f docker-compose-dev.yaml up -d api`。
+当前依赖已使用 `PyMySQL[rsa]` 支持 MySQL 8 `caching_sha2_password`。确认使用最新后端镜像，并重新拉取、重启 API：`docker compose --env-file .env -f docker-compose-dev.yaml pull api-dev && docker compose --env-file .env -f docker-compose-dev.yaml up -d api-dev`。
 
 ### 图片长时间停在分析中
 
 图片识别走多模态模型，长图或大图会明显更慢（默认本地 OCR 已停用）。先查看 Worker 日志确认当前阶段：
 
 ```powershell
-docker compose -f docker-compose-dev.yaml logs -f worker
+docker compose -f docker-compose-dev.yaml logs -f worker-analysis-dev
 ```
 
 若确实需要本地 OCR 预检，再显式开启并检查运行环境：
 
 ```powershell
-docker compose -f docker-compose-dev.yaml exec api python verify_runtime.py --ocr
+docker compose -f docker-compose-dev.yaml exec api-dev python verify_runtime.py --ocr
 ```
 
 ### 多张图片只看到一个问题
@@ -786,18 +779,18 @@ docker compose -f docker-compose-dev.yaml exec api python verify_runtime.py --oc
 
 ### 技能任务一直处于 running 或返回失败
 
-技能执行发生在 `worker` 容器，按顺序排查：
+技能执行发生在 `worker-skill-dev` 容器，按顺序排查：
 
 ```bash
 # 1. 查看 Codex 执行过程与错误输出
-docker compose -f docker-compose-dev.yaml logs -f worker
+docker compose -f docker-compose-dev.yaml logs -f worker-skill-dev
 # 2. 技能运行环境自检（令牌、连通性、账号）
-docker compose -f docker-compose-dev.yaml exec worker node /data/skills/jira-gate-1/scripts/jira-cli.mjs selftest
+docker compose -f docker-compose-dev.yaml exec worker-skill-dev node /data/skills/jira-gate-1/scripts/jira-cli.mjs selftest
 # 3. 确认镜像内 Codex CLI 可用
-docker compose -f docker-compose-dev.yaml exec worker codex --version
+docker compose -f docker-compose-dev.yaml exec worker-skill-dev codex --version
 ```
 
-常见原因：`worker` 无法访问 Jira 或模型中转地址；`JIRA_TOKEN` 未配置或已过期；
+常见原因：`worker-skill-dev` 无法访问 Jira 或模型中转地址；`JIRA_TOKEN` 未配置或已过期；
 `CODEX_WIRE_API` 与中转服务的接口协议不匹配（`responses` 对应 `/v1/responses`，`chat` 对应 `/v1/chat/completions`）。
 任务的阶段、最近事件与错误信息可通过 `GET /skill/task/<task_id>` 或 `skill_run_records` 表查看。
 
@@ -805,6 +798,6 @@ docker compose -f docker-compose-dev.yaml exec worker codex --version
 
 - **网络不可达**：Codex 反复输出 `Reconnecting... waiting for network` 时，连续达到 `CODEX_NETWORK_RETRY_LIMIT`
   （默认 10 次，按指数退避约 15 分钟）即提前终止，任务记为 `failed`，`stage=network_unreachable`，错误信息给出中转地址、
-  出网与代理的排查方向。若该任务是从沙箱或离线环境启动的进程提交的，请改用正常网络环境重启 `worker`。
-- **worker 重启遗留**：`worker` 启动时若 `SKILL_RECOVER_ORPHANS=true`（默认），会把上一次运行中残留的
+  出网与代理的排查方向。若该任务是从沙箱或离线环境启动的进程提交的，请改用正常网络环境重启 `worker-skill-dev`。
+- **worker 重启遗留**：`worker-skill` 启动时若 `SKILL_RECOVER_ORPHANS=true`（默认），会把上一次运行中残留的
   `running` 任务标记为 `failed`，`stage=worker_restarted`；仍被其它 worker 正常执行的任务不会被误改。

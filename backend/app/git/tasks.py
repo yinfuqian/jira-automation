@@ -1,5 +1,7 @@
 """GitLab 产品与模块同步的 Celery 任务及启动触发。"""
 import logging
+import time
+from urllib.parse import urlparse
 
 from flask import current_app
 from celery.signals import worker_ready
@@ -15,11 +17,20 @@ GITLAB_SYNC_TASK_NAME = "git.sync_projects"
 
 def run_gitlab_sync_once(config):
     """在共享锁内执行一次 GitLab 同步，供任务、手动接口和启动触发复用。"""
-    if not str(config.get("GIT_BASE_URL") or "").strip():
+    base_url = str(config.get("GIT_BASE_URL") or "").strip()
+    if not base_url:
         return {"status": "skipped", "reason": "git_base_url_missing"}
 
+    started_at = time.perf_counter()
+    logging.info(
+        "GitLab 项目同步开始：host=%s page_concurrency=%s skip_existing=%s",
+        urlparse(base_url).netloc or base_url,
+        config.get("GITLAB_SYNC_FETCH_CONCURRENCY", 4),
+        config.get("GITLAB_SYNC_SKIP_EXISTING_REPOS", True),
+    )
     lock_token = acquire_sync_lock()
     if lock_token is None:
+        logging.info("GitLab 项目同步跳过：已有同步任务持有互斥锁")
         return {"status": "skipped", "reason": "sync_in_progress"}
 
     try:
@@ -29,6 +40,11 @@ def run_gitlab_sync_once(config):
         raise
     finally:
         release_sync_lock(lock_token)
+    logging.info(
+        "GitLab 项目同步完成：duration_ms=%s result=%s",
+        int((time.perf_counter() - started_at) * 1000),
+        stats,
+    )
     return {"status": "succeeded", **stats}
 
 

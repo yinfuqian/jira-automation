@@ -22,10 +22,13 @@ class GitLabSyncTaskTests(unittest.TestCase):
         sync.return_value = {"fetched_projects": 3, "synced_projects": 2}
         config = {"GIT_BASE_URL": "https://git.example.com/"}
 
-        result = git_tasks.run_gitlab_sync_once(config)
+        with self.assertLogs(level="INFO") as captured:
+            result = git_tasks.run_gitlab_sync_once(config)
 
         self.assertEqual(result["status"], "succeeded")
         self.assertEqual(result["synced_projects"], 2)
+        self.assertIn("GitLab 项目同步开始", "\n".join(captured.output))
+        self.assertIn("GitLab 项目同步完成", "\n".join(captured.output))
         acquire.assert_called_once_with()
         sync.assert_called_once_with(config)
         release.assert_called_once_with(lock)

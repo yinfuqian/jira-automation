@@ -34,6 +34,8 @@ def init_celery(app):
         broker_transport_options=app.config.get("CELERY_BROKER_TRANSPORT_OPTIONS", {}),
         result_backend_transport_options=app.config.get("CELERY_RESULT_BACKEND_TRANSPORT_OPTIONS", {}),
         broker_pool_limit=app.config.get("CELERY_BROKER_POOL_LIMIT", 10),
+        task_default_queue=app.config.get("CELERY_TASK_DEFAULT_QUEUE", "analysis"),
+        task_routes=app.config.get("CELERY_TASK_ROUTES", {}),
         broker_connection_retry=True,
         broker_connection_retry_on_startup=True,
         broker_connection_max_retries=None,

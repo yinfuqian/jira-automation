@@ -1,4 +1,6 @@
 import sys
+import threading
+import time
 import unittest
 from pathlib import Path
 from unittest.mock import patch
@@ -90,6 +92,46 @@ class GitLabSyncTests(unittest.TestCase):
 
         self.assertEqual(len(projects), 1)
         self.assertEqual(calls["count"], 2)
+
+    def test_fetch_gitlab_projects_fetches_known_pages_concurrently(self):
+        page_barrier = threading.Barrier(2)
+        state = {"active": 0, "max_active": 0}
+        state_lock = threading.Lock()
+
+        def concurrent_get_json(api_url, params, request_headers, timeout):
+            page = params["page"]
+            if page == 1:
+                return ([{"name": "page-1", "path_with_namespace": "bot/page-1"}], {
+                    "X-Total-Pages": "3",
+                    "X-Next-Page": "2",
+                })
+
+            with state_lock:
+                state["active"] += 1
+                state["max_active"] = max(state["max_active"], state["active"])
+            try:
+                page_barrier.wait(timeout=2)
+                time.sleep(0.02)
+                return ([{"name": f"page-{page}", "path_with_namespace": f"bot/page-{page}"}], {
+                    "X-Total-Pages": "3",
+                    "X-Next-Page": str(page + 1) if page < 3 else "",
+                })
+            finally:
+                with state_lock:
+                    state["active"] -= 1
+
+        with patch.object(gitlab_sync, "_get_json", side_effect=concurrent_get_json):
+            projects = fetch_gitlab_projects(
+                "https://code.in.wezhuiyi.com/",
+                private_token="token",
+                timeout=1,
+                max_retries=0,
+                retry_delay=0,
+                page_concurrency=2,
+            )
+
+        self.assertEqual(state["max_active"], 2)
+        self.assertEqual([project["name"] for project in projects], ["page-1", "page-2", "page-3"])
 
     def test_sync_gitlab_projects_upserts_products_modules_branches_and_relationships(self):
         projects = [

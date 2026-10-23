@@ -157,6 +157,20 @@ class AsyncConfigTests(unittest.TestCase):
         self.assertEqual(config.CELERY_BROKER_TRANSPORT_OPTIONS["socket_timeout"], 360)
         self.assertEqual(config.CELERY_RESULT_BACKEND_TRANSPORT_OPTIONS["socket_timeout"], 60)
 
+    def test_celery_tasks_use_dedicated_analysis_and_skill_queues(self):
+        """分析、技能与维护任务必须显式分流，不能继续争用默认 Worker。"""
+        config = load_config_module().Config
+
+        self.assertEqual(config.CELERY_TASK_DEFAULT_QUEUE, "analysis")
+        self.assertEqual(
+            config.CELERY_TASK_ROUTES,
+            {
+                "analysis.analyze_log_task": {"queue": "analysis"},
+                "skillrun.run_skill": {"queue": "skill"},
+                "git.sync_projects": {"queue": "maintenance"},
+            },
+        )
+
     def test_database_engine_uses_pre_ping_for_remote_mysql(self):
         config = load_config_module().Config
 

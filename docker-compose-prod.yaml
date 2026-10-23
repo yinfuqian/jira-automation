@@ -48,7 +48,11 @@ services:
       - -w
       - ${WEB_CONCURRENCY}
       - -k
-      - gevent
+      - gthread
+      - --threads
+      - ${WEB_THREADS}
+      - --timeout
+      - "300"
       - --bind
       - 0.0.0.0:${API_PORT:-5000}
       - app:create_app()
@@ -66,7 +70,33 @@ services:
       - ./data/skill-workspace:/data/skill-workspace
     restart: unless-stopped
 
-  worker:
+  worker-analysis:
+    image: ${BACKEND_IMAGE}
+    network_mode: "host"
+    env_file:
+      - ${ENV_FILE:-.env}
+    environment:
+      PYTHONUNBUFFERED: "1"
+      # 分析 worker 只消费分析队列，并顺带消费低频 GitLab 维护队列。
+      SKILL_RECOVER_ORPHANS: "false"
+    command:
+      - celery
+      - -A
+      - celery_worker.celery_app
+      - worker
+      - --loglevel=INFO
+      - -Q
+      - analysis,maintenance
+      - --concurrency=2
+    volumes:
+      - ./data/upload:/data/upload
+      - ./data/logs:/app/app/logs
+      - ./data/repos:/tmp/jira-automation-repos
+    restart: unless-stopped
+    depends_on:
+      - api
+
+  worker-skill:
     image: ${BACKEND_IMAGE}
     network_mode: "host"
     env_file:
@@ -95,8 +125,10 @@ services:
       CODEX_SKILL_TIMEOUT: ${CODEX_SKILL_TIMEOUT:-}
       # 连续网络错误达到该次数即判定模型/Jira 不可达并提前终止，避免空转到超时。
       CODEX_NETWORK_RETRY_LIMIT: ${CODEX_NETWORK_RETRY_LIMIT:-10}
-      # worker 启动时把上一次运行遗留的“执行中”任务标记为失败。
+      # 只由技能 worker 负责回收遗留的技能任务。
       SKILL_RECOVER_ORPHANS: ${SKILL_RECOVER_ORPHANS:-true}
+      GITLAB_SYNC_ENABLED: "false"
+      GITLAB_SYNC_ON_STARTUP: "false"
       JIRA_TOKEN: ${JIRA_TOKEN:-}
       JIRA_BASE_URL: ${JIRA_BASE_URL:-https://jira.in.wezhuiyi.com}
       # jira-code 技能需要 GitLab 凭据来拉分支与推送（令牌需要写仓库权限）；留空时技能会跳过推送并如实上报。
@@ -114,7 +146,9 @@ services:
       - celery_worker.celery_app
       - worker
       - --loglevel=INFO
-      - --concurrency=${CELERY_WORKER_CONCURRENCY}
+      - -Q
+      - skill
+      - --concurrency=2
     volumes:
       - ./data/upload:/data/upload
       - ./data/logs:/app/app/logs
@@ -134,7 +168,7 @@ services:
     depends_on:
       - api
 
-  # Celery Beat 只负责周期投递 GitLab 产品/模块同步任务；worker 启动时还会额外投递一次。
+  # Celery Beat 只负责周期投递 GitLab 产品/模块同步任务；分析 worker 启动时还会额外投递一次。
   # 调度周期由 GITLAB_SYNC_INTERVAL_HOURS 控制，默认 12 小时。
   beat:
     image: ${BACKEND_IMAGE}
@@ -154,7 +188,8 @@ services:
       - ./data/celerybeat:/data/celerybeat
     restart: unless-stopped
     depends_on:
-      - worker
+      - worker-analysis
+      - worker-skill
 
   migrate:
     image: ${BACKEND_IMAGE}

@@ -1,10 +1,12 @@
 """gitlab sync 模块负责本文件相关的业务流程、数据转换与依赖协作。"""
 import base64
 import json
+import logging
 import time
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from http.client import RemoteDisconnected
 from urllib.error import HTTPError, URLError
-from urllib.parse import urlencode
+from urllib.parse import urlencode, urlparse
 from urllib.request import Request, urlopen
 from urllib.parse import urljoin
 
@@ -68,40 +70,134 @@ def fetch_gitlab_projects(
     membership_only=False,
     max_retries=3,
     retry_delay=1,
+    page_concurrency=1,
 ):
-    """读取并返回 fetch_gitlab_projects 对应的业务数据，保持现有调用约定。"""
+    """并发拉取 GitLab 分页数据，写库阶段仍由调用方串行执行。"""
     api_url = urljoin(base_url.rstrip("/") + "/", "api/v4/projects")
-    page = 1
+    auth_headers = _build_gitlab_auth_headers(username, password, private_token)
+    concurrency = max(1, int(page_concurrency or 1))
+    started_at = time.perf_counter()
+    logging.info(
+        "GitLab 项目拉取开始：host=%s membership_only=%s page_concurrency=%s",
+        urlparse(base_url).netloc or base_url,
+        membership_only,
+        concurrency,
+    )
+
+    first_batch, first_headers = _fetch_gitlab_page(
+        api_url,
+        1,
+        membership_only,
+        auth_headers,
+        timeout,
+        max_retries,
+        retry_delay,
+    )
+    pages = {1: first_batch}
+    total_pages = _parse_page_header(first_headers.get("X-Total-Pages"))
+    next_page = _parse_page_header(first_headers.get("X-Next-Page"))
+
+    if total_pages is None:
+        while next_page and next_page not in pages:
+            batch, response_headers = _fetch_gitlab_page(
+                api_url,
+                next_page,
+                membership_only,
+                auth_headers,
+                timeout,
+                max_retries,
+                retry_delay,
+            )
+            pages[next_page] = batch
+            next_page = _parse_page_header(response_headers.get("X-Next-Page"))
+    elif total_pages > 1:
+        remaining_pages = list(range(2, total_pages + 1))
+        if concurrency > 1:
+            workers = min(concurrency, len(remaining_pages))
+            with ThreadPoolExecutor(max_workers=workers, thread_name_prefix="gitlab-sync-page") as executor:
+                futures = {
+                    executor.submit(
+                        _fetch_gitlab_page,
+                        api_url,
+                        page,
+                        membership_only,
+                        auth_headers,
+                        timeout,
+                        max_retries,
+                        retry_delay,
+                    ): page
+                    for page in remaining_pages
+                }
+                for future in as_completed(futures):
+                    page = futures[future]
+                    pages[page], _ = future.result()
+                    logging.info("GitLab 项目分页拉取完成：page=%s projects=%s", page, len(pages[page]))
+        else:
+            for page in remaining_pages:
+                pages[page], _ = _fetch_gitlab_page(
+                    api_url,
+                    page,
+                    membership_only,
+                    auth_headers,
+                    timeout,
+                    max_retries,
+                    retry_delay,
+                )
+                logging.info("GitLab 项目分页拉取完成：page=%s projects=%s", page, len(pages[page]))
+
     projects = []
+    for page in sorted(pages):
+        projects.extend(pages[page])
 
-    while True:
-        params = build_gitlab_project_query(page, membership_only=membership_only)
-        headers = {}
-        auth = None
-        if private_token:
-            headers["PRIVATE-TOKEN"] = private_token
-        elif username or password:
-            raw_token = f"{username or ''}:{password or ''}".encode("utf-8")
-            headers["Authorization"] = f"Basic {base64.b64encode(raw_token).decode('ascii')}"
-
-        batch, response_headers = _get_json_with_retry(
-            api_url,
-            params,
-            headers,
-            timeout,
-            max_retries=max_retries,
-            retry_delay=retry_delay,
-        )
-        if not batch:
-            break
-
-        projects.extend(batch)
-        next_page = response_headers.get("X-Next-Page")
-        if not next_page:
-            break
-        page = int(next_page)
-
+    logging.info(
+        "GitLab 项目拉取完成：projects=%s pages=%s duration_ms=%s",
+        len(projects),
+        len(pages),
+        int((time.perf_counter() - started_at) * 1000),
+    )
     return projects
+
+
+def _build_gitlab_auth_headers(username, password, private_token):
+    """构建 GitLab 请求头，不在日志中输出任何凭据。"""
+    headers = {}
+    if private_token:
+        headers["PRIVATE-TOKEN"] = private_token
+    elif username or password:
+        raw_token = f"{username or ''}:{password or ''}".encode("utf-8")
+        headers["Authorization"] = f"Basic {base64.b64encode(raw_token).decode('ascii')}"
+    return headers
+
+
+def _fetch_gitlab_page(
+    api_url,
+    page,
+    membership_only,
+    headers,
+    timeout,
+    max_retries,
+    retry_delay,
+):
+    params = build_gitlab_project_query(page, membership_only=membership_only)
+    batch, response_headers = _get_json_with_retry(
+        api_url,
+        params,
+        headers,
+        timeout,
+        max_retries=max_retries,
+        retry_delay=retry_delay,
+    )
+    if not isinstance(batch, list):
+        raise GitLabSyncError("GitLab API 返回的项目数据格式不正确")
+    return batch, response_headers
+
+
+def _parse_page_header(value):
+    try:
+        parsed = int(str(value).strip())
+    except (TypeError, ValueError):
+        return None
+    return parsed if parsed > 0 else None
 
 
 def _get_json_with_retry(api_url, params, headers, timeout, max_retries, retry_delay):
@@ -116,6 +212,13 @@ def _get_json_with_retry(api_url, params, headers, timeout, max_retries, retry_d
                 raise
             if attempt > max_retries:
                 raise GitLabSyncError("GitLab API 请求超时或连接失败，请稍后重试") from exc
+            logging.warning(
+                "GitLab API 请求失败，准备重试：page=%s attempt=%s max_retries=%s error=%s",
+                params.get("page"),
+                attempt,
+                max_retries,
+                type(exc).__name__,
+            )
             if retry_delay:
                 time.sleep(retry_delay)
 
@@ -147,17 +250,22 @@ def sync_gitlab_projects(projects, db_max_retries=2):
         "created_module_branches": 0,
     }
 
+    logging.info("GitLab 项目写库开始：projects=%s db_max_retries=%s", len(projects), db_max_retries)
     for project in projects:
         stats["scanned_projects"] += 1
         item = normalize_gitlab_project(project)
         if not item["product_name"] or not item["module_name"] or not item["repo_url"]:
             stats["skipped_projects"] += 1
+            logging.warning("GitLab 项目字段不完整，已跳过：path=%s", item["path_with_namespace"])
             continue
 
         project_stats = _sync_project_with_retry(item, db_max_retries)
         for key, value in project_stats.items():
             stats[key] += value
+        if stats["scanned_projects"] % 50 == 0:
+            logging.info("GitLab 项目写库进度：scanned=%s total=%s", stats["scanned_projects"], len(projects))
 
+    logging.info("GitLab 项目写库完成：%s", stats)
     return stats
 
 
@@ -175,6 +283,13 @@ def _sync_project_with_retry(item, db_max_retries):
             _dispose_current_engine()
             if attempt > db_max_retries:
                 raise
+            logging.warning(
+                "GitLab 项目写库失败，准备重试：project=%s attempt=%s max_retries=%s",
+                item["path_with_namespace"],
+                attempt,
+                db_max_retries,
+                exc_info=True,
+            )
 
 
 def _sync_normalized_project(item):
@@ -228,8 +343,10 @@ def sync_gitlab_projects_from_config(config):
         membership_only=config.get("GITLAB_PROJECT_MEMBERSHIP_ONLY", False),
         max_retries=config.get("GITLAB_API_MAX_RETRIES", 3),
         retry_delay=config.get("GITLAB_API_RETRY_DELAY", 1),
+        page_concurrency=config.get("GITLAB_SYNC_FETCH_CONCURRENCY", 4),
     )
     fetched_count = len(projects)
+    logging.info("GitLab 项目拉取阶段完成：fetched=%s", fetched_count)
     skipped_existing = 0
     skip_existing = config.get("GITLAB_SYNC_SKIP_EXISTING_REPOS", True)
     if skip_existing and Product.query.first() is None:
@@ -238,6 +355,11 @@ def sync_gitlab_projects_from_config(config):
         skip_existing = False
     if skip_existing:
         projects, skipped_existing = filter_projects_missing_repositories(projects)
+        logging.info(
+            "GitLab 项目增量过滤完成：to_sync=%s skipped_existing=%s",
+            len(projects),
+            skipped_existing,
+        )
 
     stats = sync_gitlab_projects(projects, db_max_retries=config.get("GITLAB_DB_MAX_RETRIES", 2))
     stats["fetched_projects"] = fetched_count

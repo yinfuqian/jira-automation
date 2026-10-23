@@ -12,31 +12,54 @@ class ComposeContractTests(unittest.TestCase):
     def test_online_compose_declares_expected_service_graph(self):
         source = DEV_COMPOSE_PATH.read_text(encoding="utf-8")
 
-        for service in ("api", "worker", "beat", "migrate"):
+        for service in (
+            "api-dev",
+            "worker-analysis-dev",
+            "worker-skill-dev",
+            "beat-dev",
+            "migrate",
+        ):
             self.assertRegex(source, rf"(?m)^  {re.escape(service)}:\s*$")
         self.assertNotRegex(source, r"(?m)^  (mysql|redis|frontend):\s*$")
+        self.assertIn("      - api-dev", source)
+        self.assertIn("      - worker-analysis-dev", source)
+        self.assertIn("      - worker-skill-dev", source)
 
     def test_online_compose_uses_prebuilt_backend_image_and_host_network(self):
         source = DEV_COMPOSE_PATH.read_text(encoding="utf-8")
 
         self.assertNotIn("build:", source)
-        self.assertEqual(source.count("image: ${BACKEND_IMAGE}"), 4)
-        self.assertEqual(source.count('network_mode: "host"'), 4)
+        self.assertEqual(source.count("image: ${BACKEND_IMAGE}"), 5)
+        self.assertEqual(source.count('network_mode: "host"'), 5)
+        self.assertIn("0.0.0.0:6000", source)
+        self.assertIn('"${API_PORT}:6000"', source)
 
     def test_online_compose_mounts_runtime_data_and_skills(self):
         source = DEV_COMPOSE_PATH.read_text(encoding="utf-8")
 
-        self.assertEqual(source.count("env_file:\n      - ${ENV_FILE:-.env}"), 4)
+        self.assertEqual(source.count("env_file:\n      - .env"), 5)
         for mount in (
-            "./data/users.csv:/users.csv",
-            "./data/upload:/data/upload",
-            "./data/logs:/app/app/logs",
-            "./data/repos:/tmp/jira-automation-repos",
+            "./data/users-dev.csv:/users.csv",
+            "./data/upload-dev:/data/upload",
+            "./data/logs-dev:/app/app/logs",
+            "./data/repos-dev:/tmp/log-analyzer-repos",
             "./skills:/data/skills:ro",
-            "./data/codex:/data/codex",
-            "./data/skill-workspace:/data/skill-workspace",
+            "./data/codex-dev:/data/codex",
+            "./data/celerybeat-dev:/data/celerybeat",
+            "./data/skill-workspace-dev:/data/skill-workspace",
+            "./data/m2-dev/repository:/root/.m2/repository",
         ):
             self.assertIn(mount, source)
+        for production_mount in (
+            "./data/upload:/data/upload",
+            "./data/logs:/app/app/logs",
+            "./data/repos:/tmp/log-analyzer-repos",
+            "./data/codex:/data/codex",
+            "./data/users.csv:/users.csv",
+            "./data/skill-workspace:/data/skill-workspace",
+            "./data/m2/repository:/root/.m2/repository",
+        ):
+            self.assertNotIn(production_mount, source)
 
     def test_env_example_has_unique_runtime_defaults(self):
         """示例配置不能用重复键意外覆盖运行镜像默认值。"""
@@ -51,15 +74,27 @@ class ComposeContractTests(unittest.TestCase):
         self.assertIn("BACKEND_IMAGE=jira-automation-backend:latest", source)
         self.assertIn("MYSQL_HOST=127.0.0.1", source)
         self.assertIn("REDIS_HOST=127.0.0.1", source)
+        self.assertIn("API_PORT=6000", source)
+        self.assertNotIn("CELERY_ANALYSIS_CONCURRENCY", source)
+        self.assertNotIn("CELERY_SKILL_CONCURRENCY", source)
 
     def test_readme_uses_online_compose_and_environment_specific_restart_scripts(self):
         readme = (PROJECT_ROOT / "README.md").read_text(encoding="utf-8")
 
-        self.assertEqual(DEV_COMPOSE_PATH.read_bytes(), PROD_COMPOSE_PATH.read_bytes())
+        dev_source = DEV_COMPOSE_PATH.read_text(encoding="utf-8")
+        prod_source = PROD_COMPOSE_PATH.read_text(encoding="utf-8")
+        self.assertIn("api-dev:", dev_source)
+        self.assertIn("worker-analysis-dev:", dev_source)
+        self.assertIn("worker-skill-dev:", dev_source)
+        self.assertIn("beat-dev:", dev_source)
+        self.assertIn("api:", prod_source)
+        self.assertIn("beat:", prod_source)
         self.assertIn("docker-compose-dev.yaml", readme)
         self.assertIn("docker-compose-prod.yaml", readme)
         self.assertIn("restart-dev.sh", readme)
         self.assertIn("restart-master.sh", readme)
+        self.assertIn("restart-dev.sh api-dev", readme)
+        self.assertIn("http://127.0.0.1:6000", readme)
         self.assertNotIn("docker-compose.prod.yml", readme)
         self.assertNotIn("`docker-compose.yml`", readme)
 

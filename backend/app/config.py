@@ -247,6 +247,7 @@ class Config:
     GITLAB_API_MAX_RETRIES = int(os.getenv("GITLAB_API_MAX_RETRIES", "3"))
     GITLAB_API_RETRY_DELAY = int(os.getenv("GITLAB_API_RETRY_DELAY", "1"))
     GITLAB_DB_MAX_RETRIES = int(os.getenv("GITLAB_DB_MAX_RETRIES", "2"))
+    GITLAB_SYNC_FETCH_CONCURRENCY = max(1, int(os.getenv("GITLAB_SYNC_FETCH_CONCURRENCY", "4")))
     GITLAB_SYNC_SKIP_EXISTING_REPOS = os.getenv("GITLAB_SYNC_SKIP_EXISTING_REPOS", "true").lower() == "true"
     GITLAB_SYNC_ENABLED = os.getenv("GITLAB_SYNC_ENABLED", "true").lower() == "true"
     GITLAB_SYNC_ON_STARTUP = os.getenv("GITLAB_SYNC_ON_STARTUP", "true").lower() == "true"
@@ -344,6 +345,13 @@ class Config:
     CELERY_RESULT_BACKEND = os.getenv('CELERY_RESULT_BACKEND', REDIS_URL)  # Redis 作为结果存储
     CELERY_BROKER_POOL_LIMIT = int(os.getenv("CELERY_BROKER_POOL_LIMIT", "10"))
     CELERY_VISIBILITY_TIMEOUT = int(os.getenv("CELERY_VISIBILITY_TIMEOUT", "7200"))
+    # 不同任务进入独立队列，由 Compose 中对应的 Worker 消费，避免技能任务与日志分析互相排队。
+    CELERY_TASK_DEFAULT_QUEUE = "analysis"
+    CELERY_TASK_ROUTES = {
+        "analysis.analyze_log_task": {"queue": "analysis"},
+        "skillrun.run_skill": {"queue": "skill"},
+        "git.sync_projects": {"queue": "maintenance"},
+    }
     CELERY_BROKER_TRANSPORT_OPTIONS = {
         "socket_keepalive": True,
         "socket_connect_timeout": REDIS_SOCKET_CONNECT_TIMEOUT,

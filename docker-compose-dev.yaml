@@ -1,10 +1,9 @@
-version: '2'
 services:
-  api:
+  api-dev:
     image: ${BACKEND_IMAGE}
     network_mode: "host"
     env_file:
-      - ${ENV_FILE:-.env}
+      - .env
     environment:
       FLASK_APP: app.py
       PYTHONUNBUFFERED: "1"
@@ -27,7 +26,7 @@ services:
       CODEX_SANDBOX: ${CODEX_SANDBOX:-danger-full-access}
       CODEX_EPHEMERAL: ${CODEX_EPHEMERAL:-true}
       # 单次技能执行超时秒数：留空表示按技能自身 runtime.json 声明（jira-code 7200、jira-defect-gate 3600、其余 1800）。
-      CODEX_SKILL_TIMEOUT: ${CODEX_SKILL_TIMEOUT:-}
+      CODEX_SKILL_TIMEOUT: ${CODEX_SKILL_TIMEOUT:-1800}
       # 连续网络错误达到该次数即判定模型/Jira 不可达并提前终止，避免空转到超时。
       CODEX_NETWORK_RETRY_LIMIT: ${CODEX_NETWORK_RETRY_LIMIT:-10}
       # worker 启动时把上一次运行遗留的“执行中”任务标记为失败。
@@ -48,29 +47,59 @@ services:
       - -w
       - ${WEB_CONCURRENCY}
       - -k
-      - gevent
+      - gthread
+      - --threads
+      - ${WEB_THREADS}
+      - --timeout
+      - "300"
       - --bind
-      - 0.0.0.0:${API_PORT:-5000}
+      - 0.0.0.0:6000
       - app:create_app()
     ports:
-      - "${API_PORT}:5000"
+      - "${API_PORT}:6000"
     volumes:
-      - ./data/users.csv:/users.csv
-      - ./data/upload:/data/upload
-      - ./data/logs:/app/app/logs
-      - ./data/repos:/tmp/jira-automation-repos
+      - ./data/users-dev.csv:/users.csv
+      - ./data/upload-dev:/data/upload
+      - ./data/logs-dev:/app/app/logs
+      - ./data/repos-dev:/tmp/log-analyzer-repos
       # 技能目录只读挂载：Codex 运行时无法改动技能定义，也不会把内置技能写进业务技能目录。
       - ./skills:/data/skills:ro
       # CODEX_HOME 独立挂载：Codex 状态库（state/logs/goals 等）落在 data 目录，不污染仓库。
-      - ./data/codex:/data/codex
-      - ./data/skill-workspace:/data/skill-workspace
+      - ./data/codex-dev:/data/codex
+      - ./data/skill-workspace-dev:/data/skill-workspace
     restart: unless-stopped
 
-  worker:
+  worker-analysis-dev:
     image: ${BACKEND_IMAGE}
     network_mode: "host"
     env_file:
-      - ${ENV_FILE:-.env}
+      - .env
+    environment:
+      PYTHONUNBUFFERED: "1"
+      # 分析 worker 只消费分析队列，并顺带消费低频 GitLab 维护队列。
+      SKILL_RECOVER_ORPHANS: "false"
+    command:
+      - celery
+      - -A
+      - celery_worker.celery_app
+      - worker
+      - --loglevel=INFO
+      - -Q
+      - analysis,maintenance
+      - --concurrency=2
+    volumes:
+      - ./data/upload-dev:/data/upload
+      - ./data/logs-dev:/app/app/logs
+      - ./data/repos-dev:/tmp/log-analyzer-repos
+    restart: unless-stopped
+    depends_on:
+      - api-dev
+
+  worker-skill-dev:
+    image: ${BACKEND_IMAGE}
+    network_mode: "host"
+    env_file:
+      - .env
     environment:
       PYTHONUNBUFFERED: "1"
       # 技能执行（Codex Agent）相关配置。CODEX_BASE_URL/CODEX_API_KEY 为空时回退到 OPENAI_URL/OPENAI_KEY。
@@ -92,11 +121,13 @@ services:
       CODEX_SANDBOX: ${CODEX_SANDBOX:-danger-full-access}
       CODEX_EPHEMERAL: ${CODEX_EPHEMERAL:-true}
       # 单次技能执行超时秒数：留空表示按技能自身 runtime.json 声明（jira-code 7200、jira-defect-gate 3600、其余 1800）。
-      CODEX_SKILL_TIMEOUT: ${CODEX_SKILL_TIMEOUT:-}
+      CODEX_SKILL_TIMEOUT: ${CODEX_SKILL_TIMEOUT:-1800}
       # 连续网络错误达到该次数即判定模型/Jira 不可达并提前终止，避免空转到超时。
       CODEX_NETWORK_RETRY_LIMIT: ${CODEX_NETWORK_RETRY_LIMIT:-10}
-      # worker 启动时把上一次运行遗留的“执行中”任务标记为失败。
+      # 只由技能 worker 负责回收遗留的技能任务，并由它独占启动同步之外的启动副作用。
       SKILL_RECOVER_ORPHANS: ${SKILL_RECOVER_ORPHANS:-true}
+      GITLAB_SYNC_ENABLED: "false"
+      GITLAB_SYNC_ON_STARTUP: "false"
       JIRA_TOKEN: ${JIRA_TOKEN:-}
       JIRA_BASE_URL: ${JIRA_BASE_URL:-https://jira.in.wezhuiyi.com}
       # jira-code 技能需要 GitLab 凭据来拉分支与推送（令牌需要写仓库权限）；留空时技能会跳过推送并如实上报。
@@ -114,33 +145,35 @@ services:
       - celery_worker.celery_app
       - worker
       - --loglevel=INFO
-      - --concurrency=${CELERY_WORKER_CONCURRENCY}
+      - -Q
+      - skill
+      - --concurrency=2
     volumes:
-      - ./data/upload:/data/upload
-      - ./data/logs:/app/app/logs
-      - ./data/repos:/tmp/jira-automation-repos
+      - ./data/upload-dev:/data/upload
+      - ./data/logs-dev:/app/app/logs
+      - ./data/repos-dev:/tmp/log-analyzer-repos
       # 技能目录只读挂载：Codex 运行时无法改动技能定义，也不会把内置技能写进业务技能目录。
       - ./skills:/data/skills:ro
       # CODEX_HOME 独立挂载：Codex 状态库（state/logs/goals 等）落在 data 目录，不污染仓库。
-      - ./data/codex:/data/codex
-      - ./data/skill-workspace:/data/skill-workspace
+      - ./data/codex-dev:/data/codex
+      - ./data/skill-workspace-dev:/data/skill-workspace
       # Maven：settings.xml 指向内网 Nexus 镜像，本地仓库用宿主机缓存目录。
       # 技能（jira-code）在容器里编译业务仓库时，私有依赖只能从内网 Nexus 取；
       # 预热好的本地仓库让 `mvn -o` 离线构建能直接命中，不必每次联网拉取。
       # 两个路径都要先在宿主机准备好：settings.xml 随仓库分发，repository 见 README「Maven 本地仓库」。
       - ./config/maven/settings.xml:/root/.m2/settings.xml:ro
-      - ./data/m2/repository:/root/.m2/repository
+      - ./data/m2-dev/repository:/root/.m2/repository
     restart: unless-stopped
     depends_on:
-      - api
+      - api-dev
 
-  # Celery Beat 只负责周期投递 GitLab 产品/模块同步任务；worker 启动时还会额外投递一次。
+  # Celery Beat 只负责周期投递 GitLab 产品/模块同步任务；分析 worker 启动时还会额外投递一次。
   # 调度周期由 GITLAB_SYNC_INTERVAL_HOURS 控制，默认 12 小时。
-  beat:
+  beat-dev:
     image: ${BACKEND_IMAGE}
     network_mode: "host"
     env_file:
-      - ${ENV_FILE:-.env}
+      - .env
     environment:
       PYTHONUNBUFFERED: "1"
     command:
@@ -151,16 +184,17 @@ services:
       - --loglevel=INFO
       - --schedule=/data/celerybeat/celerybeat-schedule
     volumes:
-      - ./data/celerybeat:/data/celerybeat
+      - ./data/celerybeat-dev:/data/celerybeat
     restart: unless-stopped
     depends_on:
-      - worker
+      - worker-analysis-dev
+      - worker-skill-dev
 
   migrate:
     image: ${BACKEND_IMAGE}
     network_mode: "host"
     env_file:
-      - ${ENV_FILE:-.env}
+      - .env
     environment:
       FLASK_APP: app.py
       PYTHONUNBUFFERED: "1"
@@ -183,7 +217,7 @@ services:
       CODEX_SANDBOX: ${CODEX_SANDBOX:-danger-full-access}
       CODEX_EPHEMERAL: ${CODEX_EPHEMERAL:-true}
       # 单次技能执行超时秒数：留空表示按技能自身 runtime.json 声明（jira-code 7200、jira-defect-gate 3600、其余 1800）。
-      CODEX_SKILL_TIMEOUT: ${CODEX_SKILL_TIMEOUT:-}
+      CODEX_SKILL_TIMEOUT: ${CODEX_SKILL_TIMEOUT:-1800}
       # 连续网络错误达到该次数即判定模型/Jira 不可达并提前终止，避免空转到超时。
       CODEX_NETWORK_RETRY_LIMIT: ${CODEX_NETWORK_RETRY_LIMIT:-10}
       # worker 启动时把上一次运行遗留的“执行中”任务标记为失败。
@@ -204,12 +238,12 @@ services:
       - -c
       - python init_database.py && (flask db upgrade || python bootstrap_schema.py)
     volumes:
-      - ./data/upload:/data/upload
-      - ./data/logs:/app/app/logs
-      - ./data/repos:/tmp/jira-automation-repos
+      - ./data/upload-dev:/data/upload
+      - ./data/logs-dev:/app/app/logs
+      - ./data/repos-dev:/tmp/log-analyzer-repos
       # 技能目录只读挂载：Codex 运行时无法改动技能定义，也不会把内置技能写进业务技能目录。
       - ./skills:/data/skills:ro
       # CODEX_HOME 独立挂载：Codex 状态库（state/logs/goals 等）落在 data 目录，不污染仓库。
-      - ./data/codex:/data/codex
-      - ./data/skill-workspace:/data/skill-workspace
+      - ./data/codex-dev:/data/codex
+      - ./data/skill-workspace-dev:/data/skill-workspace
     restart: unless-stopped

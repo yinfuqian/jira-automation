@@ -18,6 +18,7 @@ from app.auth.middleware import install_authentication, register_ticket_verifier
 from app.auth.account_requests import build_account_request_service
 from app.auth.routes import auth_bp
 from app.auth.sessions import SessionService
+from app.observability.request_logging import install_request_logging
 from app.auth.users import UnavailableUserStore, UserStore
 from app.audit.service import install_operation_audit
 from app.health.routes import health_bp
@@ -68,21 +69,52 @@ def create_app(config_overrides=None, redis_client=None):
     # 交付物下载票据：让 /skill/task/<task_id> 里的 download_url 能直接在浏览器打开。
     register_ticket_verifier("/skill/task/", verify_download_ticket)
     install_operation_audit(app)
+    install_request_logging(app)
     install_authentication(app, session_service)
 
     return app
 
 
 def setup_logging(app):
-    """注册或配置 setup_logging 对应的业务数据，保持现有调用约定。"""
+    """统一配置文件与容器输出，确保 logging.info 和 app.logger 都能落盘。"""
     log_dir = app.config["LOG_DIR"]
     if not os.path.exists(log_dir):
         os.makedirs(log_dir)
 
-    handler = logging.FileHandler(app.config["LOGGING_FILE"], encoding="utf-8")
-    handler.setLevel(app.config["LOGGING_LEVEL"])
-    handler.setFormatter(logging.Formatter(app.config["LOGGING_FORMAT"]))
+    level = app.config["LOGGING_LEVEL"]
+    formatter = logging.Formatter(app.config["LOGGING_FORMAT"])
+    root_logger = logging.getLogger()
+    root_logger.setLevel(level)
 
-    app.logger.addHandler(handler)
-    app.logger.setLevel(app.config["LOGGING_LEVEL"])
+    log_file = app.config["LOGGING_FILE"]
+    has_file_handler = any(
+        getattr(handler, "_jira_automation_log_path", None) == log_file
+        for handler in root_logger.handlers
+    )
+    if not has_file_handler:
+        handler = logging.FileHandler(log_file, encoding="utf-8")
+        handler.setLevel(level)
+        handler.setFormatter(formatter)
+        handler._jira_automation_handler = True
+        handler._jira_automation_log_path = log_file
+        root_logger.addHandler(handler)
+
+    has_stream_handler = any(
+        isinstance(handler, logging.StreamHandler)
+        and not isinstance(handler, logging.FileHandler)
+        and (handler.level == logging.NOTSET or handler.level <= logging.INFO)
+        for handler in root_logger.handlers
+    )
+    if not has_stream_handler:
+        stream_handler = logging.StreamHandler()
+        stream_handler.setLevel(level)
+        stream_handler.setFormatter(formatter)
+        stream_handler._jira_automation_handler = True
+        stream_handler._jira_automation_stream = True
+        root_logger.addHandler(stream_handler)
+
+    # 避免 Flask 默认 handler 与 root handler 重复输出。
+    app.logger.handlers.clear()
+    app.logger.setLevel(level)
+    app.logger.propagate = True
     app.logger.info("启动日志：应用已启动并初始化完成")

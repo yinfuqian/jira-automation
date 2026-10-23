@@ -18,14 +18,14 @@ class ProductionDeploymentContractTests(unittest.TestCase):
 
         self.assertNotIn("build:", source)
         self.assertNotRegex(source, r"(?m)^  (mysql|redis):\s*$")
-        for service in ("migrate", "api", "worker", "beat"):
+        for service in ("migrate", "api", "worker-analysis", "worker-skill", "beat"):
             self.assertRegex(source, rf"(?m)^  {re.escape(service)}:\s*$")
-        self.assertEqual(source.count("image: ${BACKEND_IMAGE}"), 4)
+        self.assertEqual(source.count("image: ${BACKEND_IMAGE}"), 5)
 
     def test_online_services_use_host_network(self):
         source = ONLINE_COMPOSE.read_text(encoding="utf-8")
 
-        self.assertEqual(source.count('network_mode: "host"'), 4)
+        self.assertEqual(source.count('network_mode: "host"'), 5)
         self.assertIn('"${API_PORT}:5000"', source)
         # host 网络下 ports 映射不生效，gunicorn 必须直接监听 API_PORT。
         self.assertIn("0.0.0.0:${API_PORT:-5000}", source)
