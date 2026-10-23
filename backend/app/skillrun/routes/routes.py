@@ -15,7 +15,7 @@ from flask import Blueprint, current_app, g, jsonify, request, send_file
 
 from extensions import celery
 
-from .. import artifacts, env_lock, store, tickets
+from .. import artifacts, env_lock, store, tickets, usage
 from ..models.model import SkillRunRecord
 from ..registry import SkillError, list_skills, resolve_skill
 from ..tasks import run_skill_task
@@ -87,7 +87,7 @@ def _error_response(error: SkillRequestError, status_code: int = 400):
     return jsonify(payload), status_code
 
 
-def _create_and_enqueue_skill(skill, jira_url: str, inputs: dict, requested_by: str):
+def _create_and_enqueue_skill(skill, jira_url: str, inputs: dict, requested_by: str, trigger_source: str = "api"):
     """创建任务记录并投递 Celery；返回记录和入队错误（成功时为空）。"""
     task_id = store.generate_task_id()
     record = store.create_record(
@@ -96,6 +96,7 @@ def _create_and_enqueue_skill(skill, jira_url: str, inputs: dict, requested_by: 
         inputs=inputs,
         requested_by=requested_by,
         task_id=task_id,
+        trigger_source=trigger_source,
     )
     try:
         run_skill_task.apply_async(args=[record.id], task_id=task_id)
@@ -105,6 +106,7 @@ def _create_and_enqueue_skill(skill, jira_url: str, inputs: dict, requested_by: 
             record,
             SkillRunRecord.STATUS_FAILED,
             stage="enqueue_failed",
+            failure_kind=usage.FAILURE_ENQUEUE_FAILED,
             error_message=f"任务入队失败：{exc}",
         )
         return record, str(exc)
@@ -326,7 +328,7 @@ def jira_webhook():
         )
 
     record, enqueue_error = _create_and_enqueue_skill(
-        skill, jira_url, {}, "jira-webhook"
+        skill, jira_url, {}, "jira-webhook", trigger_source="webhook"
     )
     if enqueue_error:
         return jsonify({"error": "任务入队失败，请检查队列服务", "task_id": record.task_id}), 503
@@ -419,6 +421,7 @@ def cancel_skill_run(task_id: str):
             record,
             SkillRunRecord.STATUS_CANCELLED,
             stage="cancelled",
+            failure_kind=usage.FAILURE_CANCELLED,
             error_message="任务已请求取消",
         )
     return jsonify({"task_id": task_id, "status": SkillRunRecord.STATUS_CANCELLED}), 202

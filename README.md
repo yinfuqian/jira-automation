@@ -488,6 +488,62 @@ curl -H "X-API-Token: <SKILL_API_TOKEN>" http://127.0.0.1:6000/skill/task/SKL-8F
 以 `.` 开头或为空时返回 `400`（`reason=invalid-name`），文件不存在返回 `404`（`reason=not-found`），
 票据或文件对不上则返回 `401`，任何情况都不会越出任务工作目录。
 
+### 技能调用统计
+
+每次顶层技能调用都会在 `skill_call_records` 表写入一行，不扩展原 `skill_run_records` 表，也不统计技能内部调用的子技能。统计只覆盖新任务，不做历史回填。
+
+- `execution_status`：技术执行状态，取值 `queued` / `running` / `succeeded` / `failed` / `timeout` / `cancelled`。
+- `outcome`：业务结论，取值 `passed` / `rejected` / `needs_fix` / `unknown` / `not_applicable` / `aborted`。
+- `conclusion_source`：结论来源，取值 `file`（任务根目录 `.skill-result.json`）/ `marker`（最终消息里的 `SKILL_RESULT_JSON`）/ `none` / `invalid`。
+- `failure_kind`：技术失败归类，例如 `env_missing`、`timeout`、`network`、`non_zero_exit`、`cancelled`、`worker_restart`。
+- `execution_status=succeeded` 只表示脚本正常结束，**不能当作业务通过**；是否通过看 `outcome`。
+
+按技能统计调用次数与结论（MySQL）：
+
+```sql
+SELECT
+  skill_id,
+  COUNT(*) AS call_count,
+  SUM(execution_status = 'succeeded') AS succeeded_count,
+  SUM(execution_status = 'failed') AS failed_count,
+  SUM(execution_status = 'timeout') AS timeout_count,
+  SUM(execution_status = 'cancelled') AS cancelled_count,
+  SUM(outcome = 'passed') AS passed_count,
+  SUM(outcome = 'rejected') AS rejected_count,
+  SUM(outcome = 'needs_fix') AS needs_fix_count,
+  SUM(outcome = 'unknown') AS unknown_count,
+  ROUND(
+    SUM(outcome = 'passed') / NULLIF(SUM(outcome IN ('passed', 'rejected')), 0) * 100,
+    1
+  ) AS pass_rate_percent,
+  ROUND(AVG(NULLIF(duration_ms, 0)) / 1000, 1) AS avg_seconds
+FROM skill_call_records
+WHERE created_at >= '2026-10-01 00:00:00'
+GROUP BY skill_id
+ORDER BY call_count DESC;
+```
+
+查看某天的详细分布：
+
+```sql
+SELECT skill_id, execution_status, outcome, conclusion_source, failure_kind, COUNT(*) AS total
+FROM skill_call_records
+WHERE created_at >= '2026-10-23 00:00:00'
+  AND created_at <  '2026-10-24 00:00:00'
+GROUP BY skill_id, execution_status, outcome, conclusion_source, failure_kind
+ORDER BY skill_id, total DESC;
+```
+
+排查近期的运营性失败：
+
+```sql
+SELECT task_id, skill_id, issue_key, execution_status, failure_kind, summary, created_at, finished_at
+FROM skill_call_records
+WHERE failure_kind IS NOT NULL
+ORDER BY created_at DESC
+LIMIT 100;
+```
+
 ### 技能目录
 
 技能放在项目根 `skills/` 目录，容器内**只读**挂载到 `/data/skills`，与 Codex 运行目录（`CODEX_HOME`）分开存放。新增技能只需建立 `skills/<skill_id>/SKILL.md`，

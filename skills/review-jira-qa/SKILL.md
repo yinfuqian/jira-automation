@@ -153,6 +153,25 @@ QA_RESULT_JSON
 - `ok=true` 表示业务完成；`conclusion=暂不通过` 仍是 `ok=true`，供 Jira 规则据结论决定是否退回「评审中」。
 - 运营性失败 `ok=false`，退出码非零；不产出半截门禁结论。
 
+## 机器可读结果（仅顶层调用时）
+
+- 当本技能是平台 `/skill/run` 的顶层技能（任务提示里的 skill_id 就是 `review-jira-qa`）时，必须在全部步骤完成、清理工作区之前，把最终结果写到**任务根目录**（当前工作目录）的 `.skill-result.json`：
+
+```json
+{
+  "schemaVersion": 1,
+  "skillId": "review-jira-qa",
+  "issueKey": "CALL-1941",
+  "conclusion": "通过",
+  "summary": "QA 需求准入门禁通过，未关闭项 0 项",
+  "blockingCount": 0
+}
+```
+
+- `conclusion` 只能写 `通过` 或 `暂不通过`；`blockingCount` 写 `result.json` 中未关闭项的数量。
+- 当本技能被 `jira-gate-1` 或其它父技能调用时，**禁止写任务根目录 `.skill-result.json`**，只保留本技能自己的 `${QA_WORKSPACE}/.qa/runs/<runId>/result.json`；父技能才是这次平台调用的统计对象。
+- 运营性失败不要伪造 `通过`；无法形成业务结论时可以不写该文件。该文件只用于调用统计，不写入 Jira，平台读取入库后会自动删除。
+
 ## 退出码
 
 | 码 | 含义 |

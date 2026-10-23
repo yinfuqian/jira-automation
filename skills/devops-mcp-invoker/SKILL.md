@@ -521,6 +521,24 @@ flowchart TD
 - 从 git 自动收集参数时，展示收集到的值让用户确认。
 - 遇到错误时，说明是平台接口错误、SSH 错误、文件不存在还是参数缺失。
 
+## 机器可读结果（仅顶层调用时）
+
+- 当本技能是平台 `/skill/run` 的顶层技能（任务提示里的 skill_id 就是 `devops-mcp-invoker`）时，必须在所有平台操作完成之后、清理工作区之前，把最终结果写到**任务根目录**（当前工作目录）的 `.skill-result.json`：
+
+```json
+{
+  "schemaVersion": 1,
+  "skillId": "devops-mcp-invoker",
+  "conclusion": "已完成",
+  "summary": "编译状态查询完成，最终状态 success",
+  "blockingCount": 0
+}
+```
+
+- `conclusion` 按实际结果写 `已完成` / `部分完成` / `失败` / `不适用`；没有 Jira 单号时省略 `issueKey`。
+- 当本技能被 `jira-code` 等父技能调用时，**禁止写任务根目录 `.skill-result.json`**；父技能才是这次平台调用的统计对象。
+- 该文件只用于调用统计，不写入 Jira，平台读取入库后会自动删除；无法形成业务结论时可以不写。
+
 ---
 
 ## 常见错误处理

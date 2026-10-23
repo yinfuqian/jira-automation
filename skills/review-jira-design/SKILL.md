@@ -214,6 +214,25 @@ node scripts/build-report.mjs --prd "<PRD绝对路径>" --content "<内容JSON>"
 
 补齐后沿用原问题编号，只复核受影响的 PRD 章节、页面、状态和一致性关系，记录已关闭、仍存在或未验证。通过后交给设计精修，不自动开始 G2/G3、开发或 Jira 流转。
 
+## 机器可读结果（仅顶层调用时）
+
+- 当本技能是平台 `/skill/run` 的顶层技能（任务提示里的 skill_id 就是 `review-jira-design`）时，必须在报告 HTML 生成成功之后，把最终结果写到**任务根目录**（当前工作目录）的 `.skill-result.json`：
+
+```json
+{
+  "schemaVersion": 1,
+  "skillId": "review-jira-design",
+  "issueKey": "CALL-1941",
+  "conclusion": "有条件通过",
+  "summary": "PRD 与原型核心一致，存在 2 项可并行补齐的非阻断事项",
+  "blockingCount": 0
+}
+```
+
+- `conclusion` 只能写 `通过` / `有条件通过` / `退回补齐` / `审核未完成`；`blockingCount` 写阻断问题数量，非阻断事项不计入。
+- 当本技能被 `jira-gate-1` 或 `jira-gate-1-mock` 等父技能调用时，**禁止写任务根目录 `.skill-result.json`**，只把内容 JSON、报告 HTML 与截图留在父任务目录内；父技能才是这次平台调用的统计对象。
+- 运营性失败不要伪造 `通过`；无法形成业务结论时可以不写该文件。该文件只用于调用统计，不写入 Jira，平台读取入库后会自动删除。
+
 ## 证据边界
 
 每项结论标记为：

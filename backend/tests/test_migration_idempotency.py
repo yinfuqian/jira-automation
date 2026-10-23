@@ -204,6 +204,38 @@ class MigrationIdempotencyTests(unittest.TestCase):
             bootstrap_schema.SKILL_RUN_RECORDS_DDL.lower(),
         )
 
+    def test_skill_call_records_upgrade_preserves_an_existing_table(self):
+        # 新统计表迁移必须幂等：表已存在时不重复建表或建索引。
+        migration = load_migration("c4f1a7b9d2e6_skill_call_records.py")
+        inspector = FakeInspector(
+            tables={"skill_call_records"},
+            indexes={
+                "skill_call_records": {
+                    "ix_skill_call_skill_created",
+                    "ix_skill_call_status_created",
+                    "ix_skill_call_outcome_created",
+                    "ix_skill_call_issue_created",
+                    "ix_skill_call_source_created",
+                }
+            },
+        )
+
+        with patch.object(migration.op, "get_bind", return_value=object()), \
+                patch.object(migration.sa, "inspect", return_value=inspector), \
+                patch.object(migration.op, "create_table") as create_table, \
+                patch.object(migration.op, "create_index") as create_index:
+            migration.upgrade()
+
+        create_table.assert_not_called()
+        create_index.assert_not_called()
+
+    def test_bootstrap_schema_creates_skill_call_records(self):
+        # 自动建表流程必须创建统计表，且不修改原任务表。
+        self.assertIn(
+            "create table if not exists skill_call_records",
+            bootstrap_schema.SKILL_CALL_RECORDS_DDL.lower(),
+        )
+
 
 if __name__ == "__main__":
     unittest.main()

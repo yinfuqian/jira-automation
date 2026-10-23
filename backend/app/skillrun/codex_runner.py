@@ -62,6 +62,17 @@ DEFAULT_PROMPT_TEMPLATE = """请使用 {skill_id} 技能完成本次任务。
    （技能脚本检测到锁定标记后会直接拒绝这些来源）。"""
 
 
+# 顶层技能统一的机器可读结果契约，避免各技能提示词遗漏统计入库所需的结论文件。
+RESULT_FILE_INSTRUCTION = (
+    "\n\n【机器可读结果】完成全部交付动作后、清理工作区之前，必须按 SKILL.md 的"
+    "「写机器可读结果」章节，在当前任务根目录（即当前工作目录）写入 .skill-result.json。"
+    "内容必须是 JSON 对象，至少包含：schemaVersion=1、skillId、issueKey、conclusion、summary、"
+    "blockingCount；conclusion 使用技能文档规定的最终业务结论，无法判断时写「无法判定」，"
+    "技能不适用时写「不适用」。不要伪造「通过」。该文件只用于调用统计，不写入 Jira，也不要放进 work/ 子目录。"
+    "如果本技能调用了子技能，必须明确要求子技能不要写任务根目录的 .skill-result.json。"
+)
+
+
 @dataclass
 class CodexEvent:
     """归一化后的 Codex 事件，用于任务进度与问题排查。"""
@@ -163,10 +174,13 @@ def build_skill_prompt(skill, inputs: dict, jira_url: str = "") -> str:
         inputs_lines=inputs_lines,
     )
     try:
-        return template.format_map(values).strip()
+        prompt = template.format_map(values).strip()
     except (IndexError, ValueError):
         # 模板本身有语法问题时退回默认模板，保证任务仍可执行。
-        return DEFAULT_PROMPT_TEMPLATE.format_map(values).strip()
+        prompt = DEFAULT_PROMPT_TEMPLATE.format_map(values).strip()
+    if ".skill-result.json" not in prompt:
+        prompt = f"{prompt}{RESULT_FILE_INSTRUCTION}"
+    return prompt
 
 
 def build_codex_command(

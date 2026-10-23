@@ -25,6 +25,28 @@ skills/
 
 未提供 `runtime.json` 时使用接口内置的默认模板，并把 `skill_id`、`jira_url`、`inputs` 一起交给 Codex。
 
+## 调用统计结果约定
+
+平台每次通过 `/skill/run` 或 Jira webhook 发起任务时，都会在 `skill_call_records` 表记录一条**顶层技能**调用。完整统计口径见仓库根 `README.md` 的「技能调用统计」。
+
+顶层技能必须在所有交付动作完成、清理工作区之前，把最终业务结果写到任务根目录（当前工作目录）的 `.skill-result.json`：
+
+```json
+{
+  "schemaVersion": 1,
+  "skillId": "jira-gate-1",
+  "issueKey": "CALL-1941",
+  "conclusion": "通过",
+  "summary": "G1、设计准入与 QA 均通过，未流转状态",
+  "blockingCount": 0
+}
+```
+
+- `conclusion` 由各技能按业务口径填写，例如 `通过`、`退回补充`、`暂不通过`、`合格`、`需修改`、`不合格`、`已自动分析`、`打回`、`已完成`、`失败`、`不适用`。
+- 该文件只用于统计入库，不是交付物，不写入 Jira；平台读取成功后自动删除。
+- 被父技能内部调用的子技能（如 `jira-gate-1` 内的 `review-jira-qa`）**不得写任务根目录 `.skill-result.json`**，只保留自己的运行结果，避免重复统计。
+- 无法形成业务结论的运营性失败不要伪造「通过」；平台会把缺少结果文件的任务记为 `outcome=unknown`。
+
 ## 已内置技能
 
 - `jira-gate-1`：Jira G1 需求准入检查（PRD 准入，入口参考「需求设计」）。**只处理类型为「故事」的单子**，先跑 `scripts/jira-cli.mjs precheck`，类型不符直接跳过；按 `references/checklist.md`（PRD 需求准入 Checklist）逐项判定，再依次调用 `review-jira-req`（需求质量评审）、`review-jira-design`（原型设计准入）与 `review-jira-qa` 阶段一（QA 需求准入门禁）；把综合结论与检查项写入需求单评论（满足 `(/)` 绿勾、不满足 `(x)` 红叉，元信息区带设计准入结论、设计报告附件名、QA 结论、阻断项、附件名与评论 ID）。`review-jira-req` 生成 OpenSpec 评审报告（以「宋立志」结尾）、`review-jira-design` 生成原型设计准入 HTML，两份报告都由 G1 上传为附件；`review-jira-qa` 自行上传需求准入门禁清单 HTML 并写 QA 评论。**三条准出都通过时不流转；任一不通过时流转到「评审中」并在评论里 @ 流转人**。交付全部完成后用 `scripts/workdir-cleanup.mjs --key <KEY>` 清理本次任务的工作区中间产物（含 `design/` 与 `review-jira-qa/` 子工作区），`reports/` 不在清理范围内。

@@ -7,6 +7,7 @@ from datetime import datetime
 
 from extensions import db
 
+from . import usage
 from .models.model import SkillRunRecord
 
 
@@ -38,6 +39,7 @@ def create_record(
     inputs: dict = None,
     requested_by: str = "",
     task_id: str = None,
+    trigger_source: str = "api",
 ) -> SkillRunRecord:
     """创建一条排队中的技能执行记录。"""
     record = SkillRunRecord(
@@ -50,6 +52,7 @@ def create_record(
     )
     db.session.add(record)
     db.session.commit()
+    usage.ensure_call(record, trigger_source=trigger_source)
     return record
 
 
@@ -93,8 +96,8 @@ def update_record(record: SkillRunRecord, **fields) -> SkillRunRecord:
 
 
 def mark_running(record: SkillRunRecord, workspace_dir: str) -> SkillRunRecord:
-    """把记录置为执行中并登记工作目录。"""
-    return update_record(
+    # 把记录置为执行中并登记工作目录。
+    record = update_record(
         record,
         status=SkillRunRecord.STATUS_RUNNING,
         stage="starting",
@@ -102,13 +105,25 @@ def mark_running(record: SkillRunRecord, workspace_dir: str) -> SkillRunRecord:
         started_at=datetime.utcnow(),
         error_message=None,
     )
+    usage.mark_running(record)
+    return record
 
-
-def mark_finished(record: SkillRunRecord, status: str, **fields) -> SkillRunRecord:
-    """把记录置为终态并写入结束时间。"""
-    return update_record(
+def mark_finished(
+    record: SkillRunRecord,
+    status: str,
+    failure_kind: str = None,
+    **fields,
+) -> SkillRunRecord:
+    # 把记录置为终态并同步技能调用统计。
+    record = update_record(
         record,
         status=status,
         finished_at=datetime.utcnow(),
         **fields,
     )
+    usage.finish_from_result(
+        record,
+        execution_status=status,
+        failure_kind=failure_kind,
+    )
+    return record

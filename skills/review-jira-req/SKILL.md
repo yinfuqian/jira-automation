@@ -228,6 +228,25 @@ node "${CLAUDE_SKILL_DIR}/bin/mock-jira.mjs" --print-env
 
 语义评审的四个维度单独给出结论，不并入上面的档位；报告里两者并列展示，便于看"结构过了但语义有问题"这类情况。
 
+## 机器可读结果（仅顶层调用时）
+
+- 当本技能是平台 `/skill/run` 的顶层技能（任务提示里的 skill_id 就是 `review-jira-req`）时，必须在报告生成完成之后，把最终结果写到**任务根目录**（当前工作目录）的 `.skill-result.json`：
+
+```json
+{
+  "schemaVersion": 1,
+  "skillId": "review-jira-req",
+  "issueKey": "CALL-1941",
+  "conclusion": "需修改",
+  "summary": "需求评审完成，存在 3 项 WARNING，报告已生成",
+  "blockingCount": 3
+}
+```
+
+- `conclusion` 按报告口径写 `合格` / `需修改` / `不合格`；`blockingCount` 写需要处理的 ERROR 与 WARNING 总数；批量评审可省略 `issueKey`。
+- 当本技能被 `jira-gate-1` 或 `jira-gate-1-mock` 等父技能调用时，**禁止写任务根目录 `.skill-result.json`**，只把报告和运行态留在父任务目录内；父技能才是这次平台调用的统计对象。
+- 运营性失败不要伪造 `合格`；无法形成业务结论时可以不写该文件。该文件只用于调用统计，不写入 Jira，平台读取入库后会自动删除。
+
 ## 分享给其他人
 
 把技能目录整个拷走即可，无第三方依赖：

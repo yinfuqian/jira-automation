@@ -10,7 +10,7 @@ from sqlalchemy import text
 
 from extensions import celery, db
 
-from . import codex_runner, env_lock, mcp_config, store
+from . import codex_runner, env_lock, mcp_config, store, usage
 from .models.model import SkillRunRecord
 from .registry import SkillError, resolve_skill
 
@@ -109,6 +109,7 @@ def run_skill_task(self, record_id: int):
             record,
             SkillRunRecord.STATUS_FAILED,
             stage="env_not_configured",
+            failure_kind=usage.FAILURE_ENV_MISSING,
             error_message=message,
         )
         return {
@@ -125,6 +126,7 @@ def run_skill_task(self, record_id: int):
             record,
             SkillRunRecord.STATUS_FAILED,
             stage="skill_unavailable",
+            failure_kind=usage.FAILURE_SKILL_NOT_FOUND,
             error_message=str(exc),
         )
         return {"task_id": record.task_id, "skill_id": record.skill_id, "status": "failed", "error": str(exc)}
@@ -214,26 +216,33 @@ def run_skill_task(self, record_id: int):
             record,
             SkillRunRecord.STATUS_FAILED,
             stage="error",
+            failure_kind=usage.FAILURE_CODEX_EXCEPTION,
             error_message=f"技能执行异常：{exc}",
         )
         return {"task_id": record.task_id, "skill_id": skill.skill_id, "status": "failed", "error": str(exc)}
 
     # 网络不可达优先于退出码判断：它说明 agent 根本没跑起来，而不是业务判定失败。
+    failure_kind = None
     if run_result.network_failed:
         status, stage = SkillRunRecord.STATUS_FAILED, "network_unreachable"
+        failure_kind = usage.FAILURE_NETWORK
     elif run_result.timed_out:
         status, stage = SkillRunRecord.STATUS_TIMEOUT, "timeout"
+        failure_kind = usage.FAILURE_TIMEOUT
     elif run_result.exit_code == 0 and run_result.last_message:
         status, stage = SkillRunRecord.STATUS_SUCCEEDED, "finished"
     elif run_result.exit_code == 0:
         status, stage = SkillRunRecord.STATUS_FAILED, "failed"
+        failure_kind = usage.FAILURE_NO_FINAL_MESSAGE
         run_result.error = run_result.error or "Codex 未返回最终结论"
     else:
         status, stage = SkillRunRecord.STATUS_FAILED, "failed"
+        failure_kind = usage.FAILURE_NON_ZERO_EXIT
 
     store.mark_finished(
         record,
         status,
+        failure_kind=failure_kind,
         stage=stage,
         result_text=run_result.last_message or None,
         error_message=run_result.error,
