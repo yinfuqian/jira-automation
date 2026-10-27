@@ -7,6 +7,7 @@
 
 import { EXIT, QaError, boolArg, checkNode, loadCredentials, log, parseArgs, parseIssueKey } from './lib/env.mjs';
 import { JiraClient, attachmentList } from './lib/jira.mjs';
+import { handleFatal } from './lib/fatal.mjs';
 
 const DELIVERABLE = /-((需求准入门禁清单)|(测试方案)|(测试用例))-v\d+\.\d+\.(html|md|xmind)$/i;
 
@@ -17,7 +18,7 @@ async function main() {
   const id = String(args.id || args._[1] || '');
   if (!id) {
     process.stderr.write('[jira-delete][ERR] 缺少 --id <附件ID>。\n');
-    process.exit(EXIT.USAGE);
+    throw new QaError('参数或配置错误', EXIT.USAGE);
   }
   const dryRun = boolArg(args, 'dry-run');
   const client = new JiraClient(loadCredentials(process.env, { required: !dryRun }));
@@ -27,17 +28,17 @@ async function main() {
     target = attachmentList(issue).find((a) => a.id === id) || null;
     if (!target) {
       process.stderr.write(`[jira-delete][ERR] ${key} 下找不到附件 ${id}。\n`);
-      process.exit(EXIT.NOT_FOUND);
+      throw new QaError('资源不存在', EXIT.NOT_FOUND);
     }
     if (!DELIVERABLE.test(target.filename) && !boolArg(args, 'force')) {
       process.stderr.write(
         `[jira-delete][ERR] 附件 ${id}（${target.filename}）不属于阶段交付物；如确需删除请加 --force。\n`,
       );
-      process.exit(EXIT.PRECONDITION);
+      throw new QaError('前置条件不满足', EXIT.PRECONDITION);
     }
     if (!boolArg(args, 'yes') && !boolArg(args, 'force')) {
       process.stderr.write('[jira-delete][ERR] 需要 --yes 确认删除。\n');
-      process.exit(EXIT.USAGE);
+      throw new QaError('参数或配置错误', EXIT.USAGE);
     }
   }
   if (dryRun) {
@@ -50,8 +51,6 @@ async function main() {
   process.stdout.write(`DELETED=${id}\n`);
 }
 
-main().catch((error) => {
-  const code = error instanceof QaError ? error.code : EXIT.INTERNAL;
-  process.stderr.write(`[jira-delete][ERR] ${error.message}\n`);
-  process.exit(code === EXIT.OK ? EXIT.REMOTE_WRITE : code);
-});
+main().catch((error) =>
+  handleFatal(error, { argv: process.argv.slice(2), stage: "", script: "jira-delete-attachment" }),
+);

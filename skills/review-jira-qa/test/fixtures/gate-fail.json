@@ -35,7 +35,9 @@
         "全部材料对导出范围给出一致表述",
         "同一场景只有一个可判定结果"
       ],
-      "productAction": "修订材料"
+      "productAction": "修订材料",
+      "ac": "AC-001",
+      "origin": "上一版漏检"
     },
     {
       "type": "材料未明确",
@@ -50,11 +52,27 @@
       "closingConditions": [
         "给出异常提示的固定文案"
       ],
-      "productAction": "补充结论"
+      "productAction": "补充结论",
+      "ac": "AC-002",
+      "origin": "本版材料变更引入"
     }
   ],
   "nonBlockingFacts": [
     "示例术语在 Overview 与 PRD 中不一致，建议统一。"
   ],
-  "conclusion": "暂不通过"
+  "conclusion": "暂不通过",
+  "coverage": [
+    {
+      "id": "AC-001",
+      "checked": true,
+      "result": "不通过",
+      "note": "导出范围冲突"
+    },
+    {
+      "id": "AC-002",
+      "checked": true,
+      "result": "不通过",
+      "note": "异常提示文案未定义"
+    }
+  ]
 }

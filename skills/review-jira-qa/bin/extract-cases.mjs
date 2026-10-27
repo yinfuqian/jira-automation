@@ -9,6 +9,7 @@ import { readFile } from 'node:fs/promises';
 import { EXIT, QaError, checkNode, parseArgs, parseIssueKey, resolveWorkspace } from './lib/env.mjs';
 import { writeJson } from './lib/fs-safe.mjs';
 import { parseXMind, walkLeaves } from './lib/xmind.mjs';
+import { handleFatal } from './lib/fatal.mjs';
 
 const PRIORITY = { 'priority-1': 'P0', 'priority-2': 'P1', 'priority-3': 'P2', 'priority-4': 'P3' };
 
@@ -51,7 +52,7 @@ async function main() {
   const xmind = args.xmind || args._[0];
   if (!xmind) {
     process.stderr.write('[extract-cases][ERR] 缺少 --xmind <file>。\n');
-    process.exit(EXIT.USAGE);
+    throw new QaError('参数或配置错误', EXIT.USAGE);
   }
   const root = parseXMind(await readFile(xmind));
   const leaves = walkLeaves(root).filter((leaf) => !leaf.title.startsWith('【待确认】'));
@@ -93,8 +94,6 @@ async function main() {
   process.stdout.write(`CASES=${cases.length}\nOUT=${out}\n`);
 }
 
-main().catch((error) => {
-  const code = error instanceof QaError ? error.code : EXIT.INTERNAL;
-  process.stderr.write(`[extract-cases][ERR] ${error.message}\n`);
-  process.exit(code);
-});
+main().catch((error) =>
+  handleFatal(error, { argv: process.argv.slice(2), stage: "cases", comment: false, script: "extract-cases" }),
+);

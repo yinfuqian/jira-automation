@@ -1,6 +1,6 @@
 ---
 name: review-jira-qa
-description: 三段式 QA 交付技能：阶段一需求准入门禁清单（由 jira-gate-1 自动调用，也可单独执行）、阶段二测试方案与测试用例 XMind（人工触发）、阶段三 Excel 与 Xray CSV（人工触发）。当用户提供 Jira 需求 Key/URL，并要求需求准入、风险分析、整改清单、测试方案、测试点或测试用例交付时使用。
+description: 三段式 QA 交付技能：阶段一需求准入门禁清单（可由 Jira 规则/技能平台自动调用）、阶段二测试方案与测试用例 XMind（人工触发）、阶段三 Excel 与 Xray CSV（人工触发）。当用户提供 Jira 需求 Key/URL，并要求需求准入、风险分析、整改清单、测试方案、测试点或测试用例交付时使用。
 ---
 
 # 需求准入门禁与 QA 三阶段交付（review-jira-qa）
@@ -14,31 +14,19 @@ export CLAUDE_SKILL_DIR="${CLAUDE_SKILL_DIR:-/data/skills/review-jira-qa}"
 export JIRA_PAT="${JIRA_PAT:-$JIRA_TOKEN}"
 ```
 
-**被 `jira-gate-1` 调用时只执行阶段一，且必须执行完 `result.mjs`；不得自动进入阶段二或阶段三。**
-
-## 非阻塞执行（硬约束）
-
-本技能被 `jira-gate-1` 或其它父技能调用时，是**一次子流程**，不是整个任务的终点。无论阶段一成功、业务暂不通过还是运营性失败，都必须把控制权交还调用方，不能退出、不能等待人工确认、不能阻塞父流程继续执行。
-
-- 不要用 `set -e` 串行执行步骤；每一步单独捕获退出码，失败只影响本技能剩余步骤。
-- 任一脚本失败（preflight、下载、渲染、校验、上传、评论等）时：先记录 `failedStep` 与错误原因，停止本技能后续依赖步骤，然后**必须执行** `result.mjs --non-blocking` 写结果；失败不阻断父流程。若失败发生在 `jira-read` 之前、尚未取得 `RUN_ID`，使用 `--run-id manual` 写结果。
-- `--non-blocking` 只改变退出行为：`ok=false` 仍会写入 `result.json` 和 `QA_RESULT_JSON`，调用方必须据此把 QA 标记为「未完成」，不能写成「通过」。
-- 业务结论「暂不通过」仍属正常完成（`ok=true`）；它只阻止本技能进入阶段二/三，不阻止父技能完成自己的后续交付。
-- 不重试到超时：校验类错误最多按规则修正两次；其它失败最多重试一次，仍失败就记录并返回。
-- 若 `result.mjs` 自身无法执行，必须在最终消息中原样输出一行 `QA_RESULT_JSON` 和一个包含 `ok:false`、`error`、`failedStep` 的 JSON 对象，然后返回调用方。
-- 本规则只约束「返回调用方」，不授权跳过业务判定，也不授权自动执行阶段二或阶段三。
+**被 `jira-gate-1` 调用时只执行阶段一，不得自动进入阶段二或阶段三。** 子技能只读取自己的 `QA_RESULT_JSON`，把控制权交还父技能，不能阻塞父流程继续执行。
 
 ## 何时触发
 
 - 用户给出 Jira Issue Key/URL，要求「需求准入 / 风险分析 / 整改清单」→ 阶段一。
 - 用户要求「测试方案 / 测试点 / 测试用例 XMind」→ 阶段二（必须先有阶段一通过结论）。
 - 用户要求「Excel / Xray CSV / 用例交付」→ 阶段三（必须先有人工复核后的方案与 XMind）。
-- 技能平台只传一个 Issue Key 时，**默认且只执行阶段一**。
+- 技能平台只传一个 Issue Key 时，**默认执行阶段一**。
 
 ## 安装与产物
 
 ```text
-${CLAUDE_SKILL_DIR}/          # 容器内缺省 /data/skills/review-jira-qa
+${CLAUDE_SKILL_DIR}/
 ├── SKILL.md
 ├── prompts/{contract,stage1-gate,stage2-plan,stage2-xmind,stage3-cases}.md
 ├── templates/...
@@ -75,56 +63,44 @@ node "${CLAUDE_SKILL_DIR}/bin/preflight.mjs" --key <KEY|URL> --stage <1|2|3>
 ## 阶段一：需求准入门禁
 
 ```text
-preflight → jira-read → jira-download → materials
-→ 模型判定并写 gate.spec.json → render-gate → validate-gate
+preflight → jira-read → jira-download → reuse → materials → coverage
+→ 模型判定并写 gate.spec.json（含 coverage/delta）→ render-gate → validate-gate
 → jira-upload（清理旧版本）→ jira-comment → result
 ```
 
 ```bash
-node "${CLAUDE_SKILL_DIR}/bin/jira-read.mjs" --key <KEY>
+node "${CLAUDE_SKILL_DIR}/bin/jira-read.mjs" --key <KEY> --comments 10
 node "${CLAUDE_SKILL_DIR}/bin/jira-download.mjs" --key <KEY> --run-id <runId>
+node "${CLAUDE_SKILL_DIR}/bin/reuse.mjs" --key <KEY> --materials ".qa/runs/<runId>/materials.json" --run-id <runId>
+# REUSE=true 时直接复用上一版结论，不重新分析、不新建附件/评论，到此结束
 node "${CLAUDE_SKILL_DIR}/bin/materials.mjs" --run-id <runId>
-# 阅读 prompts/stage1-gate.md 与 materials-digest.md，写 gate.spec.json
+node "${CLAUDE_SKILL_DIR}/bin/coverage.mjs" --materials ".qa/runs/<runId>/materials.json"
+# 记录 materials.json 的 suggestedDeliverableVersion；render-gate 用它，用户显式 --version 优先
+# 阅读 prompts/stage1-gate.md 与 materials-digest.md，按 coverage-required.json 写 gate.spec.json
 node "${CLAUDE_SKILL_DIR}/bin/render-gate.mjs" --spec <gate.spec.json>
-node "${CLAUDE_SKILL_DIR}/bin/validate-gate.mjs" --html <html> --spec <gate.spec.json>
+node "${CLAUDE_SKILL_DIR}/bin/validate-gate.mjs" --html <html> --spec <gate.spec.json> \
+  --coverage-required ".qa/runs/<runId>/coverage-required.json"
 node "${CLAUDE_SKILL_DIR}/bin/jira-upload.mjs" --key <KEY> --file <html> --run-id <runId>
 node "${CLAUDE_SKILL_DIR}/bin/jira-comment.mjs" --key <KEY> --body <comment.md> --run-id <runId>
-node "${CLAUDE_SKILL_DIR}/bin/result.mjs" --stage risk-analysis --key <KEY> --run-id <runId> --spec <gate.spec.json> --non-blocking
+node "${CLAUDE_SKILL_DIR}/bin/result.mjs" --stage risk-analysis --key <KEY> --run-id <runId> --spec <gate.spec.json>
 ```
 
 规则：
 
-- 必须核读全部需求侧材料；JS 驱动 HTML 由脚本抽取脚本内正文；PDF/图片用 `Read` 直接查看；抽取为空且无法查看时记为材料不可读，不能判「通过」。
+- 必须核读全部需求侧材料；PRD 是唯一需求事实源，Overview/Prototype 是 PRD 的子集，允许不完整但不得与 PRD 冲突；子集缺失不单独计为冲突，与 PRD 相反或范围不同计为材料冲突。
+- JS 驱动 HTML 由脚本抽取脚本内正文；PDF/图片用 `Read` 直接查看；抽取为空且无法查看时记为材料不可读，不能判「通过」。
+- 只有 PRD、没有 Overview/原型/HTML：正常评审，不中断。
+- 没有 PRD/HTML 附件、但 Jira 单本身有需求描述：`jira-download` 会把 Jira 需求字段落成 `<KEY>-需求描述.md` 作为主需求材料，正常评审，不中断。
+- 既没有附件、也没有 Jira 需求描述：输入不适用，按 SKIPPED 处理并评论「评审不适用」。
 - 结论只有「通过 / 暂不通过」。不通过项编号 1..N 连续，类型只有「材料冲突 / 材料未明确」。
 - 模型只写 `gate.spec.json`，**不直接写 HTML**；HTML 由 `render-gate.mjs` 生成。
+- 必须先按 `coverage-required.json` 覆盖全部 AC，并对同类 AC 做同类扫描；`coverage` 缺任一 AC 时不得给出「通过」。
+- **同材料复用**：`reuse.mjs` 判定当前材料附件 ID 集合与上一版门禁一致时（`REUSE=true`），直接复用上一版结论，不重新分析、不新增附件/评论；需要强制重审时加 `--force`。
+- **材料更新后**：重新做全量 AC 覆盖与同类扫描；本版新增的不通过项必须标注 `本版材料变更引入` 或 `上一版漏检`，不得把上一版漏检写成新材料问题。
 - 同一材料重复运行结论与编号一致；`--now` 固定分析时间。
-- 阶段一结束即返回调用方；结论为「通过」也不自动进入阶段二，只提示 `/qa-design <KEY>`。
-
-## 与 jira-gate-1 的集成（固定契约）
-
-`jira-gate-1` 在写完 `review-jira-req` 报告、尚未写 G1 评论之前调用本技能阶段一。调用方必须把本技能工作区放在 G1 本次任务目录内，便于 G1 收尾时统一清理：
-
-```bash
-export SKILL_DIR=/data/skills/review-jira-qa
-export CLAUDE_SKILL_DIR="$SKILL_DIR"
-export JIRA_PAT="${JIRA_PAT:-$JIRA_TOKEN}"
-export JIRA_BASE_URL="${JIRA_BASE_URL:-https://jira.in.wezhuiyi.com}"
-export QA_WORKSPACE="$PWD/work/jira-gate/<KEY>/review-jira-qa"
-```
-
-调用方按 `preflight → jira-read → jira-download → materials → gate.spec.json → render-gate → validate-gate → jira-upload → jira-comment → result` 执行，并读取 `QA_RESULT_JSON`：
-
-- `ok=true` + `conclusion=通过`：本技能通过，不额外阻断 G1。
-- `ok=true` + `conclusion=暂不通过`：G1 最终结论必须为「退回补充」，并沿用 G1 的「评审中」流转规则。
-- `ok=false` 或任一脚本非零退出：属于运营性失败，**不得声称 QA 已通过**；本技能用 `result.mjs --non-blocking` 记录 `failedStep`/`error` 后返回，**G1 继续完成评论、门禁字段、报告上传与必要的状态流转**，并在评论中把 QA 写成「未完成（原因）」。
-
-本技能自行上传 HTML 并写 `QA-需求准入门禁结果` 评论；G1 评论只引用其结论、附件名和评论 ID，不复制完整清单。本技能不改 Jira 状态。
-
-交付物（由本技能自身完成）：
-
-- Jira 附件：`<KEY>-<需求名称>-需求准入门禁清单-v<版本>.html`。
-- Jira 评论：标题 `QA-需求准入门禁结果v<版本>`，正文末行固定为材料版本。
-- 本地运行态：`${QA_WORKSPACE}/.qa/runs/<runId>/result.json`（结论与附件/评论 ID 的机器可读来源）。
+- 阶段一结束即停止；结论为「通过」也不自动进入阶段二，只提示 `/qa-design <KEY>`。
+- 输入不符合门禁要求（无附件、无需求侧材料、主材料不唯一）时，`jira-download` 写 `status=SKIPPED` / `applicable=false` 的 result、在 Jira 输出一条「评审不适用」评论，并以 exit 0 结束；**看到该结果立即停止**，向调用方说明 `reason`，不生成 HTML、不写门禁结论、不进入阶段二。
+- 由 `jira-gate-1` 调用时：`conclusion=暂不通过` 时，G1 最终结论必须为「退回补充」；`status=SKIPPED` 记为「不适用」、`status=ERROR` 记为「未完成」，两者都不作为 QA 业务阻断，也不能阻塞 G1 后续交付。
 
 ## 阶段二：测试方案与测试用例 XMind（人工触发）
 
@@ -163,11 +139,23 @@ QA_RESULT_JSON
 同时写入 `${QA_WORKSPACE}/.qa/runs/<runId>/result.json`。
 
 - `ok=true` 表示业务完成；`conclusion=暂不通过` 仍是 `ok=true`，供 Jira 规则据结论决定是否退回「评审中」。
-- 运营性失败 `ok=false`；父技能调用时用 `--non-blocking` 以 0 退出，不产出半截门禁结论，也不阻断父流程。
+- `status=SKIPPED` / `applicable=false`：输入不适用门禁，不算失败，平台应继续流程且不告警。
+- 运营性失败 `ok=false`、`status=ERROR`；脚本统一以 exit 0 结束，不产出半截门禁结论。
+
+## 任务边界与异常处理
+
+- **阶段一是主任务**：完成阶段一（产出清单、附件、评论）即代表本次技能调用完成；技能不改变需求状态，也不改门禁结论。
+- **阶段二/三是独立子任务**：不得修改阶段一的清单、门禁结论或 Jira 评论；阶段二/三不写 Jira 评论，异常只写本地 `result.json` / 日志。
+- **任何脚本异常都不中断平台流程**：写 `status=ERROR` / `ok=false` 的 result 并以 exit 0 结束。
+  - 阶段一异常：尽量在 Jira 评论「执行异常」（同一单只保留一条，重复运行编辑该条）。
+  - 阶段二/三异常：不写 Jira 评论，仅本地留痕，不影响主任务输出。
+- 模型看到 `status=ERROR` 或 `status=SKIPPED` 时必须停止本阶段，向调用方报告原因；不要继续上传、评论或进入下一阶段。
+- 命令逐条执行，不要用 `&&` 串联；所有脚本都以 exit 0 结束，是否继续只看 `status` / `applicable` / `ok`。
+- 被 `jira-gate-1` 或其它父技能调用时，禁止写任务根目录 `.skill-result.json`；只保留本技能自己的 `${QA_WORKSPACE}/.qa/runs/<runId>/result.json`，父技能才是这次平台调用的统计对象。
 
 ## 机器可读结果（仅顶层调用时）
 
-- 当本技能是平台 `/skill/run` 的顶层技能（任务提示里的 skill_id 就是 `review-jira-qa`）时，必须在全部步骤完成、清理工作区之前，把最终结果写到**任务根目录**（当前工作目录）的 `.skill-result.json`：
+当本技能是平台 `/skill/run` 的顶层技能（任务提示里的 skill_id 就是 `review-jira-qa`）时，必须在全部步骤完成、清理工作区之前，把最终结果写到**任务根目录**（当前工作目录）的 `.skill-result.json`：
 
 ```json
 {
@@ -180,9 +168,10 @@ QA_RESULT_JSON
 }
 ```
 
-- `conclusion` 只能写 `通过` 或 `暂不通过`；`blockingCount` 写 `result.json` 中未关闭项的数量。
-- 当本技能被 `jira-gate-1` 或其它父技能调用时，**禁止写任务根目录 `.skill-result.json`**，只保留本技能自己的 `${QA_WORKSPACE}/.qa/runs/<runId>/result.json`；父技能才是这次平台调用的统计对象。
-- 运营性失败不要伪造 `通过`；无法形成业务结论时可以不写该文件。该文件只用于调用统计，不写入 Jira，平台读取入库后会自动删除。
+- `conclusion` 只能写 `通过` 或 `暂不通过`；`blockingCount` 写 `result.json` 的 `failedItemCount`。
+- `SKIPPED` 时 `conclusion` 写 `不适用`；运营性失败不要伪造「通过」，无法形成业务结论时可以不写该文件。
+- `REUSE=true` 时按上一版 `conclusion` 写该文件，并在 `summary` 注明复用版本。
+- 该文件只用于调用统计，不写入 Jira，平台读取入库后会自动删除。
 
 ## 退出码
 
@@ -209,7 +198,7 @@ Mock 是 loopback 测试夹具，不是运行时服务。
 
 ## 平台调用契约（平台侧实现）
 
-- 平台以技能名 `review-jira-qa` 调用，输入 `<KEY>` 或 `/browse/<KEY>` URL；只执行阶段一。也可直接执行斜杠命令 `/review-jira-qa <KEY>`。
+- 平台以技能名 `review-jira-qa` 调用，输入 `risk-analysis <KEY>`；只传 `<KEY>` 时默认阶段一。也可直接执行斜杠命令 `/review-jira-qa <KEY>`。
 - 平台注入 `JIRA_BASE_URL`、`JIRA_PAT`、`QA_WORKSPACE`（建议每次运行使用独立空目录）。
 - 平台读取 `QA_RESULT_JSON` 决定后续流转；不得自动调用阶段二/三。
 - Jira 规则建议在流转到「评审中」时触发；若配置在「开发设计中」触发，结论未通过时由规则退回「评审中」。触发状态由 Jira 规则配置，技能本身不检查状态。

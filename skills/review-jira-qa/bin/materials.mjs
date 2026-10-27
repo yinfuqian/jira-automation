@@ -8,6 +8,7 @@ import path from 'node:path';
 
 import { EXIT, QaError, checkNode, log, parseArgs, resolveWorkspace } from './lib/env.mjs';
 import { readText, writeFileAtomic, readJson } from './lib/fs-safe.mjs';
+import { handleFatal } from './lib/fatal.mjs';
 
 async function main() {
   checkNode();
@@ -16,7 +17,7 @@ async function main() {
   const runId = args['run-id'];
   if (!runId) {
     process.stderr.write('[materials][ERR] 缺少 --run-id。\n');
-    process.exit(EXIT.USAGE);
+    throw new QaError('参数或配置错误', EXIT.USAGE);
   }
   const runDir = path.join(workspace, '.qa', 'runs', runId);
   const materials = await readJson(path.join(runDir, 'materials.json'));
@@ -28,6 +29,7 @@ async function main() {
     `- 主需求附件 ID：${materials.primaryId}`,
     `- 建议需求名称：${materials.requirementName}`,
     `- scope：${materials.scope || '(空)'}`,
+    `- 建议交付物版本：${materials.suggestedDeliverableVersion || '1.0'}`,
     '',
     '## 材料清单',
     '',
@@ -35,19 +37,24 @@ async function main() {
     '|---|---|---|---|---|---|',
   ];
   for (const m of materials.materials) {
-    const requirement = m.needsRead
-      ? '用 Read 工具直接查看原文件'
-      : m.unreadable
-        ? '抽取失败：必须用 Read 查看，仍不可读则记为材料不可读'
-        : m.textChars > 0
-          ? '阅读下方抽取正文'
-          : '空文件或无可读正文，需确认';
-    lines.push(`| ${m.id} | ${m.filename} | ${m.role} | ${m.kind} | ${m.textChars} | ${requirement} |`);
+    const idLabel = m.id === 'issue-description' ? 'Jira 字段' : m.id;
+    const requirement =
+      m.role === 'unsupported'
+        ? '不支持的材料类型，未读取（不作为准入依据）'
+        : m.needsRead
+          ? '用 Read 工具直接查看原文件'
+          : m.unreadable
+            ? '抽取失败：必须用 Read 查看，仍不可读则记为材料不可读'
+            : m.textChars > 0
+              ? '阅读下方抽取正文'
+              : '空文件或无可读正文，需确认';
+    lines.push(`| ${idLabel} | ${m.filename} | ${m.role} | ${m.kind} | ${m.textChars} | ${requirement} |`);
   }
   lines.push('', '## 抽取正文', '');
   for (const m of materials.materials) {
-    if (m.role === 'excluded') continue;
-    lines.push(`### ${m.filename}（附件 ${m.id}，${m.role}）`, '');
+    if (m.role === 'excluded' || m.role === 'unsupported') continue;
+    const source = m.source === 'jira-description' ? 'Jira 需求字段' : `附件 ${m.id}`;
+    lines.push(`### ${m.filename}（${source}，${m.role}）`, '');
     if (m.needsRead) {
       lines.push(`> 该文件为 ${m.kind}，未抽取文本。请用 Read 工具打开：${m.localFile}`, '');
       continue;
@@ -68,14 +75,18 @@ async function main() {
     for (const m of excluded) lines.push(`- ${m.filename}（附件 ${m.id}）`);
     lines.push('');
   }
+  const unsupported = materials.materials.filter((m) => m.role === 'unsupported');
+  if (unsupported.length) {
+    lines.push('## 未读取（不支持的材料类型，不作为准入依据）', '');
+    for (const m of unsupported) lines.push(`- ${m.filename}（附件 ${m.id}）`);
+    lines.push('');
+  }
   const out = path.join(runDir, 'materials-digest.md');
   await writeFileAtomic(out, lines.join('\n'));
   log('materials', `digest=${out} chars=${lines.join('\n').length}`);
   process.stdout.write(`DIGEST=${out}\n`);
 }
 
-main().catch((error) => {
-  const code = error instanceof QaError ? error.code : EXIT.INTERNAL;
-  process.stderr.write(`[materials][ERR] ${error.message}\n`);
-  process.exit(code);
-});
+main().catch((error) =>
+  handleFatal(error, { argv: process.argv.slice(2), stage: "risk-analysis", script: "materials" }),
+);

@@ -10,6 +10,7 @@ import { fileURLToPath } from 'node:url';
 
 import { EXIT, QaError, checkNode, parseArgs, parseIssueKey, resolveWorkspace } from './lib/env.mjs';
 import { ensureDir, readJson, safeFilename, writeFileAtomic, writeJson } from './lib/fs-safe.mjs';
+import { handleFatal } from './lib/fatal.mjs';
 
 const PRIORITY = { P0: 'Highest', P1: 'High', P2: 'Medium', P3: 'Low' };
 const HEADERS = [
@@ -49,7 +50,7 @@ async function main() {
   const casesPath = args.cases;
   if (!casesPath) {
     process.stderr.write('[build-cases][ERR] 缺少 --cases <cases.json>。\n');
-    process.exit(EXIT.USAGE);
+    throw new QaError('参数或配置错误', EXIT.USAGE);
   }
   const data = await readJson(casesPath);
   const key = parseIssueKey(args.key || data.jiraKey);
@@ -91,12 +92,17 @@ async function main() {
 
   const py = process.env.PYTHON || (process.platform === 'win32' ? 'python' : 'python3');
   const pyScript = path.join(path.dirname(fileURLToPath(import.meta.url)), 'build-xlsx.py');
-  const res = spawnSync(py, [pyScript, casesPath, xlsxPath], { encoding: 'utf8' });
-  if (res.status !== 0) {
+  const res = spawnSync(py, [pyScript, casesPath, xlsxPath], {
+    encoding: 'utf8',
+    timeout: Number(process.env.QA_PY_TIMEOUT_MS || 120000),
+    maxBuffer: 10 * 1024 * 1024,
+  });
+  if (res.error || res.signal || res.status !== 0) {
+    const detail = res.error?.message || res.signal || res.stderr || res.stdout || '';
     process.stderr.write(
-      `[build-cases][ERR] Excel 生成失败。需要 Python 3 + openpyxl。\n${res.stderr || res.stdout || ''}\n`,
+      `[build-cases][ERR] Excel 生成失败。需要 Python 3 + openpyxl。\n${detail}\n`,
     );
-    process.exit(EXIT.VALIDATION);
+    throw new QaError(`Excel 生成失败：${detail}`, EXIT.VALIDATION);
   }
 
   const summary = { ok: true, key, name, csvPath, xlsxPath, cases: cases.length };
@@ -104,8 +110,6 @@ async function main() {
   process.stdout.write(`CSV=${csvPath}\nXLSX=${xlsxPath}\nCASES=${cases.length}\n`);
 }
 
-main().catch((error) => {
-  const code = error instanceof QaError ? error.code : EXIT.INTERNAL;
-  process.stderr.write(`[build-cases][ERR] ${error.message}\n`);
-  process.exit(code);
-});
+main().catch((error) =>
+  handleFatal(error, { argv: process.argv.slice(2), stage: "cases", comment: false, script: "build-cases" }),
+);

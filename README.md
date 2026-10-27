@@ -379,9 +379,11 @@ powershell -ExecutionPolicy Bypass -File scripts\export_release_image.ps1 `
 系统内置技能执行能力：外部系统提交一个 Jira 链接与 `skill_id`，服务端在独立工作目录中启动 Codex CLI，
 加载 `skills/<skill_id>/SKILL.md`，由 Agent 按技能定义访问 Jira、执行检查并写回评论。当前内置技能为
 `jira-gate-1`（Jira 需求准入检查 G1：先按 PRD 需求准入 Checklist 判定，再依次调用
-`review-jira-req`、`review-jira-design`、`review-jira-qa`；三条准出任一不通过即流转到「评审中」
+`review-jira-req`、`review-jira-design`、`review-jira-qa`；三条准出任一不通过即流转到「需求设计」
 并在评论里 @ 流转人。`review-jira-req` 生成 OpenSpec 评审报告，`review-jira-design` 生成 PRD—原型
 一致性审核报告，两份报告都上传为附件；`review-jira-qa` 自行上传需求准入门禁清单 HTML 并写 QA 评论；
+三个子技能的任何失败都不得中断 G1，运营性失败只记为「未完成（原因）」，仍继续写评论、回写门禁字段、
+上传已生成附件并执行必要的状态流转；
 交付完成后清理本次任务的工作区中间产物）、
 `jira-gate-1-mock`（同一套判定流程的**只读预演版**：不写评论、不回写门禁字段、不上传附件、不流转状态，
 也不 @ 流转人；依次调用 `review-jira-req` 与 `review-jira-design` 产出需求质量评审报告与
@@ -389,8 +391,9 @@ PRD—原型一致性审核报告，只把评论草稿与这两份报告打成
 `<工作目录>/outputs/<KEY>-G1预检包-<时间戳>.zip` 供下载）、
 `review-jira-req`（按 OpenSpec 好需求标准评审需求质量，同时读取 Jira 附件并抽取文本/图片证据，
 产出 Markdown 报告，对 Jira 只读）、`review-jira-qa`（三段式 QA 交付技能；由 G1 调用时只执行
-阶段一需求准入门禁，按 B1–B7 / C1–C6 产出 HTML 清单、上传附件并写 QA 评论；运营性失败使用
-`--non-blocking` 返回调用方，不阻塞 G1 后续交付；阶段二/三仅供人工触发）、
+阶段一需求准入门禁，按 B1–B7 / C1–C6 判定，并按 `coverage-required.json` 覆盖全部 AC、做同类扫描；
+材料与上一版一致时由 `reuse.mjs` 复用结论，否则产出 HTML 清单、上传附件并写 QA 评论；所有脚本统一 exit 0，
+通过 `status=ERROR/SKIPPED` 区分运营性失败与输入不适用，不阻塞 G1 后续交付；阶段二/三仅供人工触发）、
 `review-jira-design`（对照定稿 PRD 审核产品原型初稿，
 检查需求完整性、PRD—原型一致性、流程与状态覆盖，产出简洁可执行的自包含 HTML 报告；对 Jira 只读，
 由 `jira-gate-1` 与 `jira-gate-1-mock` 在需求质量评审之后调用）与 `jira-code`（读取需求单的「开发方案」附件，从方案指定的基线分支拉出

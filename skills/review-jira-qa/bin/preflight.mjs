@@ -5,6 +5,7 @@
  */
 
 import { checkNode, loadCredentials, parseArgs, parseIssueKey, resolveWorkspace, log, EXIT, QaError } from './lib/env.mjs';
+import { handleFatal } from './lib/fatal.mjs';
 
 async function main() {
   checkNode();
@@ -31,8 +32,6 @@ async function main() {
   }
 }
 
-main().catch((error) => {
-  const code = error instanceof QaError ? error.code : EXIT.INTERNAL;
-  process.stderr.write(`[preflight][ERR] ${error.message}\n`);
-  process.exit(code);
-});
+main().catch((error) =>
+  handleFatal(error, { argv: process.argv.slice(2), stage: "", script: "preflight" }),
+);

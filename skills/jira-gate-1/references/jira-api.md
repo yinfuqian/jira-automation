@@ -108,7 +108,7 @@ nodeRepl.write(["ADD_COMMENTS", "EDIT_ISSUES", "TRANSITION_ISSUES"].map(n => `${
 
 实测 `ZY20260061-3343`：`ADD_COMMENTS=true`、`EDIT_ISSUES=true`、`TRANSITION_ISSUES=true`。若 `ADD_COMMENTS=false`，不要反复重试，直接告知用户缺少评论权限。
 
-`TRANSITION_ISSUES` 是退回补充时流转状态（→ 评审中）所需的权限。为 `false` 时**跳过流转动作**，评论里写「未流转（缺少流转权限）」，同样不要反复重试。结论为通过时不调用流转接口，因此不依赖该权限。
+`TRANSITION_ISSUES` 是退回补充时流转状态（→ 需求设计）所需的权限。为 `false` 时**跳过流转动作**，评论里写「未流转（缺少流转权限）」，同样不要反复重试。结论为通过时不调用流转接口，因此不依赖该权限。
 
 `CREATE_ATTACHMENTS` 是「上传需求评审报告、原型设计准入报告与 QA 准入门禁清单」所需的权限（见 §10、§10.1、§10.2）。为 `false` 时跳过上传，并在对话里如实说明缺权限。
 
@@ -117,7 +117,7 @@ nodeRepl.write(["ADD_COMMENTS", "EDIT_ISSUES", "TRANSITION_ISSUES"].map(n => `${
 - 评论模板与 Jira wiki 标记对照见 `SKILL.md`「输出模板」节；**评论正文用 Jira wiki 标记，不要提交 Markdown 表格**，否则会显示成原始符号。
 - 评论只列检查点：结论摘要 + 检查项清单；每项行首必须有标记——通过写 `(/)`（绿勾），不通过写 `(x)`（红叉）。不通过项每条一行、80 字以内；判定过程留在对话回复里。
 - 不达标时元信息区多一行「待处理人」：`* 待处理人：[~登录名]｜流转：<实际流转结果>`，`@` 写法见 §9。
-- 评论**末尾固定一行**「报告附件 + 评审结论」：`* 报告附件：<KEY>-需求评审报告-宋立志.md（已上传）｜评审结论：需修改`，与检查项清单之间空一行；达标与不达标都要有（见 §10 第 8 条）。`评审结论` 只取 `不合格 / 需修改 / 合格`，且只能由 `report-conclusion.mjs` 从报告 md 提取，不许自己判。
+- 评论**末尾固定一行**「报告附件 + 评审结论」：`* 报告附件：<KEY>-需求评审报告-宋立志.md（已上传）｜评审结论：需修改`，与检查项清单之间空一行；达标与不达标都要有（见 §10 第 8 条）。`评审结论` 只取 `不合格 / 需修改 / 合格`，且只能由 `report-conclusion.mjs` 从报告 md 提取，不许自己判；报告未生成或提取失败时写 `未完成（原因）`，仍继续交付。
 - 元信息区固定写设计准入摘要：`原型设计准入`、`设计报告附件`；取值来自 `review-jira-design` 的 `content.json` 与实际上传结果，不许自己猜。
 - 元信息区固定写 QA 摘要：`QA 准入门禁`、`QA 阻断项`、`QA 清单附件`、`QA 评论`；取值来自 `review-jira-qa` 的 `result.json` / `upload.json` / `comment.json`，不许自己猜。
 - 写入后读回验证，确认渲染正常、无截断：
@@ -138,7 +138,7 @@ nodeRepl.write(last.id + " | " + last.author + " | " + last.body.slice(0, 120));
 交付顺序对所有结论都适用：三个评审技能（`review-jira-req` → `review-jira-design` → `review-jira-qa`）→ G1 评论（含 @）→ 门禁字段 → 附件 → 流转。前三步对所有结论执行，**状态流转只在综合结论为「退回补充」时执行**：
 
 - 结论「通过」：**不流转状态**，保持当前状态，允许进入技术方案设计；不 @ 人。
-- 结论「退回补充」：流转到 **评审中**，并在评论里 @ 流转人。
+- 结论「退回补充」：流转到 **需求设计**，并在评论里 @ 流转人。
 
 **先做类型预检**：只有问题类型为「故事」（英文站点 `Story` 视为同一类型）才执行本技能；类型不符时直接停止，不做任何写操作。命令行入口：
 
@@ -149,17 +149,17 @@ node scripts/jira-cli.mjs precheck <KEY|URL>
 
 1. **流转人从哪来**：本站在 `/rest/api/2/field` 里没有名为「流转人」的字段（实测名字含「流转」的字段为 0 个），因此本技能已确认的口径是**取经办人 `assignee`**；仅在经办人为空时才按 `assignee → reporter → creator` 回退，回退取到时对话摘要里要写明实际来源（`resolveFlowOwner()` 返回的 `source` 字段会标明）。需要长期换口径时在技能目录的 `jira-config.json`（即仓库 `skills/jira-gate-1/jira-config.json`，随技能目录挂载进容器）里用 `flowOwnerField` 指定人员字段名，**不要改脚本**。
 2. **@ 写法**：Jira Server / DC 按登录名引用，`[~liu.huan]` 渲染为「刘欢」。`resolveFlowOwner()` 直接返回拼好的 `mention`；实测 `flow-owner ZYSQ-95` → `{"name":"liu.huan","displayName":"刘欢","mention":"[~liu.huan]","field":"assignee"}`。
-3. **退回补充的目标状态固定为「评审中」**；结论为通过时不得调用流转接口。**不要写死流转 id**：不同项目工作流的流转 id 与流转名都可能不同，`transitionToStatus()` 按目标状态名匹配（先比 `to`，再比 `name`）。
+3. **退回补充的目标状态固定为「需求设计」**；结论为通过时不得调用流转接口。**不要写死流转 id**：不同项目工作流的流转 id 与流转名都可能不同，`transitionToStatus()` 按目标状态名匹配（先比 `to`，再比 `name`）。
 
 ```bash
 node scripts/jira-cli.mjs transitions <KEY|URL>             # 只读：看当前可用流转
 node scripts/jira-cli.mjs flow-owner <KEY|URL>              # 只读：看流转人与 @ 写法
-node scripts/jira-cli.mjs transition <KEY|URL> --to 评审中       # 仅退回补充
+node scripts/jira-cli.mjs transition <KEY|URL> --to 需求设计       # 仅退回补充
 ```
 
 4. **匹配不到流转时不抛错**：返回 `{ok:false, reason:"no-transition", status, target, available}`，`available` 是当前可用流转列表。若当前状态没有通向目标状态的流转，按 `SKILL.md` §9 记「未流转（该单当前状态无目标状态流转）」，并在对话里列出 `available` 交人工处理，不要改用其他状态。
 5. 已在目标状态时返回 `{ok:true, skipped:true, reason:"already-in-target"}`，不重复发起流转。
-6. 写评论、回写门禁字段、上传附件、流转的顺序固定为：**评论（含 @）→ 门禁字段 → 附件 → 流转**，流转放最后（见 §10）。前三步对所有结论都执行；流转只在退回补充时执行，目标为「评审中」，通过不流转。
+6. 写评论、回写门禁字段、上传附件、流转的顺序固定为：**评论（含 @）→ 门禁字段 → 附件 → 流转**，流转放最后（见 §10）。前三步对所有结论都执行；流转只在退回补充时执行，目标为「需求设计」，通过不流转。
 7. 因为是评论先写、流转后做，评论里的「流转：」先按预期结果写；流转跑完必须核对返回值，任一非成功分支都用 `comment-update` 改成实际措辞（措辞见 `SKILL.md` §9 的表）。
 
 ## 10. 评审报告附件上传
@@ -185,9 +185,9 @@ node scripts/jira-cli.mjs attach-list <KEY|URL>   # 读回确认：列表里出�
 
 5. **成功判定看返回体不看退出码**：`attach` 成功返回 `{ok:true, id, filename, size}`；失败返回 `{ok:false, reason}` 并**置退出码 1** 且在 stderr 打 `[附件上传失败] ...`。上传完后**必须**用 `attach-list` 读回，确认 `fields.attachment` 里出现目标文件名——`ok:true` 只说明站点接受了这次 POST，读回才是"附件真的挂在该单上"的证据。注意附件的 `author` 是令牌账号，不是写评论的人，这一点不是异常。
 6. **降级**：本地文件缺失、403（缺 `CREATE_ATTACHMENTS`）、404（该单未启用附件）、网络错误都返回 `{ok:false, reason}` 而不抛错：**跳过上传并如实说明，不要重试、不要改文件名绕开**。
-7. **顺序**：`review-jira-req` 流水线 → `review-jira-design` → `review-jira-qa` 阶段一 → 评论 → 门禁字段 → 上传需求评审报告与设计准入报告 → 流转状态（仅退回补充，见 §9）。流转放最后，前序步骤的留痕不因流转失败而回滚。
-8. **评论末尾固定带附件行 + 评审结论**：评论里写 `* 报告附件：<KEY>-需求评审报告-宋立志.md（已上传 / 未上传（原因））｜评审结论：<不合格/需修改/合格>`。
-   - 附件名按第 3 条规则可提前确定；`评审结论`用本技能的 `scripts/report-conclusion.mjs` 从刚生成的报告 md 里提取（`node scripts/report-conclusion.mjs "<报告路径>" <KEY>`），**它是唯一来源，不许自己判**。取值只有三个，脚本遇到非法取值或找不到该 KEY 会以退出码 1 报错，此时如实说明，不要猜。
+7. **顺序与失败收口**：`review-jira-req` 流水线 → `review-jira-design` → `review-jira-qa` 阶段一 → 评论 → 门禁字段 → 上传需求评审报告与设计准入报告 → 流转状态（仅退回补充，见 §9）。流转放最后，前序步骤的留痕不因流转失败而回滚。`review-jira-req` 五步中任一步失败、报告未生成或结论提取失败时，需求评审记为「未完成（阶段/原因）」并继续后续步骤，不得中断 G1。
+8. **评论末尾固定带附件行 + 评审结论**：评论里写 `* 报告附件：<KEY>-需求评审报告-宋立志.md（已上传 / 未上传（原因））｜评审结论：<不合格/需修改/合格/未完成（原因）>`。
+   - 附件名按第 3 条规则可提前确定；`评审结论`用本技能的 `scripts/report-conclusion.mjs` 从刚生成的报告 md 里提取（`node scripts/report-conclusion.mjs "<报告路径>" <KEY>`），**它是唯一来源，不许自己判**。取值只有三个，脚本遇到非法取值或找不到该 KEY 会以退出码 1 报错，此时如实记为「未完成（原因）」并继续 G1，不要猜。
    - 为了让结论可提取，**五步流水线必须在写评论之前跑到第 5 步**；`review-jira-design` 与 `review-jira-qa` 也必须在写 G1 评论之前跑完；两份报告的上传仍是写 G1 评论之后的事。
    - 上传失败时用 `comment-update` 把括号里改成「未上传（原因）」，`评审结论`保留提取到的真实取值——附件没传上不代表没有结论。
 
@@ -205,7 +205,7 @@ node scripts/jira-cli.mjs attach <KEY|URL> "work/jira-gate/<KEY>/design/<KEY>-�
 node scripts/jira-cli.mjs attach-list <KEY|URL>   # 与需求评审报告一起读回确认
 ```
 
-5. **降级**：PRD 或原型缺失、无法读取、对象无法唯一定位时，设计结论写「审核未完成」，不得自造「通过」；连 `build-report.mjs --prd` 都无法执行时跳过设计附件并在评论里写明原因。权限不足或附件上传失败时，用 `comment-update` 把评论里的「设计报告附件」行改成「未上传（原因）」，不改变设计结论。脚本非零退出、内容 JSON 非法属于运营性失败，停止 G1 后续交付并保留现场。
+5. **降级**：PRD 或原型缺失、无法读取、对象无法唯一定位时，设计结论写「审核未完成」（业务结论，仍使 G1 最终为「退回补充」），不得自造「通过」；连 `build-report.mjs --prd` 都无法执行时跳过设计附件并在评论里写明原因。权限不足或附件上传失败时，用 `comment-update` 把评论里的「设计报告附件」行改成「未上传（原因）」，不改变设计结论。脚本非零退出、内容 JSON 非法/缺失、报告未生成属于运营性失败，设计记为「未完成（原因）」，不改变 G1 自身结论，也不中断 G1 后续交付。
 
 ## 10.2 QA 需求准入门禁（review-jira-qa）
 
@@ -217,20 +217,24 @@ export CLAUDE_SKILL_DIR="$SKILL_DIR"
 export JIRA_PAT="${JIRA_PAT:-$JIRA_TOKEN}"
 export QA_WORKSPACE="$PWD/work/jira-gate/<KEY>/review-jira-qa"
 node "$SKILL_DIR/bin/preflight.mjs" --key <KEY> --stage 1
-node "$SKILL_DIR/bin/jira-read.mjs" --key <KEY>
+node "$SKILL_DIR/bin/jira-read.mjs" --key <KEY> --comments 10
 node "$SKILL_DIR/bin/jira-download.mjs" --key <KEY> --run-id <RUN_ID>
+node "$SKILL_DIR/bin/reuse.mjs" --key <KEY> --materials ".qa/runs/<RUN_ID>/materials.json" --run-id <RUN_ID>
 node "$SKILL_DIR/bin/materials.mjs" --run-id <RUN_ID>
-# 写 .qa/runs/<RUN_ID>/gate.spec.json 后：
+node "$SKILL_DIR/bin/coverage.mjs" --materials ".qa/runs/<RUN_ID>/materials.json"
+# 按 coverage-required.json 覆盖全部 AC 并写 .qa/runs/<RUN_ID>/gate.spec.json 后：
 node "$SKILL_DIR/bin/render-gate.mjs" --spec <gate.spec.json>
-node "$SKILL_DIR/bin/validate-gate.mjs" --html <HTML> --spec <gate.spec.json>
+node "$SKILL_DIR/bin/validate-gate.mjs" --html <HTML> --spec <gate.spec.json> --coverage-required ".qa/runs/<RUN_ID>/coverage-required.json"
 node "$SKILL_DIR/bin/jira-upload.mjs" --key <KEY> --file <HTML> --run-id <RUN_ID>
 node "$SKILL_DIR/bin/jira-comment.mjs" --key <KEY> --body <COMMENT> --run-id <RUN_ID>
 node "$SKILL_DIR/bin/result.mjs" --stage risk-analysis --key <KEY> --run-id <RUN_ID> --spec <gate.spec.json>
 ```
 
+- `reuse.mjs` 输出 `REUSE=true`：当前材料与上一版一致，直接复用上一版结论；读取 `reuse.json` 的 `conclusion`、`deliverableVersion`、`commentId`，不重新分析、不新建附件或评论；此时 `result.json` 缺失属正常，不得判为失败。
+- `coverage.mjs` 生成 `coverage-required.json`；`gate.spec.json` 必须覆盖全部 AC 且每条 `checked=true`。`validate-gate.mjs` 必须带 `--coverage-required`，否则不会校验遗漏。
 - `QA_RESULT_JSON.ok=true` + `conclusion=通过`：QA 不阻断，G1 用自己的结论。
 - `QA_RESULT_JSON.ok=true` + `conclusion=暂不通过`：G1 最终结论强制为「退回补充」。
-- `ok=false` 或脚本非零退出：运营性失败，停止 G1 后续交付并保留现场；不得宣称 QA 通过。
+- `ok=false`、脚本非零退出、结果缺失或结果 JSON 非法：运营性失败，QA 记为「未完成（原因）」；不得宣称 QA 通过，也不得中断 G1 后续交付。
 - QA 自行写 `QA-需求准入门禁结果` 评论并上传 HTML；G1 不再重复上传 QA HTML、不改 Jira 状态。
 
 ## 11. 故障排查
@@ -323,7 +327,7 @@ const d  = await j.setGateResult("CALL-1940", { result: "通过" }, { dryRun: tr
 ```javascript
 const ts = await j.listTransitions("CALL-1446");                 // 当前可用流转 [{id, name, to}]
 const fo = await j.resolveFlowOwner(issue);                      // 流转人与 @ 写法 {name, mention, field}
-const back = await j.transitionToStatus("ZYSQ-95", "评审中");     // 仅退回补充时流转
+const back = await j.transitionToStatus("ZYSQ-95", "需求设计");     // 仅退回补充时流转
 ```
 
 评审报告附件：

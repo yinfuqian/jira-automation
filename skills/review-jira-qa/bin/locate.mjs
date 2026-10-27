@@ -13,6 +13,7 @@ import path from 'node:path';
 import { EXIT, QaError, checkNode, parseArgs, parseIssueKey, resolveWorkspace } from './lib/env.mjs';
 import { readJson, readText, sha256 } from './lib/fs-safe.mjs';
 import { pickLatest } from './lib/versions.mjs';
+import { handleFatal } from './lib/fatal.mjs';
 
 async function listFiles(dir, filter) {
   if (!existsSync(dir)) return [];
@@ -121,8 +122,6 @@ async function main() {
   process.stdout.write(`${JSON.stringify(out)}\n`);
 }
 
-main().catch((error) => {
-  const code = error instanceof QaError ? error.code : EXIT.INTERNAL;
-  process.stderr.write(`[locate][ERR] ${error.message}\n`);
-  process.exit(code);
-});
+main().catch((error) =>
+  handleFatal(error, { argv: process.argv.slice(2), stage: "", comment: false, script: "locate" }),
+);

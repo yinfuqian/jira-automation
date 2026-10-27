@@ -11,7 +11,7 @@ import path from 'node:path';
 
 import { EXIT, QaError, fail, log, maskSecret } from './env.mjs';
 
-const FIELDS = ['summary', 'status', 'components', 'labels', 'attachment', 'comment', 'issuetype', 'updated'];
+const FIELDS = ['summary', 'description', 'status', 'components', 'labels', 'attachment', 'comment', 'issuetype', 'updated'];
 
 function sleep(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));

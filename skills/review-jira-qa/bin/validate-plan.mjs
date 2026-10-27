@@ -7,6 +7,7 @@ import path from 'node:path';
 
 import { EXIT, QaError, checkNode, parseArgs } from './lib/env.mjs';
 import { readText } from './lib/fs-safe.mjs';
+import { handleFatal } from './lib/fatal.mjs';
 
 const REQUIRED = [
   '测试目标',
@@ -28,7 +29,7 @@ async function main() {
   const key = args.key || '';
   if (!plan) {
     process.stderr.write('[validate-plan][ERR] 缺少 --plan <file>。\n');
-    process.exit(EXIT.USAGE);
+    throw new QaError('参数或配置错误', EXIT.USAGE);
   }
   const base = path.basename(plan);
   const text = await readText(plan);
@@ -39,11 +40,9 @@ async function main() {
     if (!text.includes(section)) errors.push(`缺少章节：${section}`);
   }
   process.stdout.write(`${JSON.stringify({ ok: errors.length === 0, plan, errors })}\n`);
-  process.exit(errors.length ? EXIT.VALIDATION : EXIT.OK);
+  if (errors.length) throw new QaError(`测试方案校验失败：${errors.join('；')}`, EXIT.VALIDATION);
 }
 
-main().catch((error) => {
-  const code = error instanceof QaError ? error.code : EXIT.INTERNAL;
-  process.stderr.write(`[validate-plan][ERR] ${error.message}\n`);
-  process.exit(code);
-});
+main().catch((error) =>
+  handleFatal(error, { argv: process.argv.slice(2), stage: "design", comment: false, script: "validate-plan" }),
+);

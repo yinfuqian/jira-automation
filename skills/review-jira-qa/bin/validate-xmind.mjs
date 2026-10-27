@@ -7,6 +7,7 @@ import { readFile } from 'node:fs/promises';
 
 import { EXIT, QaError, checkNode, parseArgs } from './lib/env.mjs';
 import { parseXMind, walkLeaves } from './lib/xmind.mjs';
+import { handleFatal } from './lib/fatal.mjs';
 
 async function main() {
   checkNode();
@@ -14,7 +15,7 @@ async function main() {
   const file = args.xmind || args._[0];
   if (!file) {
     process.stderr.write('[validate-xmind][ERR] 缺少 --xmind <file>。\n');
-    process.exit(EXIT.USAGE);
+    throw new QaError('参数或配置错误', EXIT.USAGE);
   }
   const root = parseXMind(await readFile(file));
   const leaves = walkLeaves(root);
@@ -40,11 +41,9 @@ async function main() {
     errors,
   };
   process.stdout.write(`${JSON.stringify(out)}\n`);
-  process.exit(errors.length ? EXIT.VALIDATION : EXIT.OK);
+  if (errors.length) throw new QaError(`XMind 校验失败：${errors.join('；')}`, EXIT.VALIDATION);
 }
 
-main().catch((error) => {
-  const code = error instanceof QaError ? error.code : EXIT.INTERNAL;
-  process.stderr.write(`[validate-xmind][ERR] ${error.message}\n`);
-  process.exit(code);
-});
+main().catch((error) =>
+  handleFatal(error, { argv: process.argv.slice(2), stage: "design", comment: false, script: "validate-xmind" }),
+);

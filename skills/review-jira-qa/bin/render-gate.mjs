@@ -10,6 +10,7 @@ import { EXIT, QaError, checkNode, log, parseArgs, resolveWorkspace, skillDir, t
 import { readJson, writeFileAtomic, ensureDir, safeFilename } from './lib/fs-safe.mjs';
 import { renderGate, renderComment, normalizeSpec } from './lib/html.mjs';
 import { versionedName } from './lib/versions.mjs';
+import { handleFatal } from './lib/fatal.mjs';
 
 async function main() {
   checkNode();
@@ -18,7 +19,7 @@ async function main() {
   const specPath = args.spec || args._[0];
   if (!specPath) {
     process.stderr.write('[render-gate][ERR] 缺少 --spec <gate.spec.json>。\n');
-    process.exit(EXIT.USAGE);
+    throw new QaError('参数或配置错误', EXIT.USAGE);
   }
   const spec = normalizeSpec(await readJson(specPath));
   const version = String(args.version || spec.deliverableVersion || '1.0').replace(/^v/, '');
@@ -64,8 +65,6 @@ async function main() {
   );
 }
 
-main().catch((error) => {
-  const code = error instanceof QaError ? error.code : EXIT.INTERNAL;
-  process.stderr.write(`[render-gate][ERR] ${error.message}\n`);
-  process.exit(code);
-});
+main().catch((error) =>
+  handleFatal(error, { argv: process.argv.slice(2), stage: "risk-analysis", script: "render-gate" }),
+);

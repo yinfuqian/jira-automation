@@ -12,10 +12,16 @@ import { fileURLToPath } from 'node:url';
 import { EXIT } from './lib/env.mjs';
 
 export const MOCK_PAT = 'mock-pat-do-not-use-in-production';
-const PRD = `# 示例需求 PRD\n\n## 1. 背景\n这是 mock 需求材料。\n\n## 2. 规则\n- 规则一：必须满足条件 A。\n- 规则二：异常时提示 B。\n`;
+const PRD = `# 示例需求 PRD\n\n## 1. 背景\n这是 mock 需求材料。\n\n## 2. 规则\n- 规则一：必须满足条件 A。\n- 规则二：异常时提示 B。\n\n### AC-001 按名称查询\n- WHEN 输入名称并查询\n- THEN 列表只显示匹配项\n\n### AC-002 名称为空\n- WHEN 名称留空并查询\n- THEN 提示名称必填\n`;
+const DESCRIPTION = `h3. 需求说明
+
+列表支持按名称筛选并导出。
+
+* 筛选：输入名称后查询。
+* 导出：导出当前筛选结果。`;
 const OVERVIEW = `<!doctype html><html><body><h1>示例需求 Overview</h1><p>页面说明：列表支持筛选与导出。</p><script>const t = "脚本内正文：提交后提示成功";</script></body></html>`;
 
-function makeState() {
+function makeState(empty = false) {
   const attachments = new Map();
   const add = (id, filename, content) => {
     attachments.set(String(id), {
@@ -26,12 +32,13 @@ function makeState() {
       mimeType: filename.endsWith('.html') ? 'text/html' : 'text/markdown',
     });
   };
-  add('1001', '示例需求_PRD_DELIVERY.md', PRD);
-  add('1002', '示例需求_Overview.html', OVERVIEW);
   const comments = [
     { id: '2001', author: { displayName: '产品' }, created: '2026-10-20T15:00:00.000+0800', body: '产品补充说明。' },
   ];
-  return { attachments, comments, nextAttachmentId: 1003, nextCommentId: 2002 };
+  if (empty) return { attachments, comments: [], nextAttachmentId: 1003, nextCommentId: 2002, description: '' };
+  add('1001', '示例需求_PRD_DELIVERY.md', PRD);
+  add('1002', '示例需求_Overview.html', OVERVIEW);
+  return { attachments, comments, nextAttachmentId: 1003, nextCommentId: 2002, description: DESCRIPTION };
 }
 
 function issueJson(state, base) {
@@ -39,6 +46,7 @@ function issueJson(state, base) {
     key: 'QA-101',
     fields: {
       summary: '【示例模块】支持列表筛选与导出',
+      description: state.description || '',
       status: { name: '评审中' },
       issuetype: { name: '故事' },
       components: [{ name: '示例模块' }],
@@ -84,8 +92,8 @@ function parseMultipart(buffer, contentType) {
   return null;
 }
 
-export function startMock({ port = 0 } = {}) {
-  const state = makeState();
+export function startMock({ port = 0, empty = false } = {}) {
+  const state = makeState(empty);
   let base = '';
   const server = createServer((req, res) => {
     const url = new URL(req.url, 'http://127.0.0.1');
@@ -189,7 +197,7 @@ if (process.argv[1] && path.resolve(process.argv[1]) === path.resolve(fileURLToP
   const args = process.argv.slice(2);
   const portArg = args.indexOf('--port');
   const port = portArg >= 0 ? Number(args[portArg + 1]) : 0;
-  startMock({ port }).then(({ port: actual }) => {
+  startMock({ port, empty: args.includes('--empty') }).then(({ port: actual }) => {
     const base = `http://127.0.0.1:${actual}`;
     process.stdout.write(`MOCK_JIRA=${base}\n`);
     process.stdout.write(`export JIRA_BASE_URL="${base}"\nexport JIRA_PAT="${MOCK_PAT}"\nexport QA_WORKSPACE="$(pwd)"\n`);

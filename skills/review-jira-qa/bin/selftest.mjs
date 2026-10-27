@@ -39,8 +39,10 @@ function parseLine(stdout, prefix) {
   return line ? line.slice(prefix.length) : '';
 }
 
-async function startMockProcess() {
-  const proc = spawn(process.execPath, [path.join(ROOT, 'bin', 'mock-jira.mjs'), '--port', '0'], { stdio: ['ignore', 'pipe', 'pipe'] });
+async function startMockProcess(extra = []) {
+  const proc = spawn(process.execPath, [path.join(ROOT, 'bin', 'mock-jira.mjs'), '--port', '0', ...extra], {
+    stdio: ['ignore', 'pipe', 'pipe'],
+  });
   const url = await new Promise((resolve, reject) => {
     let buf = '';
     const timer = setTimeout(() => reject(new Error('mock 启动超时')), 10000);
@@ -55,13 +57,13 @@ async function startMockProcess() {
 }
 
 async function main() {
-  process.stdout.write('review-jira-qa selftest\n');
+  process.stdout.write('qa-gate selftest\n');
   check(Number(process.versions.node.split('.')[0]) >= 20, `Node >= 20 (${process.versions.node})`);
   for (const file of ['SKILL.md', 'README.md', 'install.sh', 'package.sh', 'VERSION', 'templates/gate-html.html']) {
     check(existsSync(path.join(ROOT, file)), `存在 ${file}`);
   }
 
-  const workspace = await mkdtemp(path.join(os.tmpdir(), 'review-jira-qa-selftest-'));
+  const workspace = await mkdtemp(path.join(os.tmpdir(), 'qa-gate-selftest-'));
   const { proc: mockProc, url: mockUrl } = await startMockProcess();
   const env = {
     JIRA_BASE_URL: mockUrl,
@@ -82,13 +84,18 @@ async function main() {
 
     res = run('jira-download.mjs', ['--key', 'QA-101', '--run-id', runId, '--workspace', workspace], env);
     check(res.status === 0, 'jira-download', res.stderr);
-    check(res.stdout.includes('MATERIALS=2'), '下载 2 个附件');
+    check(res.stdout.includes('MATERIALS=2') && res.stdout.includes('PRIMARY_ID=1001'), '下载 2 个附件');
 
     res = run('materials.mjs', ['--run-id', runId, '--workspace', workspace], env);
     check(res.status === 0, 'materials', res.stderr);
     const digest = path.join(workspace, '.qa', 'runs', runId, 'materials-digest.md');
     check(existsSync(digest), 'materials-digest.md');
     check((await readFile(digest, 'utf8')).includes('脚本内正文'), 'JS 驱动 HTML 抽取脚本内正文');
+
+    const coverageRun = run('coverage.mjs', ['--materials', path.join(workspace, '.qa', 'runs', runId, 'materials.json'), '--workspace', workspace], env);
+    check(coverageRun.status === 0 && coverageRun.stdout.includes('REQUIRED_ACS=2'), 'coverage 提取全部 AC', coverageRun.stderr);
+    const coverageRequired = parseLine(coverageRun.stdout, 'OUT=');
+    check(existsSync(coverageRequired), '生成 coverage-required.json');
 
     const spec = path.join(ROOT, 'test', 'fixtures', 'gate-fail.json');
     res = run('render-gate.mjs', ['--spec', spec, '--workspace', workspace], env);
@@ -98,8 +105,8 @@ async function main() {
     check(existsSync(html), '生成 HTML');
     check(existsSync(comment), '生成评论');
 
-    res = run('validate-gate.mjs', ['--html', html, '--spec', spec], env);
-    check(res.status === 0, 'validate-gate', res.stderr);
+    res = run('validate-gate.mjs', ['--html', html, '--spec', spec, '--coverage-required', coverageRequired], env);
+    check(res.status === 0, 'validate-gate + coverage', res.stderr);
 
     res = run('jira-upload.mjs', ['--key', 'QA-101', '--file', html, '--run-id', runId, '--workspace', workspace], env);
     check(res.status === 0, 'jira-upload', res.stderr);
@@ -117,6 +124,17 @@ async function main() {
     check(state.attachments.some((a) => a.filename.endsWith('.html')), 'Jira 存在阶段一附件');
     check(state.comments.length === 2, 'Jira 评论数为 2');
 
+    const reuseRead = run('jira-read.mjs', ['--key', 'QA-101', '--workspace', workspace], env);
+    const reuseRunId = parseLine(reuseRead.stdout, 'RUN_ID=');
+    run('jira-download.mjs', ['--key', 'QA-101', '--run-id', reuseRunId, '--workspace', workspace], env);
+    const reuse = run(
+      'reuse.mjs',
+      ['--key', 'QA-101', '--materials', path.join(workspace, '.qa', 'runs', reuseRunId, 'materials.json'), '--run-id', reuseRunId, '--workspace', workspace],
+      env,
+    );
+    check(reuse.status === 0 && reuse.stdout.includes('REUSE=true'), '同材料复用', reuse.stderr);
+    check(reuse.stdout.includes('PREVIOUS_VERSION=1.0') && reuse.stdout.includes('CONCLUSION=暂不通过'), '复用上一版结论与版本');
+
     res = run('jira-upload.mjs', ['--key', 'QA-101', '--file', html, '--run-id', runId, '--workspace', workspace], env);
     check(res.status === 0 && res.stderr.includes('skip'), '重复上传同文件跳过');
 
@@ -132,6 +150,11 @@ async function main() {
     state = await (await fetch(`${env.JIRA_BASE_URL}/mock/state`, { headers: { Authorization: `Bearer ${MOCK_PAT}` } })).json();
     const gates = state.attachments.filter((a) => a.filename.includes('需求准入门禁清单'));
     check(gates.length === 1 && gates[0].filename.includes('v1.1'), '只保留最新门禁附件');
+    const verRead = run('jira-read.mjs', ['--key', 'QA-101', '--workspace', workspace], env);
+    const verRunId = parseLine(verRead.stdout, 'RUN_ID=');
+    run('jira-download.mjs', ['--key', 'QA-101', '--run-id', verRunId, '--workspace', workspace], env);
+    const verMaterials = JSON.parse(await readFile(path.join(workspace, '.qa', 'runs', verRunId, 'materials.json'), 'utf8'));
+    check(verMaterials.suggestedDeliverableVersion === '1.2', '按已有门禁附件建议下一版本 1.2', verMaterials.suggestedDeliverableVersion);
     check(state.attachments.some((a) => a.filename.includes('PRD')), '未删除产品材料');
 
     // ---- 阶段二/三机械链路 ----
@@ -177,6 +200,73 @@ async function main() {
     } else {
       process.stdout.write('  SKIP build-cases/validate-cases（未找到 Python + openpyxl）\n');
     }
+
+    // ---- 只有 PRD、没有 HTML：正常评审 ----
+    await fetch(`${env.JIRA_BASE_URL}/rest/api/2/attachment/1002`, {
+      method: 'DELETE',
+      headers: { Authorization: `Bearer ${MOCK_PAT}` },
+    });
+    const prdRead = run('jira-read.mjs', ['--key', 'QA-101', '--workspace', workspace], env);
+    const prdRunId = parseLine(prdRead.stdout, 'RUN_ID=');
+    const prdOnly = run('jira-download.mjs', ['--key', 'QA-101', '--run-id', prdRunId, '--workspace', workspace], env);
+    check(prdOnly.status === 0 && !prdOnly.stdout.includes('"status":"SKIPPED"'), '只有 PRD 无 HTML 时正常评审', prdOnly.stderr);
+    check(prdOnly.stdout.includes('PRIMARY_ID=1001'), '只有 PRD 时以 PRD 为主材料');
+
+    // ---- 无附件但有 Jira 描述：正常评审，不中断 ----
+    await fetch(`${env.JIRA_BASE_URL}/rest/api/2/attachment/1001`, {
+      method: 'DELETE',
+      headers: { Authorization: `Bearer ${MOCK_PAT}` },
+    });
+    const descRead = run('jira-read.mjs', ['--key', 'QA-101', '--workspace', workspace], env);
+    const descRunId = parseLine(descRead.stdout, 'RUN_ID=');
+    const desc = run('jira-download.mjs', ['--key', 'QA-101', '--run-id', descRunId, '--workspace', workspace], env);
+    check(desc.status === 0 && !desc.stdout.includes('"status":"SKIPPED"'), '只有 Jira 描述时正常评审', desc.stderr);
+    const descMaterials = JSON.parse(await readFile(path.join(workspace, '.qa', 'runs', descRunId, 'materials.json'), 'utf8'));
+    check(descMaterials.primaryId === 'issue-description', 'Jira 描述作为主需求材料');
+    check(existsSync(path.join(descMaterials.inputsDir, 'QA-101-需求描述.md')), '生成 Jira 描述材料文件');
+
+    // ---- 无附件且无描述：SKIPPED + 「评审不适用」 ----
+    const emptyMock = await startMockProcess(['--empty']);
+    try {
+      const emptyEnv = { ...env, JIRA_BASE_URL: emptyMock.url };
+      const emptyRead = run('jira-read.mjs', ['--key', 'QA-101', '--workspace', workspace], emptyEnv);
+      const emptyRunId = parseLine(emptyRead.stdout, 'RUN_ID=');
+      const emptySkip = run('jira-download.mjs', ['--key', 'QA-101', '--run-id', emptyRunId, '--workspace', workspace], emptyEnv);
+      check(emptySkip.status === 0, '不适用输入 exit 0', emptySkip.stderr);
+      check(emptySkip.stdout.includes('"status":"SKIPPED"'), '不适用输入输出 SKIPPED');
+      check(emptySkip.stdout.includes('"applicable":false'), '不适用输入 applicable=false');
+      const emptyResult = JSON.parse(await readFile(path.join(workspace, '.qa', 'runs', emptyRunId, 'result.json'), 'utf8'));
+      check(['NO_ATTACHMENTS', 'NO_REQUIREMENT_MATERIALS'].includes(emptyResult.errorCode), '不适用输入写入 errorCode', emptyResult.errorCode);
+      let emptyState = await (await fetch(`${emptyMock.url}/mock/state`, { headers: { Authorization: `Bearer ${MOCK_PAT}` } })).json();
+      const skipComment = emptyState.comments.find((c) => String(c.body || '').includes('评审不适用'));
+      check(Boolean(skipComment), '不适用输入写「评审不适用」评论');
+      check(Boolean(emptyResult.commentId), '不适用输入 result 带 commentId');
+      check(!String(skipComment?.body || '').includes('QA-需求准入门禁结果v'), '不适用评论不是门禁结论');
+      check(emptyState.comments.length === 1, '不适用评论只写一条');
+      const emptyRead2 = run('jira-read.mjs', ['--key', 'QA-101', '--workspace', workspace], emptyEnv);
+      const emptyRunId2 = parseLine(emptyRead2.stdout, 'RUN_ID=');
+      run('jira-download.mjs', ['--key', 'QA-101', '--run-id', emptyRunId2, '--workspace', workspace], emptyEnv);
+      emptyState = await (await fetch(`${emptyMock.url}/mock/state`, { headers: { Authorization: `Bearer ${MOCK_PAT}` } })).json();
+      check(emptyState.comments.length === 1, '不适用评论重复运行不新增');
+    } finally {
+      emptyMock.proc.kill();
+    }
+
+    // ---- 异常不中断：阶段一评论「执行异常」，阶段二只本地留痕 ----
+    const errUpload = run(
+      'jira-upload.mjs',
+      ['--key', 'QA-101', '--file', 'missing.html', '--run-id', 'err-stage1', '--stage', 'risk-analysis', '--workspace', workspace],
+      env,
+    );
+    check(errUpload.status === 0 && errUpload.stdout.includes('"status":"ERROR"'), '阶段一异常 exit 0 + status=ERROR', errUpload.stderr);
+    state = await (await fetch(`${env.JIRA_BASE_URL}/mock/state`, { headers: { Authorization: `Bearer ${MOCK_PAT}` } })).json();
+    check(state.comments.some((c) => String(c.body || '').startsWith('执行异常')), '阶段一异常写「执行异常」评论');
+    const commentsAfterStage1Error = state.comments.length;
+    const errPlan = run('validate-plan.mjs', ['--plan', 'missing-plan.md', '--key', 'QA-101', '--stage', 'design'], env);
+    check(errPlan.status === 0 && errPlan.stdout.includes('"status":"ERROR"'), '阶段二异常 exit 0 + status=ERROR', errPlan.stderr);
+    check(errPlan.stdout.includes('子任务异常'), '阶段二异常标注不写 Jira 评论');
+    state = await (await fetch(`${env.JIRA_BASE_URL}/mock/state`, { headers: { Authorization: `Bearer ${MOCK_PAT}` } })).json();
+    check(state.comments.length === commentsAfterStage1Error, '阶段二异常不新增 Jira 评论');
 
     // 密钥/本机路径扫描（排除 mock 自身）
     const offenders = [];

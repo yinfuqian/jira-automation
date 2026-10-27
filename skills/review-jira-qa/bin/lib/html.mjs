@@ -149,7 +149,8 @@ export async function renderGate(specInput, { templatePath, deliverableVersion, 
     .map(
       (m, i) =>
         `<tr><td>${i + 1}</td><td>${escapeHtml(m.filename)}</td><td>${escapeHtml(m.type || '')}</td>` +
-        `<td>${escapeHtml(m.id || '')}</td><td>${escapeHtml(m.uploadedAt || m.created || '')}</td></tr>`,
+        `<td>${m.id === 'issue-description' ? '—（Jira 字段）' : escapeHtml(m.id || '')}</td>` +
+        `<td>${escapeHtml(m.uploadedAt || m.created || '')}</td></tr>`,
     )
     .join('\n');
   const materials = `<table>
@@ -190,8 +191,15 @@ export function renderComment(specInput, { filename }) {
     }
   }
   lines.push('', `完整清单及原文依据见附件：{{${filename}}}`, '');
-  const ids = spec.materials.map((m) => m.id).filter(Boolean).join('、');
-  lines.push(`材料版本：PRD ${spec.prdVersion || ''}（Jira 附件 ${ids}）`);
+  const attachmentMaterials = spec.materials.filter((m) => m.id !== 'issue-description' && m.source !== 'jira-description');
+  const hasDescription = attachmentMaterials.length !== spec.materials.length;
+  const ids = attachmentMaterials.map((m) => m.id).filter(Boolean).join('、');
+  const materialSuffix = ids
+    ? `（Jira 附件 ${ids}${hasDescription ? '；需求描述取自 Jira 字段' : ''}）`
+    : hasDescription
+      ? '（Jira 附件 无；需求描述取自 Jira 字段）'
+      : '（Jira 附件 无）';
+  lines.push(`材料版本：PRD ${spec.prdVersion || ''}${materialSuffix}`);
   return lines.join('\n');
 }
 

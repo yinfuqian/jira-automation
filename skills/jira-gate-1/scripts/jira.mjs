@@ -680,7 +680,7 @@ export async function resolveFlowOwner(issue, options = {}) {
 }
 
 /**
- * 把需求单流转到指定目标状态（例如「评审中」）。
+ * 把需求单流转到指定目标状态（例如「需求设计」）。
  * 已处于目标状态时直接跳过；找不到对应流转时返回可读原因而不是抛错，便于在未配置该流转的项目上优雅降级。
  */
 export async function transitionToStatus(keyOrUrl, targetStatus, options = {}) {

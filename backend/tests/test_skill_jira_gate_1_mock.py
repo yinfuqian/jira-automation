@@ -143,12 +143,13 @@ console.log(JSON.stringify([m.isSupportedIssueType("故事"), m.isSupportedIssue
         self.assertIn("6.6.2 性能/安全/隐私-敏感数据", text)
         self.assertIn("开发设计中", text)
         self.assertIn("需求设计", text)
-        self.assertIn("评审中", text)
+        self.assertNotIn("评审中", text)
         self.assertIn("业务待决策事项", text)
         self.assertIn("检查项判定明细", text)
         self.assertNotIn("决策卡", text)
         self.assertNotIn("通过→开发设计中", text)
-        self.assertNotIn("退回补充→需求设计", text)
+        self.assertIn("退回补充→需求设计", text)
+        self.assertNotIn("退回补充→评审中", text)
         self.assertIn("### 12. 打包交付", text)
         self.assertIn("### 11. 生成原型设计准入报告（review-jira-design）", text)
         self.assertIn("### 13. 收尾：清理本次任务的工作区中间产物", text)
@@ -185,10 +186,10 @@ class PackDeliverablesTests(unittest.TestCase):
         self.work = Path(self.tmp.name)
         self.comment = self.work / "comment.txt"
         self.comment.write_text(
-            "h3. G1 需求准入结论（预演）：退回补充（流转至评审中）\n"
+            "h3. G1 需求准入结论（预演）：退回补充（流转至需求设计）\n"
             "\n"
             "* 结论：退回补充 | 依据：PRD 需求准入 Checklist\n"
-            "* 建议处理人：[~liu.huan]｜建议流转：评审中（预演未执行）\n"
+            "* 建议处理人：[~liu.huan]｜建议流转：需求设计（预演未执行）\n"
             "\n"
             "h4. MUST（8 项）\n"
             "\n"
