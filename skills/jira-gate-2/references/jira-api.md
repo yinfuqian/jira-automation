@@ -96,6 +96,7 @@ Jira 的 `/rest/...` 地址在浏览器里会被拦截（`ERR_BLOCKED_BY_CLIENT`
 
 - `ADD_COMMENTS`：为 `false` 时不要写评论，直接告知用户缺权限，不要反复重试。
 - `TRANSITION_ISSUES`：为 `false` 时跳过退回补充的流转，评论写「未流转（缺少流转权限）」；结论为通过时不调用流转接口。
+- `CREATE_ATTACHMENTS`：上传 PDCA RD 报告所需；为 `false` 时跳过上传，评论里的「PDCA 报告」行写「未上传（缺少上传权限）」，PDCA 结论保持不变，同样不要反复重试。
 
 `jira-cli.mjs` 没有单独的 `mypermissions` 子命令时，用 `jira.mjs` 的 `mypermissions()`（`node_repl` / 动态导入）或直接调用上面的 REST 接口。
 
@@ -105,7 +106,18 @@ Jira 的 `/rest/...` 地址在浏览器里会被拦截（`ERR_BLOCKED_BY_CLIENT`
 - 评论用 Jira wiki 标记：`h3.` / `h4.` / `h5.` 标题、`*粗体*`、行首 `* ` 无序列表、行首 `# ` 有序列表、`(/)` 绿勾、`(x)` 红叉、`{{等宽}}`。
 - 不要提交 Markdown 表格；需要表格时用 `||表头||` + `|单元格|`。
 - 评论正文避免出现未转义的花括号组合（`{color}` 之类会被当作宏）。
-- 结论只以评论留痕，不生成报告文档、不上传附件；本地仅保留附件与解析中间文件。
+- G2 判定结论只以评论留痕；附件只上传 PDCA RD 角色报告一份（见 `SKILL.md` §5.2），其余报告文档不生成、不上传。
+
+**PDCA 报告上传与读回**
+
+```bash
+node scripts/jira-cli.mjs attach <KEY|URL> work/jira-gate-2/<KEY>/pdca/<报告文件名> --name <报告文件名>
+node scripts/jira-cli.mjs attach-list <KEY|URL>
+```
+
+- 上传前先用 `attach-list` 检查同需求、同角色、同日期已有报告，`NN` 取最大序号 + 1，不覆盖历史快照。
+- 上传后必须 `attach-list` 读回确认文件名与大小；读回不到时在评论里写「未上传（原因）」，不要伪造附件名。
+- 附件名使用 `{{需求名称}}_RD_{{YYYYMMDD}}_{{NN}}_PDCA.md`，不要改名绕开上传失败。
 
 ## 9. 交付顺序、类型预检与状态流转
 
@@ -137,7 +149,7 @@ node scripts/jira-cli.mjs transition <KEY|URL> --to 开发设计中 # 仅退回�
 
 **降级**：匹配不到流转时返回 `{ok:false, reason:"no-transition", status, target, available}`，`available` 是当前可用流转列表；按 `SKILL.md` §9 记「未流转（该单当前状态无目标状态流转）」，并在对话里列出 `available` 交人工处理，不要改用其他状态。已在目标状态时返回 `{ok:true, skipped:true, reason:"already-in-target"}`，不重复发起流转。
 
-**顺序固定**：**评论（含 @）→ 门禁字段 → 流转（仅退回补充）**，流转放最后。通过时不流转，评论里的「状态流转：」固定写「未流转（通过，保持当前状态）」；退回补充时评论先按预期写，流转跑完必须核对返回值，任一非成功分支都用 `comment-update` 改成实际措辞。
+**顺序固定**：**PDCA 报告上传（读回确认）→ 评论（含 @）→ 门禁字段 → 流转（仅退回补充）**，流转放最后。报告先上传，评论里的「PDCA 报告」行才能写实际结果；通过时不流转，评论里的「状态流转：」固定写「未流转（通过，保持当前状态）」；退回补充时评论先按预期写，流转跑完必须核对返回值，任一非成功分支都用 `comment-update` 改成实际措辞。
 
 ## 10. G2 门禁字段（Jira 管理端配置）
 
