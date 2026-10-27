@@ -379,7 +379,7 @@ powershell -ExecutionPolicy Bypass -File scripts\export_release_image.ps1 `
 系统内置技能执行能力：外部系统提交一个 Jira 链接与 `skill_id`，服务端在独立工作目录中启动 Codex CLI，
 加载 `skills/<skill_id>/SKILL.md`，由 Agent 按技能定义访问 Jira、执行检查并写回评论。当前内置技能为
 `jira-gate-1`（Jira 需求准入检查 G1：先按 PRD 需求准入 Checklist 判定，再依次调用
-`review-jira-req`、`review-jira-design`、`review-jira-qa`；三条准出任一不通过即流转到「评审中」
+`review-jira-req`、`review-jira-design`、`review-jira-qa`；三条准出任一不通过即流转到「需求设计」
 并在评论里 @ 流转人。`review-jira-req` 生成 OpenSpec 评审报告，`review-jira-design` 生成 PRD—原型
 一致性审核报告，两份报告都上传为附件；`review-jira-qa` 自行上传需求准入门禁清单 HTML 并写 QA 评论；
 三个子技能的任何失败都不得中断 G1，运营性失败只记为「未完成（原因）」，仍继续写评论、回写门禁字段、

@@ -1,4 +1,4 @@
-"""技能流转契约测试：锁定 G1「通过不流转、退回补充→评审中」与故事类型门禁。"""
+"""技能流转契约测试：锁定 G1「通过不流转、退回补充→需求设计」与故事类型门禁。"""
 import json
 import shutil
 import subprocess
@@ -19,19 +19,19 @@ NODE = shutil.which("node")
 
 class SkillJiraGateFlowTests(unittest.TestCase):
     def test_skill_documents_return_flow_and_type_gate(self):
-        """SKILL.md 必须写明通过不流转、退回补充流转到「评审中」，并且只处理「故事」类型。"""
+        """SKILL.md 必须写明通过不流转、退回补充流转到「需求设计」，并且只处理「故事」类型。"""
         text = SKILL_PATH.read_text(encoding="utf-8")
 
         self.assertIn("### 9. 交付顺序与「仅退回补充时流转并 @ 流转人」", text)
-        self.assertIn("评审中", text)
-        self.assertIn("--to 评审中", text)
+        self.assertIn("需求设计", text)
+        self.assertIn("--to 需求设计", text)
         self.assertIn("通过不流转", text)
         self.assertIn("业务待决策事项", text)
         self.assertNotIn("决策卡", text)
         self.assertIn("只处理类型为「故事」", text)
         self.assertIn("precheck", text)
         self.assertNotIn("--to 开发设计中", text)
-        self.assertNotIn("--to 需求设计", text)
+        self.assertNotIn("--to 评审中", text)
         # 旧口径「一律不流转状态」必须已被替换，否则与本次需求冲突。
         self.assertNotIn("不流转状态、不指派经办人", text)
 
@@ -52,7 +52,7 @@ class SkillJiraGateFlowTests(unittest.TestCase):
 
         self.assertEqual(payload["required_inputs"], ["jira_url"])
         self.assertIn("precheck", payload["prompt_template"])
-        self.assertIn("评审中", payload["prompt_template"])
+        self.assertIn("需求设计", payload["prompt_template"])
         self.assertIn("结论「通过」不流转状态", payload["prompt_template"])
         self.assertIn("review-jira-req", payload["prompt_template"])
         self.assertIn("review-jira-design", payload["prompt_template"])
@@ -189,7 +189,7 @@ class SkillJiraGateFlowTests(unittest.TestCase):
         self.assertIn("TRANSITION_ISSUES", text)
         self.assertIn("no-transition", text)
         self.assertIn("available", text)
-        self.assertIn("--to 评审中", text)
+        self.assertIn("--to 需求设计", text)
         self.assertIn("通过不流转", text)
 
     def test_flow_owner_defaults_to_assignee(self):

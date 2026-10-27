@@ -108,7 +108,7 @@ nodeRepl.write(["ADD_COMMENTS", "EDIT_ISSUES", "TRANSITION_ISSUES"].map(n => `${
 
 实测 `ZY20260061-3343`：`ADD_COMMENTS=true`、`EDIT_ISSUES=true`、`TRANSITION_ISSUES=true`。若 `ADD_COMMENTS=false`，不要反复重试，直接告知用户缺少评论权限。
 
-`TRANSITION_ISSUES` 是退回补充时流转状态（→ 评审中）所需的权限。为 `false` 时**跳过流转动作**，评论里写「未流转（缺少流转权限）」，同样不要反复重试。结论为通过时不调用流转接口，因此不依赖该权限。
+`TRANSITION_ISSUES` 是退回补充时流转状态（→ 需求设计）所需的权限。为 `false` 时**跳过流转动作**，评论里写「未流转（缺少流转权限）」，同样不要反复重试。结论为通过时不调用流转接口，因此不依赖该权限。
 
 `CREATE_ATTACHMENTS` 是「上传需求评审报告、原型设计准入报告与 QA 准入门禁清单」所需的权限（见 §10、§10.1、§10.2）。为 `false` 时跳过上传，并在对话里如实说明缺权限。
 
@@ -138,7 +138,7 @@ nodeRepl.write(last.id + " | " + last.author + " | " + last.body.slice(0, 120));
 交付顺序对所有结论都适用：三个评审技能（`review-jira-req` → `review-jira-design` → `review-jira-qa`）→ G1 评论（含 @）→ 门禁字段 → 附件 → 流转。前三步对所有结论执行，**状态流转只在综合结论为「退回补充」时执行**：
 
 - 结论「通过」：**不流转状态**，保持当前状态，允许进入技术方案设计；不 @ 人。
-- 结论「退回补充」：流转到 **评审中**，并在评论里 @ 流转人。
+- 结论「退回补充」：流转到 **需求设计**，并在评论里 @ 流转人。
 
 **先做类型预检**：只有问题类型为「故事」（英文站点 `Story` 视为同一类型）才执行本技能；类型不符时直接停止，不做任何写操作。命令行入口：
 
@@ -149,17 +149,17 @@ node scripts/jira-cli.mjs precheck <KEY|URL>
 
 1. **流转人从哪来**：本站在 `/rest/api/2/field` 里没有名为「流转人」的字段（实测名字含「流转」的字段为 0 个），因此本技能已确认的口径是**取经办人 `assignee`**；仅在经办人为空时才按 `assignee → reporter → creator` 回退，回退取到时对话摘要里要写明实际来源（`resolveFlowOwner()` 返回的 `source` 字段会标明）。需要长期换口径时在技能目录的 `jira-config.json`（即仓库 `skills/jira-gate-1/jira-config.json`，随技能目录挂载进容器）里用 `flowOwnerField` 指定人员字段名，**不要改脚本**。
 2. **@ 写法**：Jira Server / DC 按登录名引用，`[~liu.huan]` 渲染为「刘欢」。`resolveFlowOwner()` 直接返回拼好的 `mention`；实测 `flow-owner ZYSQ-95` → `{"name":"liu.huan","displayName":"刘欢","mention":"[~liu.huan]","field":"assignee"}`。
-3. **退回补充的目标状态固定为「评审中」**；结论为通过时不得调用流转接口。**不要写死流转 id**：不同项目工作流的流转 id 与流转名都可能不同，`transitionToStatus()` 按目标状态名匹配（先比 `to`，再比 `name`）。
+3. **退回补充的目标状态固定为「需求设计」**；结论为通过时不得调用流转接口。**不要写死流转 id**：不同项目工作流的流转 id 与流转名都可能不同，`transitionToStatus()` 按目标状态名匹配（先比 `to`，再比 `name`）。
 
 ```bash
 node scripts/jira-cli.mjs transitions <KEY|URL>             # 只读：看当前可用流转
 node scripts/jira-cli.mjs flow-owner <KEY|URL>              # 只读：看流转人与 @ 写法
-node scripts/jira-cli.mjs transition <KEY|URL> --to 评审中       # 仅退回补充
+node scripts/jira-cli.mjs transition <KEY|URL> --to 需求设计       # 仅退回补充
 ```
 
 4. **匹配不到流转时不抛错**：返回 `{ok:false, reason:"no-transition", status, target, available}`，`available` 是当前可用流转列表。若当前状态没有通向目标状态的流转，按 `SKILL.md` §9 记「未流转（该单当前状态无目标状态流转）」，并在对话里列出 `available` 交人工处理，不要改用其他状态。
 5. 已在目标状态时返回 `{ok:true, skipped:true, reason:"already-in-target"}`，不重复发起流转。
-6. 写评论、回写门禁字段、上传附件、流转的顺序固定为：**评论（含 @）→ 门禁字段 → 附件 → 流转**，流转放最后（见 §10）。前三步对所有结论都执行；流转只在退回补充时执行，目标为「评审中」，通过不流转。
+6. 写评论、回写门禁字段、上传附件、流转的顺序固定为：**评论（含 @）→ 门禁字段 → 附件 → 流转**，流转放最后（见 §10）。前三步对所有结论都执行；流转只在退回补充时执行，目标为「需求设计」，通过不流转。
 7. 因为是评论先写、流转后做，评论里的「流转：」先按预期结果写；流转跑完必须核对返回值，任一非成功分支都用 `comment-update` 改成实际措辞（措辞见 `SKILL.md` §9 的表）。
 
 ## 10. 评审报告附件上传
@@ -327,7 +327,7 @@ const d  = await j.setGateResult("CALL-1940", { result: "通过" }, { dryRun: tr
 ```javascript
 const ts = await j.listTransitions("CALL-1446");                 // 当前可用流转 [{id, name, to}]
 const fo = await j.resolveFlowOwner(issue);                      // 流转人与 @ 写法 {name, mention, field}
-const back = await j.transitionToStatus("ZYSQ-95", "评审中");     // 仅退回补充时流转
+const back = await j.transitionToStatus("ZYSQ-95", "需求设计");     // 仅退回补充时流转
 ```
 
 评审报告附件：

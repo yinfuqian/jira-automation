@@ -1,4 +1,4 @@
 interface:
   display_name: "Jira G1 需求准入检查"
-  short_description: "按 PRD 需求准入 Checklist 检查 Jira 故事单，依次运行 review-jira-req、review-jira-design、review-jira-qa；评论里用绿勾/红叉逐项展示并附设计准入与 QA 结论；任一准出不通过则流转到「评审中」并 @ 流转人"
-  default_prompt: "用 $jira-gate-1 检查这个 Jira 需求链接是否达到 G1 需求准入标准。先确认单据类型是「故事」，不是就跳过；按 PRD 需求准入 Checklist 逐项判定，再依次调用 review-jira-req 生成需求评审报告、review-jira-design 生成原型设计准入报告、review-jira-qa 只执行阶段一生成 QA 清单，把三条准出的综合结论和绿勾/红叉清单写进评论，并上传需求评审报告与设计准入报告。三个子技能的任何失败都不得中断 G1：运营性失败只记为「未完成（原因）」，继续完成评论、门禁字段、附件与必要流转。任一业务准出不通过就流转到「评审中」并在评论里 @ 流转人，全部通过则保持当前状态。"
+  short_description: "按 PRD 需求准入 Checklist 检查 Jira 故事单，依次运行 review-jira-req、review-jira-design、review-jira-qa；评论里用绿勾/红叉逐项展示并附设计准入与 QA 结论；任一准出不通过则流转到「需求设计」并 @ 流转人"
+  default_prompt: "用 $jira-gate-1 检查这个 Jira 需求链接是否达到 G1 需求准入标准。先确认单据类型是「故事」，不是就跳过；按 PRD 需求准入 Checklist 逐项判定，再依次调用 review-jira-req 生成需求评审报告、review-jira-design 生成原型设计准入报告、review-jira-qa 只执行阶段一生成 QA 清单，把三条准出的综合结论和绿勾/红叉清单写进评论，并上传需求评审报告与设计准入报告。三个子技能的任何失败都不得中断 G1：运营性失败只记为「未完成（原因）」，继续完成评论、门禁字段、附件与必要流转。任一业务准出不通过就流转到「需求设计」并在评论里 @ 流转人，全部通过则保持当前状态。"
