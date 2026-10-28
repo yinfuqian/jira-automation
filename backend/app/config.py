@@ -201,7 +201,7 @@ class Config:
     if not os.path.exists(LOG_DIR):
         os.makedirs(LOG_DIR, exist_ok=True)
 
-    LOGGING_LEVEL = os.getenv("LOGGING_LEVEL", "DEBUG")
+    LOGGING_LEVEL = os.getenv("LOGGING_LEVEL", "INFO")
     LOGGING_FORMAT = os.getenv("LOGGING_FORMAT", "%(asctime)s - %(name)s - %(levelname)s - %(message)s")
     LOGGING_FILE = os.getenv("LOGGING_FILE", os.path.join(LOG_DIR, "app.log"))
 
@@ -350,6 +350,8 @@ class Config:
     CELERY_BROKER_URL = os.getenv('CELERY_BROKER_URL', REDIS_URL)  # Redis 作为消息队列
     CELERY_RESULT_BACKEND = os.getenv('CELERY_RESULT_BACKEND', REDIS_URL)  # Redis 作为结果存储
     CELERY_BROKER_POOL_LIMIT = int(os.getenv("CELERY_BROKER_POOL_LIMIT", "10"))
+    # 长耗时任务一次只预取一条，避免 worker 异常退出后多条消息滞留在 Redis unacked。
+    CELERY_WORKER_PREFETCH_MULTIPLIER = 1
     CELERY_VISIBILITY_TIMEOUT = int(os.getenv("CELERY_VISIBILITY_TIMEOUT", "7200"))
     # 不同任务进入独立队列，由 Compose 中对应的 Worker 消费，避免技能任务与日志分析互相排队。
     CELERY_TASK_DEFAULT_QUEUE = "analysis"

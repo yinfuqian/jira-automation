@@ -104,8 +104,12 @@ def run_skill_task(self, record_id: int):
     """执行一次技能任务：准备独立工作目录、调用 Codex Agent，并回写状态与结果。"""
     record = db.session.get(SkillRunRecord, record_id)
     if record is None:
-        logging.warning("技能任务记录不存在：record_id=%s", record_id)
-        return {"record_id": record_id, "status": "missing"}
+        message = (
+            f"技能任务记录不存在：record_id={record_id}；"
+            "请检查 API 与 skill worker 是否连接同一个 MYSQL_DATABASE"
+        )
+        logging.error(message)
+        raise RuntimeError(message)
 
     config = current_app.config
     # 队列消息可能在 worker 长时间不可用后才被取出：终态或超时排队的任务不得再次执行。

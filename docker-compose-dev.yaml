@@ -58,7 +58,7 @@ services:
     ports:
       - "${API_PORT}:6000"
     volumes:
-      - ./data/users-dev.csv:/users.csv
+      - ./data/users-dev.csv:/data/users.csv:ro
       - ./data/upload-dev:/data/upload
       - ./data/logs-dev:/app/app/logs
       - ./data/repos-dev:/tmp/log-analyzer-repos
@@ -84,10 +84,12 @@ services:
       - celery_worker.celery_app
       - worker
       - --loglevel=INFO
+      - --hostname=worker-analysis-dev@%h
       - -Q
       - analysis,maintenance
       - --concurrency=2
     volumes:
+      - ./data/users-dev.csv:/data/users.csv:ro
       - ./data/upload-dev:/data/upload
       - ./data/logs-dev:/app/app/logs
       - ./data/repos-dev:/tmp/log-analyzer-repos
@@ -145,10 +147,12 @@ services:
       - celery_worker.celery_app
       - worker
       - --loglevel=INFO
+      - --hostname=worker-skill-dev@%h
       - -Q
       - skill
       - --concurrency=2
     volumes:
+      - ./data/users-dev.csv:/data/users.csv:ro
       - ./data/upload-dev:/data/upload
       - ./data/logs-dev:/app/app/logs
       - ./data/repos-dev:/tmp/log-analyzer-repos
@@ -184,6 +188,7 @@ services:
       - --loglevel=INFO
       - --schedule=/data/celerybeat/celerybeat-schedule
     volumes:
+      - ./data/users-dev.csv:/data/users.csv:ro
       - ./data/celerybeat-dev:/data/celerybeat
     restart: unless-stopped
     depends_on:
@@ -238,6 +243,7 @@ services:
       - -c
       - python init_database.py && (flask db upgrade || python bootstrap_schema.py)
     volumes:
+      - ./data/users-dev.csv:/data/users.csv:ro
       - ./data/upload-dev:/data/upload
       - ./data/logs-dev:/app/app/logs
       - ./data/repos-dev:/tmp/log-analyzer-repos

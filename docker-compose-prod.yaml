@@ -59,7 +59,7 @@ services:
     ports:
       - "${API_PORT}:5000"
     volumes:
-      - ./data/users.csv:/users.csv
+      - ./data/users.csv:/data/users.csv:ro
       - ./data/upload:/data/upload
       - ./data/logs:/app/app/logs
       - ./data/repos:/tmp/jira-automation-repos
@@ -85,10 +85,12 @@ services:
       - celery_worker.celery_app
       - worker
       - --loglevel=INFO
+      - --hostname=worker-analysis@%h
       - -Q
       - analysis,maintenance
       - --concurrency=2
     volumes:
+      - ./data/users.csv:/data/users.csv:ro
       - ./data/upload:/data/upload
       - ./data/logs:/app/app/logs
       - ./data/repos:/tmp/jira-automation-repos
@@ -146,10 +148,12 @@ services:
       - celery_worker.celery_app
       - worker
       - --loglevel=INFO
+      - --hostname=worker-skill@%h
       - -Q
       - skill
       - --concurrency=2
     volumes:
+      - ./data/users.csv:/data/users.csv:ro
       - ./data/upload:/data/upload
       - ./data/logs:/app/app/logs
       - ./data/repos:/tmp/jira-automation-repos
@@ -185,6 +189,7 @@ services:
       - --loglevel=INFO
       - --schedule=/data/celerybeat/celerybeat-schedule
     volumes:
+      - ./data/users.csv:/data/users.csv:ro
       - ./data/celerybeat:/data/celerybeat
     restart: unless-stopped
     depends_on:
@@ -239,6 +244,7 @@ services:
       - -c
       - python init_database.py && (flask db upgrade || python bootstrap_schema.py)
     volumes:
+      - ./data/users.csv:/data/users.csv:ro
       - ./data/upload:/data/upload
       - ./data/logs:/app/app/logs
       - ./data/repos:/tmp/jira-automation-repos

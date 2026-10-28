@@ -16,8 +16,8 @@ class DefaultUsersCsvTests(unittest.TestCase):
         self.assertEqual(user.status, 1)
 
         compose_text = (project_dir / "docker-compose-dev.yaml").read_text(encoding="utf-8")
-        # 线上 API 使用宿主机 data 目录中的用户表。
-        self.assertEqual(compose_text.count("./data/users.csv:/users.csv"), 1)
+        # API、两个 Worker、Beat 与迁移容器都要读取同一个用户表。
+        self.assertEqual(compose_text.count("./data/users-dev.csv:/data/users.csv:ro"), 5)
 
 
 if __name__ == "__main__":

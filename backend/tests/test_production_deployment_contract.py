@@ -30,6 +30,19 @@ class ProductionDeploymentContractTests(unittest.TestCase):
         # host 网络下 ports 映射不生效，gunicorn 必须直接监听 API_PORT。
         self.assertIn("0.0.0.0:${API_PORT:-5000}", source)
 
+    def test_restart_scripts_remove_obsolete_worker_services(self):
+        """重建时必须移除旧版 worker 容器，避免旧消费者继续占用错误队列。"""
+        for name in ("restart-master.sh", "restart-dev.sh"):
+            source = (PROJECT_ROOT / name).read_text(encoding="utf-8")
+            self.assertIn("--remove-orphans", source)
+
+    def test_all_production_services_read_users_from_image_configured_path(self):
+        """所有启动 Flask 应用的服务都必须把用户文件挂到 AUTH_USERS_FILE 指定位置。"""
+        source = ONLINE_COMPOSE.read_text(encoding="utf-8")
+
+        self.assertEqual(source.count("./data/users.csv:/data/users.csv:ro"), 5)
+        self.assertNotIn(":/users.csv", source)
+
     def test_frontend_image_supports_template_upstreams(self):
         template = (PROJECT_ROOT / "frontend" / "nginx.conf").read_text(encoding="utf-8")
         dockerfile = (PROJECT_ROOT / "frontend" / "Dockerfile").read_text(encoding="utf-8")

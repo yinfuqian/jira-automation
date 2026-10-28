@@ -228,7 +228,6 @@ SKIP_CODE_SEARCH_DIRS = {
 
 # 配置 Flask Blueprint 和日志格式
 analysis_bp = Blueprint("analysis", __name__)
-logging.basicConfig(level=logging.DEBUG, format="%(asctime)s - %(levelname)s - %(message)s")
 
 @analysis_bp.route("/branch_get", methods=["POST"])
 def get_branch_info():

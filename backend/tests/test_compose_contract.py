@@ -34,12 +34,24 @@ class ComposeContractTests(unittest.TestCase):
         self.assertIn("0.0.0.0:6000", source)
         self.assertIn('"${API_PORT}:6000"', source)
 
+    def test_split_workers_have_unique_celery_node_names(self):
+        """host 网络下两个 Worker 共用主机名，必须显式设置唯一节点名供巡检识别。"""
+        expected = {
+            DEV_COMPOSE_PATH: ("worker-analysis-dev@%h", "worker-skill-dev@%h"),
+            PROD_COMPOSE_PATH: ("worker-analysis@%h", "worker-skill@%h"),
+        }
+        for path, hostnames in expected.items():
+            source = path.read_text(encoding="utf-8")
+            for hostname in hostnames:
+                self.assertIn(f"--hostname={hostname}", source)
+
     def test_online_compose_mounts_runtime_data_and_skills(self):
         source = DEV_COMPOSE_PATH.read_text(encoding="utf-8")
 
         self.assertEqual(source.count("env_file:\n      - .env"), 5)
+        self.assertEqual(source.count("./data/users-dev.csv:/data/users.csv:ro"), 5)
+        self.assertNotIn(":/users.csv", source)
         for mount in (
-            "./data/users-dev.csv:/users.csv",
             "./data/upload-dev:/data/upload",
             "./data/logs-dev:/app/app/logs",
             "./data/repos-dev:/tmp/log-analyzer-repos",
@@ -55,7 +67,7 @@ class ComposeContractTests(unittest.TestCase):
             "./data/logs:/app/app/logs",
             "./data/repos:/tmp/log-analyzer-repos",
             "./data/codex:/data/codex",
-            "./data/users.csv:/users.csv",
+            "./data/users.csv:/data/users.csv:ro",
             "./data/skill-workspace:/data/skill-workspace",
             "./data/m2/repository:/root/.m2/repository",
         ):

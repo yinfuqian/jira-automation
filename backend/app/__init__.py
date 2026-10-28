@@ -86,6 +86,10 @@ def setup_logging(app):
     root_logger = logging.getLogger()
     root_logger.setLevel(level)
 
+    # Celery 注册任务时会用 head_from_fun 生成函数签名，并以 DEBUG 打印固定源码模板。
+    # 模板中的 return 1 只是占位符，不是业务任务真的返回 1，生产日志无需保留该噪音。
+    logging.getLogger("celery.utils.functional").setLevel(logging.INFO)
+
     log_file = app.config["LOGGING_FILE"]
     has_file_handler = any(
         getattr(handler, "_jira_automation_log_path", None) == log_file

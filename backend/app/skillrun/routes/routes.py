@@ -105,7 +105,12 @@ def _create_and_enqueue_skill(skill, jira_url: str, inputs: dict, requested_by: 
             or queue_expiry.DEFAULT_QUEUE_TTL_SECONDS
         )
         # 消息在队列中超过 TTL 后即使被取出也不再执行；数据库记录由周期清理任务同步置为失败。
-        run_skill_task.apply_async(args=[record.id], task_id=task_id, expires=queue_ttl)
+        run_skill_task.apply_async(
+            args=[record.id],
+            task_id=task_id,
+            expires=queue_ttl,
+            queue="skill",
+        )
     except Exception as exc:  # noqa: BLE001 - 入队失败需要立刻反馈而不是留下假排队记录
         logging.exception("技能任务入队失败：task_id=%s", task_id)
         store.mark_finished(

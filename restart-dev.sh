@@ -12,5 +12,5 @@ if [ "${#SERVICES[@]}" -eq 0 ]; then
   SERVICES=(api-dev worker-analysis-dev worker-skill-dev beat-dev)
 fi
 
-docker compose --env-file "${ENV_FILE}" -f "${COMPOSE_FILE}" up -d --force-recreate "${SERVICES[@]}"
+docker compose --env-file "${ENV_FILE}" -f "${COMPOSE_FILE}" up -d --force-recreate --remove-orphans "${SERVICES[@]}"
 docker compose --env-file "${ENV_FILE}" -f "${COMPOSE_FILE}" ps "${SERVICES[@]}"

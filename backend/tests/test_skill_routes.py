@@ -147,6 +147,8 @@ class SkillRouteTests(unittest.TestCase):
         task.apply_async.assert_called_once()
         # 入队消息必须带 60 分钟过期时间，避免 worker 长时间不可用时被延后执行。
         self.assertEqual(task.apply_async.call_args.kwargs["expires"], 60 * 60)
+        # 技能消息必须显式投递到 skill 队列，不能依赖部署侧的路由配置。
+        self.assertEqual(task.apply_async.call_args.kwargs["queue"], "skill")
 
     def test_submit_reports_enqueue_failure(self):
         """入队失败时记录失败状态并返回 503。"""

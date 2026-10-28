@@ -11,7 +11,7 @@ MySQL 和 Redis 必须在 `.env.production` 中填写宿主机可访问的真实
 1. 将 `docker-compose-prod.yaml`、`.env.production.example`、`users.example.csv`、`restart-master.sh` 和本说明放在同一目录；
    解压部署包时 `config/maven/settings.xml` 要保持 `config/maven/` 相对路径不变（生产 Compose 按该路径挂载）。
 2. 将 `.env.production.example` 复制为 `.env.production`，填写镜像地址、MySQL、Redis、模型和第三方接口配置。
-3. 将 `users.example.csv` 复制为 `data/users.csv`（Compose 将它挂载到容器 `/users.csv`），修改默认密码并由管理员持续维护。
+3. 将 `users.example.csv` 复制为 `data/users.csv`（Compose 将它挂载到所有服务的 `/data/users.csv`），修改默认密码并由管理员持续维护。
 4. 如需使用技能执行接口（`/skill`），把 `skills/` 目录上传到与 Compose 文件同级的位置（容器只读挂载为 `/data/skills`），技能所需的模型参数在 `.env.production` 中配置。
 5. 登录镜像仓库后拉取并启动：
 

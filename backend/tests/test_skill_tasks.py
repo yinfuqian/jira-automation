@@ -91,6 +91,16 @@ class SkillTaskTests(unittest.TestCase):
             db.session.expire_all()
             return payload, runner
 
+    def test_missing_record_fails_instead_of_reporting_success(self):
+        """Worker 连接错库时必须明确失败，不能把 missing 当成成功结果。"""
+        from app.skillrun.tasks import run_skill_task
+
+        result = run_skill_task.apply(args=[10**9])
+        outcome = result.get(propagate=False)
+
+        self.assertIsInstance(outcome, RuntimeError)
+        self.assertIn("技能任务记录不存在", str(outcome))
+
     def test_successful_run_persists_result_and_session(self):
         """Codex 正常结束时记录状态为成功并保存结论与统计信息。"""
         from app.skillrun import store

@@ -72,6 +72,14 @@ class AsyncConfigTests(unittest.TestCase):
         self.assertTrue(enabled)
         self.assertFalse(disabled)
 
+    def test_logging_defaults_to_info_when_not_configured(self):
+        """未显式配置时不应默认开启框架 DEBUG，避免生产日志被内部实现刷屏。"""
+        with patch.dict(os.environ, {}, clear=False):
+            os.environ.pop("LOGGING_LEVEL", None)
+            config = load_config_module().Config
+
+        self.assertEqual(config.LOGGING_LEVEL, "INFO")
+
     def test_database_defaults_to_requested_mysql_database(self):
         env = {
             "MYSQL_HOST": "180.184.70.137",
@@ -171,6 +179,12 @@ class AsyncConfigTests(unittest.TestCase):
                 "git.sync_projects": {"queue": "maintenance"},
             },
         )
+
+    def test_celery_workers_do_not_prefetch_multiple_long_running_tasks(self):
+        """Worker 异常退出时，单次预取一条可避免其余消息长期滞留在 unacked。"""
+        config = load_config_module().Config
+
+        self.assertEqual(config.CELERY_WORKER_PREFETCH_MULTIPLIER, 1)
 
     def test_skill_queue_expiry_is_scheduled_every_minute(self):
         """技能队列过期清理必须由 Beat 周期执行，不能依赖 worker 重启。"""

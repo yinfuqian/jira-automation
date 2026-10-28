@@ -42,6 +42,24 @@ class RequestLoggingTests(unittest.TestCase):
             content = Path(app.config["LOGGING_FILE"]).read_text(encoding="utf-8")
             self.assertIn("sync-progress-visible", content)
 
+    def test_setup_logging_suppresses_celery_signature_debug_noise(self):
+        """Celery 生成任务签名时会打印伪造的 return 1 源码，不应进入业务 DEBUG 日志。"""
+        with tempfile.TemporaryDirectory() as temp_dir:
+            app = Flask(__name__)
+            app.config.update(
+                LOG_DIR=temp_dir,
+                LOGGING_FILE=str(Path(temp_dir) / "app.log"),
+                LOGGING_LEVEL="DEBUG",
+                LOGGING_FORMAT="%(levelname)s %(name)s %(message)s",
+            )
+
+            setup_logging(app)
+
+            self.assertEqual(
+                logging.getLogger("celery.utils.functional").level,
+                logging.INFO,
+            )
+
     def test_request_logging_records_start_end_and_request_id(self):
         app = Flask(__name__)
         install_request_logging(app)

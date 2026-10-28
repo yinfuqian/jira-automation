@@ -348,7 +348,7 @@ Maven 本地仓库（`./data/m2/repository`）体积大且不随包发布，需�
 
 ### 生产服务器更新
 
-生产服务器首次部署时，把 `.env.production.example` 复制为 `.env.production`，把 `users.example.csv` 复制为 `config/users.csv`（该目录对应容器内 `/data/`，即 `AUTH_USERS_FILE=/data/users.csv`），填写真实配置后执行：
+生产服务器首次部署时，把 `.env.production.example` 复制为 `.env.production`，把 `users.example.csv` 复制为 `data/users.csv`（Compose 将它挂载到容器内 `/data/users.csv`，与 `AUTH_USERS_FILE=/data/users.csv` 保持一致），填写真实配置后执行：
 
 ```bash
 docker compose --env-file .env.production -f docker-compose-prod.yaml pull
