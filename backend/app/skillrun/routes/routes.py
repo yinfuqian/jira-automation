@@ -12,10 +12,11 @@ from urllib.parse import urlparse
 
 from celery.result import AsyncResult
 from flask import Blueprint, current_app, g, jsonify, request, send_file
+from sqlalchemy.exc import SQLAlchemyError
 
 from extensions import celery
 
-from .. import artifacts, env_lock, queue_expiry, store, tickets, usage
+from .. import artifacts, env_lock, queue_expiry, stats, store, tickets, usage
 from ..models.model import SkillRunRecord
 from ..registry import SkillError, list_skills, resolve_skill
 from ..tasks import run_skill_task
@@ -191,6 +192,36 @@ def list_available_skills():
     """列出技能目录中全部可用技能，供外部系统选择 skill_id。"""
     skills = [skill.to_dict() for skill in list_skills(current_app.config.get("SKILLS_DIR"))]
     return jsonify({"skills": skills, "total": len(skills)})
+
+
+@skill_bp.get("/stats/skills")
+def get_skill_statistics():
+    """按技能查询调用次数、执行状态、业务结论、耗时与阻断项统计。"""
+    try:
+        filters = stats.parse_filters(request.args)
+    except stats.StatsRequestError as exc:
+        return jsonify({"error": exc.message, "field": exc.field}), 400
+
+    try:
+        return jsonify(stats.query_skill_statistics(filters))
+    except SQLAlchemyError:
+        logging.exception("技能统计查询失败：filters=%s", filters)
+        return jsonify({"error": "技能统计查询失败"}), 500
+
+
+@skill_bp.get("/stats/issues")
+def get_issue_statistics():
+    """按需求单与技能查询首次结论、最终结论及最近一次执行明细。"""
+    try:
+        filters = stats.parse_filters(request.args)
+    except stats.StatsRequestError as exc:
+        return jsonify({"error": exc.message, "field": exc.field}), 400
+
+    try:
+        return jsonify(stats.query_issue_statistics(filters))
+    except SQLAlchemyError:
+        logging.exception("需求单统计查询失败：filters=%s", filters)
+        return jsonify({"error": "需求单统计查询失败"}), 500
 
 
 @skill_bp.post("/run")

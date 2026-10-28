@@ -548,6 +548,33 @@ ORDER BY created_at DESC
 LIMIT 100;
 ```
 
+### 技能统计接口
+
+统计接口基于 `skill_call_records` 与 `skill_run_records`，只统计两表能按
+`record_id`、`task_id` 同时关联的记录，并剔除 `outcome=not_applicable` 的数据。
+
+| 接口 | 说明 |
+| --- | --- |
+| `GET /skill/stats/skills` | 按技能返回调用次数、需求单数、执行状态、业务结论、通过率、耗时、排队时长与阻断项；`summary` 为合计行 |
+| `GET /skill/stats/issues` | 按“需求单 + 技能”返回首次结论、最终结论、调用次数、最近耗时与最近一次执行明细 |
+
+两个接口都支持以下可选查询参数：
+
+- `start_time`：开始时间，左闭区间。
+- `end_time`：结束时间，右开区间；只传日期时表示当天 `00:00:00`。
+- `skill_id`：只统计指定技能。
+
+时间支持 `YYYY-MM-DD`、`YYYY-MM-DD HH:MM:SS` 和 ISO 8601；不带时区时按北京时间解释，
+响应中的 `filters` 会回显北京时间。耗时、排队时长和通过率以保留两位小数的字符串返回。
+
+```bash
+curl -H "X-API-Token: <SKILL_API_TOKEN>" \
+  "http://127.0.0.1:6000/skill/stats/skills?start_time=2026-10-26&end_time=2026-10-29&skill_id=jira-gate-1"
+
+curl -H "X-API-Token: <SKILL_API_TOKEN>" \
+  "http://127.0.0.1:6000/skill/stats/issues?start_time=2026-10-26&end_time=2026-10-29"
+```
+
 ### 技能目录
 
 技能放在项目根 `skills/` 目录，容器内**只读**挂载到 `/data/skills`，与 Codex 运行目录（`CODEX_HOME`）分开存放。新增技能只需建立 `skills/<skill_id>/SKILL.md`，
