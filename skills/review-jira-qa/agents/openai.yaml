@@ -1,4 +1,4 @@
 interface:
-  display_name: "Jira QA 需求准入门禁"
-  short_description: "读取 Jira 最新需求材料，按 B1-B7 / C1-C6 判定需求准入门禁；全量覆盖 AC、同材料复用，生成自包含 HTML、上传附件并写 QA 评论"
-  default_prompt: "用 $review-jira-qa 对这个 Jira 需求单执行 QA 需求准入门禁（只执行阶段一）。先用 reuse.mjs 判断材料是否与上一版一致，REUSE=true 时直接复用上一版结论；否则完整核读 Jira 最新需求侧材料，按 coverage-required.json 覆盖全部 AC 并做同类扫描，输出「通过 / 暂不通过」，生成并校验需求准入门禁清单 HTML，上传到 Jira 并同步 QA 评论。不要进入测试方案、XMind 或 Excel/CSV 阶段，也不要修改 Jira 状态。所有脚本统一 exit 0：读到 status=SKIPPED 时记为「不适用」，读到 status=ERROR 或 ok=false 时记为「未完成」；无论哪种结果都必须把控制权交还调用方，不得阻塞后续流程。"
+  display_name: "Jira QA 需求准入门禁（阶段一）"
+  short_description: "只执行阶段一：读取 Jira 最新需求材料，按 B1-B7 / C1-C6 判定，覆盖全部 AC 并回应扫描候选，生成自包含 HTML、上传附件并写 QA 评论"
+  default_prompt: "用 $review-jira-qa 对这个 Jira 需求单执行 QA 需求准入门禁（只执行阶段一）。先运行 prepare.mjs --stage 1：READY 时完整核读需求侧材料，运行 scan.mjs 生成 candidates.json，按 B1-B7 / C1-C6 写含 checks、coverage、scans 的 gate.spec.json，再 render-gate、validate-gate、上传 Jira 并写 QA 评论；REUSED 时直接复用上一版结论；SKIPPED 记为不适用；ERROR 记为未完成。不要进入阶段二/三，不要修改 Jira 状态；任何结果都必须把控制权交还调用方，不得阻塞 G1 或其它父流程。"

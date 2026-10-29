@@ -18,7 +18,7 @@ scope 由主需求材料在 `inputs/<输入类别>/` 下的相对父目录确定
 ## 阶段一：需求评审前
 
 ```text
-/review-jira-qa <Jira需求Key或URL>
+/qa-risk-analysis <Jira需求Key或URL>
 ```
 
 输出需求准入门禁清单；结论为「通过」时默认进入阶段二，否则停止等待需求评审。

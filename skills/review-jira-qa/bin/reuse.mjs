@@ -1,30 +1,18 @@
 #!/usr/bin/env node
 /**
- * 同版本材料复用：当前 Jira 附件 ID 集合与上一条门禁评论一致时，
- * 直接复用上一版结论，不重新分析、不新增附件/评论，保证同材料结果稳定。
+ * 同版本材料复用：当前需求材料顶层附件 ID 集合与上一版门禁一致时，
+ * 直接复用上一版结论，不重新分析、不新增附件/评论。
  */
 
 import path from 'node:path';
 
 import { EXIT, QaError, boolArg, checkNode, loadCredentials, log, parseArgs, parseIssueKey, resolveWorkspace } from './lib/env.mjs';
-import { JiraClient } from './lib/jira.mjs';
+import { JiraClient, attachmentList } from './lib/jira.mjs';
 import { readJson, writeJson } from './lib/fs-safe.mjs';
 import { makeRunId, printResult } from './lib/result.mjs';
+import { effectiveIds, sameIdSet, DESCRIPTION_ID } from './lib/material-set.mjs';
+import { latestGateComment } from './lib/gate-evidence.mjs';
 import { handleFatal } from './lib/fatal.mjs';
-
-function expandIds(text) {
-  const ids = new Set();
-  const source = String(text || '');
-  for (const m of source.matchAll(/(\d{3,})\s*[–~-]\s*(\d{3,})/g)) {
-    const a = Number(m[1]);
-    const b = Number(m[2]);
-    const lo = Math.min(a, b);
-    const hi = Math.max(a, b);
-    if (hi - lo <= 200) for (let i = lo; i <= hi; i += 1) ids.add(String(i));
-  }
-  for (const m of source.matchAll(/(?<![–~-])\b(\d{3,})\b(?![–~-])/g)) ids.add(String(m[1]));
-  return [...ids];
-}
 
 async function main() {
   checkNode();
@@ -37,39 +25,57 @@ async function main() {
   const runId = args['run-id'] || materials.runId || makeRunId(key);
   const force = boolArg(args, 'force');
 
-  const current = new Set(
-    (materials.materials || [])
-      .filter((m) => m.id !== 'issue-description' && !['excluded', 'unsupported'].includes(m.role))
-      .map((m) => String(m.id)),
-  );
-  if (materials.primaryId === 'issue-description') current.add('issue-description');
+  const effective = effectiveIds(materials);
+  const currentIds = effective.filter((id) => id !== DESCRIPTION_ID);
+  const currentHasDescription = effective.includes(DESCRIPTION_ID);
 
   const client = new JiraClient(loadCredentials());
-  const comments = await client.getComments(key);
-  const gateComments = comments.filter((c) => String(c.body || '').trimStart().startsWith('h3. QA-需求准入门禁结果v'));
-  const previous = gateComments.length ? gateComments[gateComments.length - 1] : null;
+  const warnings = [];
+  let comments = [];
+  try {
+    comments = await client.getComments(key);
+  } catch (error) {
+    warnings.push(`读取 Jira 评论失败，降级为全量分析：${error.message}`);
+  }
+  const previous = latestGateComment(comments);
+  const gate = previous?.gate || null;
 
   let reuse = false;
   let previousVersion = '';
   let conclusion = '';
   let previousIds = [];
+  let previousHasDescription = false;
   let reason = '没有上一版门禁结果';
-  if (previous) {
-    const body = String(previous.body || '');
-    previousVersion = (body.match(/QA-需求准入门禁结果v(\d+\.\d+)/) || [])[1] || '';
-    conclusion = (body.match(/结论：\s*([^*\n]+)/) || [])[1]?.trim() || '';
-    const materialLine = body.split(/\r?\n/).filter((l) => l.includes('材料版本：')).pop() || '';
-    previousIds = expandIds(materialLine);
-    const previousDescriptionOnly = materialLine.includes('需求描述取自 Jira 字段') && previousIds.length === 0;
-    if (previousDescriptionOnly) previousIds = ['issue-description'];
-    const same =
-      previousIds.length === current.size &&
-      previousIds.every((id) => current.has(id)) &&
-      current.size > 0;
-    reuse = same;
+  if (gate) {
+    previousVersion = gate.version || '';
+    conclusion = gate.conclusion || '';
+    previousIds = gate.materialIds || [];
+    previousHasDescription = Boolean(gate.hasDescription);
+    const same = sameIdSet(currentIds, previousIds, {
+      hasDescriptionA: currentHasDescription,
+      hasDescriptionB: previousHasDescription,
+    });
+    reuse = same && currentIds.length + (currentHasDescription ? 1 : 0) > 0;
     reason = same ? '材料附件 ID 集合一致，复用上一版结论' : '材料附件 ID 集合不一致，需要重新分析';
   }
 
+  // 复用必须指得到上一版清单附件；附件被删时降级为重新生成。校验失败不改判，只记 warning。
+  if (reuse) {
+    try {
+      const issue = await client.getIssue(key, { comments: false });
+      const hasGateHtml = attachmentList(issue).some((att) => /-需求准入门禁清单-v\d+\.\d+\.html$/i.test(att.filename));
+      if (!hasGateHtml) {
+        reuse = false;
+        reason = '上一版需求准入门禁清单附件已不存在，需重新生成';
+      }
+    } catch (error) {
+      warnings.push(`校验门禁附件失败：${error.message}`);
+    }
+  }
+
+  const failedItemCount = reuse && !force
+    ? gate?.openCount || Number((conclusion.match(/(\d+)\s*项未关闭/) || [])[1] || 0)
+    : 0;
   const result = {
     schemaVersion: 1,
     ok: true,
@@ -80,24 +86,24 @@ async function main() {
     forced: force,
     jiraKey: key,
     conclusion: reuse && !force ? conclusion : '',
-    failedItemCount: 0,
+    failedItemCount,
     deliverableVersion: previousVersion,
     htmlPath: '',
     attachmentId: '',
-    commentId: previous ? String(previous.id) : '',
-    materialAttachmentIds: [...current],
-    previousMaterialAttachmentIds: previousIds,
+    commentId: previous ? String(previous.comment.id) : '',
+    materialAttachmentIds: [...currentIds, ...(currentHasDescription ? [DESCRIPTION_ID] : [])],
+    previousMaterialAttachmentIds: [...previousIds, ...(previousHasDescription ? [DESCRIPTION_ID] : [])],
     reason: force ? '显式 --force，重新分析' : reason,
     nextCommand: '',
-    warnings: [],
+    warnings,
   };
 
   await writeJson(path.join(workspace, '.qa', 'runs', runId, 'reuse.json'), result);
   log('reuse', `reuse=${result.reused} previous=${previousVersion || 'none'} reason=${result.reason}`);
-  process.stdout.write(`REUSE=${result.reused}\nPREVIOUS_VERSION=${previousVersion}\nPREVIOUS_COMMENT_ID=${result.commentId}\nCONCLUSION=${result.conclusion}\n`);
-  if (result.reused) {
-    printResult(result);
-  }
+  process.stdout.write(
+    `REUSE=${result.reused}\nPREVIOUS_VERSION=${previousVersion}\nPREVIOUS_COMMENT_ID=${result.commentId}\nCONCLUSION=${result.conclusion}\n`,
+  );
+  if (result.reused) printResult(result);
 }
 
 main().catch((error) =>

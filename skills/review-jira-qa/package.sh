@@ -31,6 +31,7 @@ mkdir -p "$STAGE"
 cp "$ROOT/SKILL.md" "$ROOT/README.md" "$ROOT/install.sh" "$ROOT/package.sh" "$STAGE/"
 [ -f "$ROOT/.env.example" ] && cp "$ROOT/.env.example" "$STAGE/"
 cp -R "$ROOT/bin" "$ROOT/command" "$ROOT/prompts" "$ROOT/templates" "$ROOT/test" "$STAGE/"
+[ -d "$ROOT/rules" ] && cp -R "$ROOT/rules" "$STAGE/"
 [ -d "$ROOT/docs" ] && cp -R "$ROOT/docs" "$STAGE/"
 
 # 清理运行态与构建产物

@@ -1,6 +1,6 @@
 # 测试产出结构模板
 
-> 本模板只定义三个阶段的交付结构与验收基线。实际执行必须依次使用 `/review-jira-qa`、`/qa-design`、`/qa-cases`，不得跨越人工审核门禁；完整规则以 `prompts/contract.md` 为准。
+> 本模板只定义三个阶段的交付结构与验收基线。实际执行必须依次使用 `/qa-risk-analysis`、`/qa-design`、`/qa-cases`，不得跨越人工审核门禁；完整规则以 `prompts/contract.md` 为准。
 
 ## 统一交付目录
 

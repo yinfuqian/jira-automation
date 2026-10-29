@@ -20,6 +20,7 @@ const REQUIRED = [
   '入口标准',
   '出口标准',
   '风险',
+  '待测试点评审确认项',
 ];
 
 async function main() {
@@ -44,5 +45,5 @@ async function main() {
 }
 
 main().catch((error) =>
-  handleFatal(error, { argv: process.argv.slice(2), stage: "design", comment: false, script: "validate-plan" }),
+  handleFatal(error, { argv: process.argv.slice(2), stage: "design", script: "validate-plan" }),
 );

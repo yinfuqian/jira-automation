@@ -28,6 +28,14 @@ export async function writeFileAtomic(file, data) {
   return file;
 }
 
+export async function writeBinaryAtomic(file, data) {
+  await ensureDir(path.dirname(file));
+  const tmp = `${file}.tmp-${process.pid}-${Date.now()}`;
+  await writeFile(tmp, data);
+  await rename(tmp, file);
+  return file;
+}
+
 export async function writeJson(file, obj) {
   return writeFileAtomic(file, `${JSON.stringify(obj, null, 2)}\n`);
 }

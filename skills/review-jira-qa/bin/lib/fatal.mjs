@@ -1,6 +1,10 @@
 /**
- * 统一异常收口：任何脚本异常都写 result.json、尽量在 Jira 评论「执行异常」，
- * 并以 exit 0 结束，避免平台把技能中断。失败事实通过 status=ERROR / ok=false 传递。
+ * 统一异常收口：任何脚本异常都写 result.json、尽量在 Jira 评论，
+ * 并以 exit 0 结束，避免平台把技能中断。
+ *
+ * 阶段一：写「执行异常」评论。
+ * 阶段二：区分「不满足执行条件」与「执行异常」，都写评论。
+ * 阶段三：只写本地 result，不写 Jira 评论。
  */
 
 import { existsSync, readFileSync } from 'node:fs';
@@ -10,6 +14,7 @@ import { EXIT, loadCredentials, parseArgs, parseIssueKey, resolveWorkspace } fro
 import { JiraClient } from './jira.mjs';
 import { ensureDir, writeJson } from './fs-safe.mjs';
 import { makeRunId, printResult, redact } from './result.mjs';
+import { syncStatusComment } from './comment-sync.mjs';
 
 const CODE_NAMES = {
   [EXIT.USAGE]: 'USAGE',
@@ -21,6 +26,8 @@ const CODE_NAMES = {
   [EXIT.REMOTE_WRITE]: 'JIRA_WRITE',
   [EXIT.INTERNAL]: 'INTERNAL',
 };
+
+const NOT_SATISFIED_CODES = new Set(['USAGE', 'PRECONDITION', 'SKIPPED']);
 
 function normalizeStage(value) {
   const raw = String(value ?? '').trim();
@@ -47,7 +54,7 @@ function bestEffortContext(argv) {
     try {
       const spec = JSON.parse(readFileSync(args.spec, 'utf8'));
       key = key || String(spec.jiraKey || '');
-      stage = stage || 'risk-analysis';
+      stage = stage || (spec.stage || 'risk-analysis');
       deliverableVersion = String(spec.deliverableVersion || '');
     } catch {
       /* ignore */
@@ -57,7 +64,7 @@ function bestEffortContext(argv) {
   return { args, key, workspace, runId, stage, deliverableVersion };
 }
 
-async function commentException({ key, stage, message, errorCode }) {
+async function commentStageOne({ key, stage, message, errorCode }) {
   const creds = loadCredentials(process.env, { required: false });
   if (!key || !creds.baseUrl || !creds.token) return { commentId: '', warning: '缺少 Jira 凭据或 Key，未写评论' };
   try {
@@ -65,7 +72,7 @@ async function commentException({ key, stage, message, errorCode }) {
     const body = `执行异常\n阶段：${stage || 'unknown'}\n原因：${message}\n标记：${errorCode}\n本次未生成门禁结论。`;
     const comments = await client.getComments(key);
     const existing = comments.find(
-      (c) => String(c.body || '').includes('执行异常') && String(c.body || '').includes('本次未生成门禁结论'),
+      (comment) => String(comment.body || '').includes('执行异常') && String(comment.body || '').includes('本次未生成门禁结论'),
     );
     if (existing) {
       await client.updateComment(key, existing.id, body);
@@ -75,6 +82,22 @@ async function commentException({ key, stage, message, errorCode }) {
     return { commentId: String(created.id), warning: '' };
   } catch (error) {
     return { commentId: '', warning: `执行异常评论写入失败：${error.message}` };
+  }
+}
+
+async function commentStageTwo({ key, workspace, runId, message, errorCode }) {
+  const creds = loadCredentials(process.env, { required: false });
+  if (!key || !creds.baseUrl || !creds.token) return { commentId: '', warning: '缺少 Jira 凭据或 Key，未写评论' };
+  try {
+    const client = new JiraClient(creds);
+    const notSatisfied = NOT_SATISFIED_CODES.has(errorCode);
+    const body = notSatisfied
+      ? `h3. QA-测试方案不满足执行条件\n*执行结论：不满足执行条件，本次未生成测试方案*\n原因：${message}\n标记：${errorCode}`
+      : `h3. QA-测试方案执行异常\n*执行结论：失败，本次未生成测试方案*\n阶段：design\n原因：${message}\n标记：${errorCode}\n本次未修改阶段一需求准入门禁结论与评论。`;
+    const out = await syncStatusComment({ client, key, body, runId, workspace });
+    return { commentId: out.commentId, warning: '' };
+  } catch (error) {
+    return { commentId: '', warning: `阶段二评论写入失败：${error.message}` };
   }
 }
 
@@ -98,21 +121,31 @@ async function handleFatalInner(error, { argv = process.argv.slice(2), stage = '
   }
   const rawStage = stage || context.stage || '';
   const finalStage = normalizeStage(rawStage) || 'risk-analysis';
-  const warnings = [];
-  const shouldComment = comment === undefined ? Boolean(rawStage) && finalStage === 'risk-analysis' : Boolean(comment);
+  const shouldComment = comment === undefined
+    ? finalStage === 'risk-analysis' || finalStage === 'design'
+    : Boolean(comment);
 
+  const warnings = [];
   let commentResult = { commentId: '', warning: '' };
-  if (shouldComment) {
-    commentResult = await commentException({
+  if (shouldComment && finalStage === 'risk-analysis') {
+    commentResult = await commentStageOne({
       key: context.key,
       stage: finalStage,
       message,
       errorCode,
     }).catch((err) => ({ commentId: '', warning: `执行异常评论失败：${err.message}` }));
-    if (commentResult.warning) warnings.push(commentResult.warning);
+  } else if (shouldComment && finalStage === 'design') {
+    commentResult = await commentStageTwo({
+      key: context.key,
+      workspace: context.workspace,
+      runId: context.runId,
+      message,
+      errorCode,
+    }).catch((err) => ({ commentId: '', warning: `阶段二评论失败：${err.message}` }));
   } else {
     warnings.push('子任务异常：按约定不写 Jira 评论，不影响阶段一门禁结论和评论');
   }
+  if (commentResult.warning) warnings.push(commentResult.warning);
 
   const result = {
     schemaVersion: 1,
@@ -123,6 +156,7 @@ async function handleFatalInner(error, { argv = process.argv.slice(2), stage = '
     jiraKey: context.key,
     conclusion: '',
     failedItemCount: 0,
+    pendingItemCount: 0,
     deliverableVersion: context.deliverableVersion || '',
     htmlPath: '',
     attachmentId: '',
@@ -130,6 +164,7 @@ async function handleFatalInner(error, { argv = process.argv.slice(2), stage = '
     materialAttachmentIds: [],
     errorCode,
     error: message,
+    reason: message,
     nextCommand: '',
     warnings,
   };

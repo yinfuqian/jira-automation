@@ -35,6 +35,8 @@ class ReviewJiraQaVendoringTests(unittest.TestCase):
             SKILL_DIR / "bin" / "preflight.mjs",
             SKILL_DIR / "bin" / "jira-read.mjs",
             SKILL_DIR / "bin" / "jira-download.mjs",
+            SKILL_DIR / "bin" / "prepare.mjs",
+            SKILL_DIR / "bin" / "scan.mjs",
             SKILL_DIR / "bin" / "materials.mjs",
             SKILL_DIR / "bin" / "coverage.mjs",
             SKILL_DIR / "bin" / "reuse.mjs",
@@ -44,7 +46,13 @@ class ReviewJiraQaVendoringTests(unittest.TestCase):
             SKILL_DIR / "bin" / "jira-comment.mjs",
             SKILL_DIR / "bin" / "result.mjs",
             SKILL_DIR / "bin" / "selftest.mjs",
+            SKILL_DIR / "bin" / "design-spec.mjs",
+            SKILL_DIR / "bin" / "render-design-comment.mjs",
             SKILL_DIR / "bin" / "lib" / "fatal.mjs",
+            SKILL_DIR / "bin" / "lib" / "gate-evidence.mjs",
+            SKILL_DIR / "bin" / "lib" / "material-set.mjs",
+            SKILL_DIR / "rules" / "scan-rules.json",
+            SKILL_DIR / "bin" / "vendor" / "libarchive-wasm" / "index.js",
             SKILL_DIR / "templates" / "gate-html.html",
             SKILL_DIR / "templates" / "test-cases" / "test-case-template.xlsx",
             SKILL_DIR / "command" / "review-jira-qa.md",
@@ -73,7 +81,7 @@ class ReviewJiraQaVendoringTests(unittest.TestCase):
         self.assertIn("不得自动进入阶段二或阶段三", text)
         self.assertIn("G1 最终结论必须为「退回补充」", text)
         self.assertIn("运营性失败", text)
-        # 0.1.5 起统一以 status 表达异常与不适用；0.1.7 继续保持所有脚本 exit 0。
+        # 0.1.18 继续以 status 表达异常与不适用，所有脚本统一 exit 0。
         self.assertIn("status=ERROR", text)
         self.assertIn("status=SKIPPED", text)
         self.assertIn("exit 0", text)
@@ -81,7 +89,7 @@ class ReviewJiraQaVendoringTests(unittest.TestCase):
         self.assertIn(".skill-result.json", text)
         self.assertNotIn("--non-blocking", text)
         self.assertNotIn("failedStep", text)
-        self.assertEqual((SKILL_DIR / "VERSION").read_text(encoding="utf-8").strip(), "0.1.7")
+        self.assertEqual((SKILL_DIR / "VERSION").read_text(encoding="utf-8").strip(), "0.1.18")
 
     def test_runtime_defaults_to_stage1_only(self):
         """服务端直接调用该技能时也只能跑阶段一，并强制读取 Jira 链接。"""
@@ -92,11 +100,15 @@ class ReviewJiraQaVendoringTests(unittest.TestCase):
         self.assertIn("只执行阶段一", prompt)
         self.assertIn("禁止执行阶段二或阶段三", prompt)
         self.assertIn("preflight", prompt)
+        self.assertIn("prepare.mjs", prompt)
+        self.assertIn("scan.mjs", prompt)
+        self.assertIn("candidates", prompt)
+        self.assertIn("checks", prompt)
         self.assertIn("validate-gate", prompt)
         self.assertIn("coverage-required", prompt)
         self.assertIn("coverage.mjs", prompt)
         self.assertIn("reuse.mjs", prompt)
-        self.assertIn("REUSE=true", prompt)
+        self.assertIn("REUSED", prompt)
         self.assertIn("--comments 10", prompt)
         self.assertIn("同类", prompt)
         self.assertIn("QA_RESULT_JSON", prompt)
@@ -133,12 +145,14 @@ class ReviewJiraQaVendoringTests(unittest.TestCase):
         self.assertIn("closingConditions", html_source)
         self.assertIn("结论为「通过」时 failures 必须为空", html_source)
 
-    def test_stage1_requires_full_ac_coverage_and_reuse(self):
-        """0.1.7 必须全量覆盖 AC、记录复评来源，并支持同材料复用。"""
+    def test_stage1_requires_full_ac_coverage_checks_and_scan(self):
+        """0.1.18 必须全量覆盖 AC、覆盖 13 项判据、回应扫描候选并支持同材料复用。"""
         prompt_text = (SKILL_DIR / "prompts" / "stage1-gate.md").read_text(encoding="utf-8")
         validate_source = (SKILL_DIR / "bin" / "validate-gate.mjs").read_text(encoding="utf-8")
         reuse_source = (SKILL_DIR / "bin" / "reuse.mjs").read_text(encoding="utf-8")
         coverage_source = (SKILL_DIR / "bin" / "coverage.mjs").read_text(encoding="utf-8")
+        prepare_source = (SKILL_DIR / "bin" / "prepare.mjs").read_text(encoding="utf-8")
+        scan_source = (SKILL_DIR / "bin" / "scan.mjs").read_text(encoding="utf-8")
 
         self.assertIn('"coverage"', prompt_text)
         self.assertIn("coverage-required.json", prompt_text)
@@ -148,6 +162,15 @@ class ReviewJiraQaVendoringTests(unittest.TestCase):
         self.assertIn("待确认来源", prompt_text)
         self.assertIn("coverage-required", validate_source)
         self.assertIn("coverage 缺少 AC", validate_source)
+        self.assertIn("validateChecks", validate_source)
+        self.assertIn("validateScans", validate_source)
+        self.assertIn("preflight.mjs", prepare_source)
+        self.assertIn("reuse.mjs", prepare_source)
+        self.assertIn("--comments", prepare_source)
+        self.assertIn("'10'", prepare_source)
+        self.assertIn("risk-analysis", prepare_source)
+        self.assertIn("CANDIDATES=", scan_source)
+        self.assertTrue((SKILL_DIR / "rules" / "scan-rules.json").is_file())
         self.assertIn("REUSE=", reuse_source)
         self.assertIn("required", coverage_source)
 

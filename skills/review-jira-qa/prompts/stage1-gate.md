@@ -102,7 +102,7 @@ outputs/<scope>/<JiraKey>/risk-analysis/<JiraKey>-<需求名称>-需求准入门
 ```
 
 - scope 为空时从 `outputs/<JiraKey>/risk-analysis/` 开始；scope 推导与安全规则见 `prompts/contract.md`。
-- 版本号为交付物自身版本（v1.0→v1.1→v1.2…），PRD/需求材料版本写入文档内；首次生成从 v1.0 开始。
+- 版本号为交付物自身版本（v1.0→v1.1→v1.2…），PRD/需求材料版本写入文档内；首次生成从 v1.0 开始。**材料未变化时不生成新版本**（返回复用，零写入）；每次材料变更生成一个新版本，版本号按 Jira 现有门禁附件的最大版本 +1 推算。版本号不要求连续，旧版本被人工删除后出现跳号（如 v1.0 → v1.2）属正常。
 - 三处名称与版本必须一致：文件名 `…-需求准入门禁清单-v<版本>.html`、HTML 标题与 `<h1>` 为 `需求准入门禁清单（v<版本>）`、Jira 评论标题为 `QA-需求准入门禁结果v<版本>`；PRD 版本只出现在评论末行 `材料版本：…`。
 - HTML 的结论、不通过项编号、事实引用、关闭条件、材料清单和分析时间必须一致。
 - HTML 使用 UTF-8、自包含内嵌 CSS，不引用外部 CDN、脚本、字体或第三方服务，支持浏览器打印/PDF 导出。
@@ -145,6 +145,9 @@ outputs/<scope>/<JiraKey>/risk-analysis/<JiraKey>-<需求名称>-需求准入门
     { "id": "1001", "filename": "xxx_PRD_DELIVERY.md", "type": "PRD v0.1", "uploadedAt": "2026-10-20 14:00" }
   ],
   "conclusion": "通过 | 暂不通过",
+  "checks": [
+    { "id": "B1", "verdict": "已明确 | 缺失 | 不可验证", "basis": "对应原文或章节，或为何判为未明确" }
+  ],
   "coverage": [
     { "id": "AC-001", "checked": true, "result": "通过 | 不通过 | 不适用", "note": "检查结论" }
   ],
@@ -155,15 +158,20 @@ outputs/<scope>/<JiraKey>/risk-analysis/<JiraKey>-<需求名称>-需求准入门
   "failures": [
     {
       "ac": "AC-006",
-      "origin": "本版材料变更引入 | 上一版漏检 | 不适用",
+      "origin": "本版材料变更引入 | 上一版漏检 | 待确认来源 | 不适用",
       "type": "材料冲突 | 材料未明确",
       "topic": "事项",
+      "criteria": ["B1", "C6"],
       "facts": [ { "source": "PRD 3.2", "quote": "材料原文" } ],
+      "introducedBy": { "source": "PRD 0.3 版本与变更记录 vX", "quote": "证明该问题由本版新增内容引入的原文" },
       "problem": "事实认定或当前问题",
       "closingConditions": ["关闭条件1", "关闭条件2"]
     }
   ],
-  "nonBlockingFacts": ["不影响放行的文字事实"]
+  "nonBlockingFacts": ["不影响放行的文字事实"],
+  "scans": [
+    { "rule": "R1-DANGLING-ID", "target": "AC-009", "decision": "确认 | 驳回", "reason": "确认则说明落到哪条不通过项；驳回必须引用材料原文说明为何不成立" }
+  ]
 }
 ```
 
@@ -171,7 +179,11 @@ outputs/<scope>/<JiraKey>/risk-analysis/<JiraKey>-<需求名称>-需求准入门
 
 - `conclusion=通过` 时 `failures` 必须为空；`暂不通过` 时至少 1 项。
 - `failures[].type` 只能是「材料冲突」或「材料未明确」；`productAction` 由渲染器按类型自动填「修订材料 / 补充结论」。
-- 每条 failure 至少 1 条 `facts[].quote`，且 quote 必须逐字来自需求材料。
+- 每条 failure 至少 1 条 `facts[].quote`，且 quote 必须逐字来自需求材料；`validate-gate --source` 会逐条在材料原文中检索，检索不到即校验失败。
+- `origin=本版材料变更引入` 时必须填 `introducedBy.quote`（引用本版新增或修改的原文，通常是版本变更记录行）；缺少则该次校验失败，避免把漏检写成材料变更。
+- **`checks` 必须覆盖 B1–B7、C1–C6 全部 13 项**，每项给 `verdict`（已明确 / 缺失 / 不可验证）与 `basis`。缺任一项即视为分析未完成，校验失败。这是保证同一材料多次运行结论一致的主要手段：先逐项落地判定，再从不通过项里筛出需要写进清单的。
+- **每个不通过项必须声明 `criteria`**（对应判据 B1–B7 / C1–C6，可多个）：判为「缺失 / 不可验证」的判据必须被至少一条不通过项引用；判为「已明确」的判据不得被引用。两个方向任一不成立即校验失败，用来防止「判了缺失但清单不落项」和「判据与清单自相矛盾」。一条不通过项可以覆盖多个判据，不因此新增条目。
+- **`scans` 必须逐条回应 `candidates.json` 的扫描候选**：每条给 `decision`（确认 / 驳回）与 `reason`；确认要落到对应不通过项，驳回要用材料原文说明为何不成立。漏回应即校验失败。扫描规则随产品发布，只做结构一致性检查（编号悬空、编号缺口），不按需求调整。
 - 编号由渲染器按数组顺序生成 1..N，不要手写编号。
 - `materials` 必须与 `materials.json` 的 Jira 附件 ID、文件名、上传时间一致；只列需求侧材料，不列本地路径。
 - `analysisTime` 可用 `--now` 固定；缺省由渲染器生成。

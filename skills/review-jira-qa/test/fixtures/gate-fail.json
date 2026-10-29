@@ -37,7 +37,10 @@
       ],
       "productAction": "修订材料",
       "ac": "AC-001",
-      "origin": "上一版漏检"
+      "origin": "上一版漏检",
+      "criteria": [
+        "B7"
+      ]
     },
     {
       "type": "材料未明确",
@@ -54,7 +57,14 @@
       ],
       "productAction": "补充结论",
       "ac": "AC-002",
-      "origin": "本版材料变更引入"
+      "origin": "本版材料变更引入",
+      "introducedBy": {
+        "source": "PRD 2. 规则",
+        "quote": "导出当前筛选结果。"
+      },
+      "criteria": [
+        "B5"
+      ]
     }
   ],
   "nonBlockingFacts": [
@@ -73,6 +83,73 @@
       "checked": true,
       "result": "不通过",
       "note": "异常提示文案未定义"
+    }
+  ],
+  "checks": [
+    {
+      "id": "B1",
+      "verdict": "已明确",
+      "basis": "PRD 对应章节"
+    },
+    {
+      "id": "B2",
+      "verdict": "已明确",
+      "basis": "PRD 对应章节"
+    },
+    {
+      "id": "B3",
+      "verdict": "已明确",
+      "basis": "PRD 对应章节"
+    },
+    {
+      "id": "B4",
+      "verdict": "已明确",
+      "basis": "PRD 对应章节"
+    },
+    {
+      "id": "B5",
+      "verdict": "不可验证",
+      "basis": "PRD 对应章节"
+    },
+    {
+      "id": "B6",
+      "verdict": "已明确",
+      "basis": "PRD 对应章节"
+    },
+    {
+      "id": "B7",
+      "verdict": "不可验证",
+      "basis": "PRD 对应章节"
+    },
+    {
+      "id": "C1",
+      "verdict": "已明确",
+      "basis": "PRD 对应章节"
+    },
+    {
+      "id": "C2",
+      "verdict": "已明确",
+      "basis": "PRD 对应章节"
+    },
+    {
+      "id": "C3",
+      "verdict": "已明确",
+      "basis": "PRD 对应章节"
+    },
+    {
+      "id": "C4",
+      "verdict": "已明确",
+      "basis": "PRD 对应章节"
+    },
+    {
+      "id": "C5",
+      "verdict": "已明确",
+      "basis": "PRD 对应章节"
+    },
+    {
+      "id": "C6",
+      "verdict": "已明确",
+      "basis": "PRD 对应章节"
     }
   ]
 }

@@ -1,0 +1,28 @@
+{
+  "version": 1,
+  "description": "结构一致性规则集。只包含可机械证明、零语义猜测的检查：编号引用闭合、编号序列连续。规则随产品发布，不按单个需求调整；语义类判断不在此实现（交给 gate.spec.json 的 checks 与人工复核）。",
+  "rules": [
+    {
+      "id": "R1-DANGLING-ID",
+      "name": "引用悬空",
+      "enabled": true,
+      "why": "文中引用的编号在材料里找不到定义，追溯链路断开。",
+      "params": {
+        "idPattern": "(?:AC|FR|BR|IR|G|D)[-－]?\\d{2,3}",
+        "tableDefinition": true,
+        "lineDefinition": "^[#*\\s|>\\-]*(?:AC|FR|BR|IR)[-－]?\\d{2,3}(?![0-9])",
+        "headingDefinition": true
+      }
+    },
+    {
+      "id": "R2-ID-SEQUENCE-GAP",
+      "name": "编号序列缺口",
+      "enabled": true,
+      "why": "同类别编号出现跳号，说明材料增删后编号未对齐，或存在被删除但未清理的引用。",
+      "params": {
+        "sequencePattern": "^#{1,6}\\s+\\S*\\s*(AC|FR|BR|IR)[-－]?(\\d{2,3})",
+        "minCount": 2
+      }
+    }
+  ]
+}

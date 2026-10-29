@@ -22,53 +22,55 @@ $ARGUMENTS
 
 ## 执行
 
-1. 前置检查：
+1. 一次完成前置检查、材料刷新、复用判定、材料摘要与 AC 提取：
 
 ```bash
-node "${CLAUDE_SKILL_DIR}/bin/preflight.mjs" --key <KEY> --stage 1
+node "${CLAUDE_SKILL_DIR}/bin/prepare.mjs" --key <KEY> --stage 1
 ```
 
-2. 拉取 issue 与附件：
+读输出 JSON 的 `status`：
 
-```bash
-node "${CLAUDE_SKILL_DIR}/bin/jira-read.mjs" --key <KEY>
-node "${CLAUDE_SKILL_DIR}/bin/jira-download.mjs" --key <KEY> --run-id <RUN_ID>
-node "${CLAUDE_SKILL_DIR}/bin/materials.mjs" --run-id <RUN_ID>
-```
+- `REUSED`：材料附件 ID 集合与上一版门禁完全一致，直接复用。向调用方报告 `conclusion` 与 `suggestedVersion`，**不要重新分析、不要新建附件或评论、不要进入后续步骤**。
+- `SKIPPED`：输入不适用门禁，已写「评审不适用」评论。向调用方说明 `reason` 与 `errorCode` 后停止，不生成 HTML、不上传附件、不进入阶段二。
+- `READY`：继续。记下 `runId`、`scope`、`requirementName`、`primaryId`、`digest`、`coverageRequired`、`requiredAcs`、`suggestedVersion`。
 
-记下 `RUN_ID`、`SCOPE`、`REQUIREMENT_NAME`、`PRIMARY_ID`。
+`prepare` 内部已包含 preflight、jira-read、jira-download、reuse、materials、coverage 六步，任一步失败会整体返回 `status=ERROR`，不需要单独再跑这些脚本。需要强制重审时加 `--force`；单个步骤排障时再单独执行对应脚本。
 
-如果 `jira-download` 返回的 `QA_RESULT_JSON` 中 `status=SKIPPED` / `applicable=false`：
-
-- 说明该单不符合门禁输入要求（无附件、无需求侧材料、主材料不唯一等），**不适用需求准入门禁**；
-- 向用户说明 `reason` 和 `errorCode`，然后停止；
-- 不生成 HTML、不上传附件、不写 Jira 评论、不进入阶段二。
-
-3. 读 `${CLAUDE_SKILL_DIR}/prompts/stage1-gate.md` 与 `.qa/runs/<RUN_ID>/materials-digest.md`，逐份核读需求侧材料：
+2. 读 `${CLAUDE_SKILL_DIR}/prompts/stage1-gate.md` 与 `digest` 指向的 `materials-digest.md`，逐份核读需求侧材料：
    - 主 PRD、Overview、原型、页面材料、导入导出模板；
+   - 以 PRD 为唯一需求事实源；Overview/Prototype 是 PRD 的子集，允许不完整但不得与 PRD 冲突；子集缺失不单独计为冲突，与 PRD 相反或范围不同计为材料冲突；
    - 如果材料里出现 `<KEY>-需求描述.md`（来源 Jira 需求字段），把它作为主需求材料正常评审；只有 PRD、没有 HTML 也正常评审；
    - JS 驱动 HTML 的脚本内正文已在摘要中；PDF/图片用 `Read` 直接打开；
    - 抽取为空且无法查看的材料记为「材料不可读」，不得判通过。
 
-4. 写 `.qa/runs/<RUN_ID>/gate.spec.json`（只写 JSON，不写 HTML）。字段见 stage1-gate.md。
+3. 先生成结构扫描候选，再写 `.qa/runs/<RUN_ID>/gate.spec.json`（只写 JSON，不写 HTML）。字段见 stage1-gate.md。
 
-5. 渲染并校验：
+```bash
+node "${CLAUDE_SKILL_DIR}/bin/scan.mjs" --source <材料文件1> --source <材料文件2> ... --out ".qa/runs/<RUN_ID>/candidates.json"
+```
+
+   - `checks` 必须覆盖 B1-B7、C1-C6 共 13 项；`scans` 必须逐条回应 `candidates.json`。
+   - 必须按 `coverage-required.json` 填满 `coverage`，每个 AC 一条，`checked=true`。
+   - 每条 failure 必须带 `facts[].quote` 与 `criteria`；有上一版门禁评论时，按「复评稳定性」区分 `本版材料变更引入` / `上一版漏检`，不得把上一版漏检写成新材料问题。
+
+4. 渲染并校验：
 
 ```bash
 node "${CLAUDE_SKILL_DIR}/bin/render-gate.mjs" --spec ".qa/runs/<RUN_ID>/gate.spec.json" --version <版本>
-node "${CLAUDE_SKILL_DIR}/bin/validate-gate.mjs" --html <HTML> --spec ".qa/runs/<RUN_ID>/gate.spec.json"
+node "${CLAUDE_SKILL_DIR}/bin/validate-gate.mjs" --html <HTML> --spec ".qa/runs/<RUN_ID>/gate.spec.json" --coverage-required ".qa/runs/<RUN_ID>/coverage-required.json" --candidates ".qa/runs/<RUN_ID>/candidates.json" \
+  --source <材料文件1> --source <材料文件2> ...
 ```
 
 校验失败：按错误修正 spec 后重试，最多两次；仍失败则停止，不上传。
 
-6. 上传附件并同步评论：
+5. 上传附件并同步评论：
 
 ```bash
 node "${CLAUDE_SKILL_DIR}/bin/jira-upload.mjs" --key <KEY> --file <HTML> --run-id "<RUN_ID>" --stage risk-analysis
 node "${CLAUDE_SKILL_DIR}/bin/jira-comment.mjs" --key <KEY> --body <COMMENT> --run-id "<RUN_ID>" --stage risk-analysis
 ```
 
-7. 输出运行结果：
+6. 输出运行结果：
 
 ```bash
 node "${CLAUDE_SKILL_DIR}/bin/result.mjs" --stage risk-analysis --key <KEY> --run-id "<RUN_ID>" --spec ".qa/runs/<RUN_ID>/gate.spec.json"

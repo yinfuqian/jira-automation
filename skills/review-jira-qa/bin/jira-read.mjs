@@ -59,5 +59,5 @@ async function main() {
 }
 
 main().catch((error) =>
-  handleFatal(error, { argv: process.argv.slice(2), stage: "risk-analysis", script: "jira-read" }),
+  handleFatal(error, { argv: process.argv.slice(2), stage: parseArgs(process.argv.slice(2)).stage || '', script: "jira-read" }),
 );

@@ -1,24 +1,14 @@
 #!/usr/bin/env node
 /**
- * 同步阶段一 Jira 评论：按标题前缀 + 材料版本文本定位；存在则编辑，否则新建。
- * 同一材料版本只保留一条评论。
+ * 同步 Jira 评论：按“标题 + 材料版本行”定位；存在则编辑，否则新建。
+ * 阶段一/阶段二共用；标题不同，互不覆盖。
  */
-
-import path from 'node:path';
 
 import { EXIT, QaError, boolArg, checkNode, loadCredentials, log, parseArgs, parseIssueKey, resolveWorkspace } from './lib/env.mjs';
 import { JiraClient } from './lib/jira.mjs';
-import { ensureDir, readText, writeJson } from './lib/fs-safe.mjs';
+import { readText } from './lib/fs-safe.mjs';
+import { findExistingComment, parseCommentBody, syncComment } from './lib/comment-sync.mjs';
 import { handleFatal } from './lib/fatal.mjs';
-
-function firstLine(text) {
-  return String(text || '').split(/\r?\n/).find((line) => line.trim()) || '';
-}
-
-function lastLine(text) {
-  const lines = String(text || '').split(/\r?\n/).map((l) => l.trim()).filter(Boolean);
-  return lines[lines.length - 1] || '';
-}
 
 async function main() {
   checkNode();
@@ -31,53 +21,38 @@ async function main() {
     throw new QaError('参数或配置错误', EXIT.USAGE);
   }
   const body = await readText(bodyFile);
-  const title = args.title || firstLine(body);
-  const matchTitle = String(title).replace(/v\d+\.\d+\s*$/, '').trim();
-  const materialLine = args['material-line'] || lastLine(body);
-  const materialVersion = (String(materialLine).match(/材料版本：\s*(PRD\s+[^\s（(]+)/) || [])[1] || '';
   const mode = args.mode || 'auto';
   const dryRun = boolArg(args, 'dry-run') || boolArg(args, 'no-comment');
   const runId = args['run-id'] || 'manual';
-
-  const client = new JiraClient(loadCredentials(process.env, { required: !dryRun }));
-  const comments = process.env.JIRA_BASE_URL ? await client.getComments(key) : [];
-  const existing = comments.find((c) => {
-    const text = String(c.body || '');
-    return (
-      text.includes(matchTitle) &&
-      (text.includes(materialLine) || (materialVersion && text.includes(materialVersion)))
-    );
-  });
-
-  let action = 'create';
-  let commentId = null;
-  if (existing && mode !== 'new') {
-    action = 'edit';
-    commentId = String(existing.id);
-  } else if (!existing && mode === 'edit') {
-    process.stderr.write('[jira-comment][ERR] 没有找到匹配的既有评论，无法 edit。\n');
-    throw new QaError('前置条件不满足', EXIT.PRECONDITION);
-  } else if (args['edit-id']) {
-    action = 'edit';
-    commentId = String(args['edit-id']);
-  }
+  const creds = loadCredentials(process.env, { required: !dryRun });
 
   if (dryRun) {
-    log('jira-comment', `dry-run ${action} title=${title}`);
+    const comments = creds.baseUrl && creds.token ? await new JiraClient(creds).getComments(key) : [];
+    const existing = findExistingComment(comments, body);
+    const action = existing && mode !== 'new' ? 'edit' : 'create';
+    log('jira-comment', `dry-run ${action} title=${parseCommentBody(body).title}`);
     process.stdout.write(`ACTION=${action}\nDRY_RUN=1\n`);
     return;
   }
 
-  let result;
-  if (action === 'edit') result = await client.updateComment(key, commentId, body);
-  else result = await client.createComment(key, body);
-  const id = String(result?.id || commentId || '');
-  const out = { ok: true, key, runId, action, commentId: id, title, materialLine };
-  await writeJson(path.join(workspace, '.qa', 'runs', runId, 'comment.json'), out);
-  log('jira-comment', `${action} commentId=${id}`);
-  process.stdout.write(`ACTION=${action}\nCOMMENT_ID=${id}\n`);
+  const client = new JiraClient(creds);
+  const out = await syncComment({
+    client,
+    key,
+    body,
+    mode,
+    editId: args['edit-id'] || '',
+    runId,
+    workspace,
+  });
+  log('jira-comment', `${out.action} commentId=${out.commentId}`);
+  process.stdout.write(`ACTION=${out.action}\nCOMMENT_ID=${out.commentId}\n`);
 }
 
 main().catch((error) =>
-  handleFatal(error, { argv: process.argv.slice(2), stage: "", script: "jira-comment" }),
+  handleFatal(error, {
+    argv: process.argv.slice(2),
+    stage: parseArgs(process.argv.slice(2)).stage || '',
+    script: 'jira-comment',
+  }),
 );

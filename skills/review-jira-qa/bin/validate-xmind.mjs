@@ -41,9 +41,10 @@ async function main() {
     errors,
   };
   process.stdout.write(`${JSON.stringify(out)}\n`);
+  process.stdout.write(`PENDING_LEAVES=${out.pendingLeaves}\n`);
   if (errors.length) throw new QaError(`XMind 校验失败：${errors.join('；')}`, EXIT.VALIDATION);
 }
 
 main().catch((error) =>
-  handleFatal(error, { argv: process.argv.slice(2), stage: "design", comment: false, script: "validate-xmind" }),
+  handleFatal(error, { argv: process.argv.slice(2), stage: "design", script: "validate-xmind" }),
 );

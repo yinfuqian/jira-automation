@@ -15,13 +15,18 @@ export const MOCK_PAT = 'mock-pat-do-not-use-in-production';
 const PRD = `# 示例需求 PRD\n\n## 1. 背景\n这是 mock 需求材料。\n\n## 2. 规则\n- 规则一：必须满足条件 A。\n- 规则二：异常时提示 B。\n\n### AC-001 按名称查询\n- WHEN 输入名称并查询\n- THEN 列表只显示匹配项\n\n### AC-002 名称为空\n- WHEN 名称留空并查询\n- THEN 提示名称必填\n`;
 const DESCRIPTION = `h3. 需求说明
 
-列表支持按名称筛选并导出。
+列表支持按名称筛选并导出，导出范围与当前筛选结果一致。
 
-* 筛选：输入名称后查询。
-* 导出：导出当前筛选结果。`;
+* 筛选：输入名称后点击查询，支持模糊匹配；清空后恢复全量列表。
+* 导出：导出当前筛选结果，包含列表展示的全部字段；无筛选结果时导出按钮置灰。
+* 权限：仅具备列表查看权限的账号可见导出入口。
+* 异常：导出失败时提示「导出失败，请稍后重试」，不产生空文件。
+* 性能：单次导出不超过 10000 条，超出时提示缩小筛选范围。`;
+// 指路式短描述：不足以作为可评审的主需求材料。
+const SHORT_DESCRIPTION = '中原银行上线前会对源码进行扫描，提前暴漏出漏洞，需要修复后才能上线[^call安全漏洞扫描_13300633.7z]';
 const OVERVIEW = `<!doctype html><html><body><h1>示例需求 Overview</h1><p>页面说明：列表支持筛选与导出。</p><script>const t = "脚本内正文：提交后提示成功";</script></body></html>`;
 
-function makeState(empty = false) {
+function makeState(empty = false, shortDescription = false, descriptionOnly = false) {
   const attachments = new Map();
   const add = (id, filename, content) => {
     attachments.set(String(id), {
@@ -36,6 +41,13 @@ function makeState(empty = false) {
     { id: '2001', author: { displayName: '产品' }, created: '2026-10-20T15:00:00.000+0800', body: '产品补充说明。' },
   ];
   if (empty) return { attachments, comments: [], nextAttachmentId: 1003, nextCommentId: 2002, description: '' };
+  if (descriptionOnly) {
+    return { attachments, comments: [], nextAttachmentId: 1003, nextCommentId: 2002, description: DESCRIPTION };
+  }
+  if (shortDescription) {
+    add('1003', '漏洞扫描结果.xls', 'service,vuln\ncall-fe,1\n');
+    return { attachments, comments: [], nextAttachmentId: 1004, nextCommentId: 2002, description: SHORT_DESCRIPTION };
+  }
   add('1001', '示例需求_PRD_DELIVERY.md', PRD);
   add('1002', '示例需求_Overview.html', OVERVIEW);
   return { attachments, comments, nextAttachmentId: 1003, nextCommentId: 2002, description: DESCRIPTION };
@@ -92,8 +104,9 @@ function parseMultipart(buffer, contentType) {
   return null;
 }
 
-export function startMock({ port = 0, empty = false } = {}) {
-  const state = makeState(empty);
+export function startMock({ port = 0, empty = false, shortDescription = false, denyDelete = false, descriptionOnly = false } = {}) {
+  const state = makeState(empty, shortDescription, descriptionOnly);
+  state.denyDelete = denyDelete;
   let base = '';
   const server = createServer((req, res) => {
     const url = new URL(req.url, 'http://127.0.0.1');
@@ -148,6 +161,10 @@ export function startMock({ port = 0, empty = false } = {}) {
       });
     }
     if (metaMatch && req.method === 'DELETE') {
+      // --deny-delete 模拟「附件由其他账号上传、当前账号无权删除」的 403
+      if (state.denyDelete) {
+        return send(403, { errorMessages: [`您没有权限删除有id的附件：${metaMatch[1]}`], errors: {} });
+      }
       if (!state.attachments.delete(metaMatch[1])) return send(404, { errorMessages: ['not found'] });
       res.writeHead(204);
       return res.end();
@@ -197,7 +214,7 @@ if (process.argv[1] && path.resolve(process.argv[1]) === path.resolve(fileURLToP
   const args = process.argv.slice(2);
   const portArg = args.indexOf('--port');
   const port = portArg >= 0 ? Number(args[portArg + 1]) : 0;
-  startMock({ port, empty: args.includes('--empty') }).then(({ port: actual }) => {
+  startMock({ port, empty: args.includes('--empty'), shortDescription: args.includes('--short-description'), denyDelete: args.includes('--deny-delete'), descriptionOnly: args.includes('--description-only') }).then(({ port: actual }) => {
     const base = `http://127.0.0.1:${actual}`;
     process.stdout.write(`MOCK_JIRA=${base}\n`);
     process.stdout.write(`export JIRA_BASE_URL="${base}"\nexport JIRA_PAT="${MOCK_PAT}"\nexport QA_WORKSPACE="$(pwd)"\n`);

@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 #
-# 安装 review-jira-qa 技能与三个斜杠命令到 Claude Code 用户目录。
+# 安装 qa-risk-analysis 技能与三个斜杠命令到 Claude Code 用户目录。
 #
 # 用法：
 #   bash install.sh              # 安装；目标已存在时拒绝
@@ -33,10 +33,10 @@ for arg in "$@"; do
 done
 
 SOURCE_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-SKILL_NAME="review-jira-qa"
+SKILL_NAME="qa-risk-analysis"
 CLAUDE_HOME="${CLAUDE_CONFIG_DIR:-$HOME/.claude}"
 SKILL_DEST="${CLAUDE_HOME}/skills/${SKILL_NAME}"
-COMMANDS=(review-jira-qa qa-design qa-cases)
+COMMANDS=(qa-risk-analysis qa-design qa-cases)
 
 say() { printf '%s\n' "$*"; }
 run() {
@@ -133,7 +133,7 @@ cat <<EOF
        export JIRA_BASE_URL="https://jira.example.com"
        export JIRA_PAT="<你的 Personal Access Token>"
   2) 在任意工作目录执行：
-       /review-jira-qa <ISSUE-KEY 或 URL>
+       /qa-risk-analysis <ISSUE-KEY 或 URL>
        /qa-design <ISSUE-KEY 或 URL>
        /qa-cases <ISSUE-KEY 或 URL>
   3) 无真实 Jira 试跑：

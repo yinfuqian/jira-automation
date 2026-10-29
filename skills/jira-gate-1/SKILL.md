@@ -412,19 +412,26 @@ export JIRA_BASE_URL="${JIRA_BASE_URL:-https://jira.in.wezhuiyi.com}"
 export QA_WORKSPACE="$PWD/work/jira-gate/<KEY>/review-jira-qa"
 ```
 
-**固定执行顺序**（`<runId>` 取 `jira-read.mjs` 输出的 `RUN_ID=`；`<gate.spec.json>`、`<HTML>`、`<COMMENT>` 按脚本实际输出路径替换）：
+**固定执行顺序**（0.1.18 起用 `prepare.mjs --stage 1` 一次完成准备步骤；`<runId>`、`<digest>`、`<coverageRequired>` 取 `prepare` 输出；`<gate.spec.json>`、`<HTML>`、`<COMMENT>` 按脚本实际输出路径替换）：
 
 ```bash
-node "$SKILL_DIR/bin/preflight.mjs" --key <KEY> --stage 1
-node "$SKILL_DIR/bin/jira-read.mjs" --key <KEY> --comments 10
-node "$SKILL_DIR/bin/jira-download.mjs" --key <KEY> --run-id <runId>
-node "$SKILL_DIR/bin/reuse.mjs" --key <KEY> --materials ".qa/runs/<runId>/materials.json" --run-id <runId>
-node "$SKILL_DIR/bin/materials.mjs" --run-id <runId>
-node "$SKILL_DIR/bin/coverage.mjs" --materials ".qa/runs/<runId>/materials.json"
-# 读 prompts/stage1-gate.md 与 .qa/runs/<runId>/materials-digest.md，完整核读全部需求侧材料
-# 按 coverage-required.json 覆盖全部 AC 并做同类扫描；只写 .qa/runs/<runId>/gate.spec.json，不手写 HTML
+node "$SKILL_DIR/bin/prepare.mjs" --key <KEY> --stage 1
+# prepare 内部依次执行 preflight → jira-read --comments 10 → jira-download → reuse.mjs → materials.mjs → coverage.mjs
+# 读 prepare 输出的 status：
+#   READY   → 继续；记下 runId、digest、coverageRequired、requiredAcs、suggestedVersion
+#   REUSED  → 直接复用上一版结论，零写入，不执行后续步骤，继续 G1 交付
+#   SKIPPED → QA 记为「不适用」，不生成 HTML、不上传、不评论，继续 G1 交付
+#   ERROR   → QA 记为「未完成」，停止 QA 剩余步骤，继续 G1 交付
+# READY 时读 prompts/stage1-gate.md 与 digest 指向的 materials-digest.md，完整核读全部需求侧材料
+# 对 materials.json 中全部 active 需求侧材料做结构扫描（extractedPath 优先，否则 localFile）
+node "$SKILL_DIR/bin/scan.mjs" --source <材料文件1> --source <材料文件2> ... --out ".qa/runs/<runId>/candidates.json"
+# 写 gate.spec.json：checks 必须覆盖 B1-B7/C1-C6 共 13 项；coverage 覆盖全部 AC；
+# failures 带 facts[].quote 与 criteria；scans 逐条回应 candidates；不手写 HTML
 node "$SKILL_DIR/bin/render-gate.mjs" --spec <gate.spec.json>
-node "$SKILL_DIR/bin/validate-gate.mjs" --html <HTML> --spec <gate.spec.json> --coverage-required ".qa/runs/<runId>/coverage-required.json"
+node "$SKILL_DIR/bin/validate-gate.mjs" --html <HTML> --spec <gate.spec.json> \
+  --coverage-required ".qa/runs/<runId>/coverage-required.json" \
+  --candidates ".qa/runs/<runId>/candidates.json" \
+  --source <材料文件1> --source <材料文件2> ...
 node "$SKILL_DIR/bin/jira-upload.mjs" --key <KEY> --file <HTML> --run-id <runId> --stage risk-analysis
 node "$SKILL_DIR/bin/jira-comment.mjs" --key <KEY> --body <COMMENT> --run-id <runId> --stage risk-analysis
 node "$SKILL_DIR/bin/result.mjs" --stage risk-analysis --key <KEY> --run-id <runId> --spec <gate.spec.json>
@@ -432,9 +439,9 @@ node "$SKILL_DIR/bin/result.mjs" --stage risk-analysis --key <KEY> --run-id <run
 
 **执行与结果收口**：不要用 `set -e`，命令逐条执行。`review-jira-qa` 的所有脚本统一以 exit 0 结束，是否继续只看 `status` / `applicable` / `ok`，不能把退出码当成成功依据。
 
-- `reuse.mjs` 输出 `REUSE=true`：当前材料附件 ID 集合与上一版门禁一致，QA 直接复用上一版结论。读取 `PREVIOUS_VERSION`、`PREVIOUS_COMMENT_ID`、`CONCLUSION` 以及 `QA_RESULT_JSON`，把上一版结论计入 G1 合并规则；**不重新分析、不新建附件或评论、不执行 QA 后续步骤**，继续 G1 交付。只有显式 `--force` 才重新评审。
-- `reuse.mjs` 失败（非零退出、`status=ERROR`、`ok=false` 或结果缺失）：按 QA 运营性失败记为「未完成（原因）」，继续执行后续步骤；不得假定复用成功，也不得中断 G1。
-- `jira-download` 输出 `status=SKIPPED` / `applicable=false`：QA 记为「不适用（reason/errorCode）」，不再生成 HTML、不上传附件、不写门禁评论，继续 G1 后续交付。
+- `prepare.mjs` 输出 `status=REUSED`（内部 `reuse.mjs` 的 `REUSE=true`）：当前材料附件 ID 集合与上一版门禁一致，QA 直接复用上一版结论。读取 `prepare` 输出的 `conclusion`、`suggestedVersion`、`commentId`，以及 `reuse.json` 与 `QA_RESULT_JSON`，把上一版结论计入 G1 合并规则；**不重新分析、不新建附件或评论、不执行 QA 后续步骤**，继续 G1 交付。只有显式 `--force` 才重新评审。
+- `reuse.mjs` 失败时 `prepare` 会整体返回 `status=ERROR` / `ok=false` 或带 `warnings`；按 QA 运营性失败记为「未完成（原因）」，继续执行 G1 后续步骤；不得假定复用成功，也不得中断 G1。
+- `prepare.mjs` 输出 `status=SKIPPED`（内部 `jira-download` 判定输入不适用）：QA 记为「不适用（reason/errorCode）」，不再生成 HTML、不上传附件、不写门禁评论，继续 G1 后续交付。
 - 任一脚本输出 `status=ERROR` 或 `ok=false`：停止 QA 剩余依赖步骤，把 QA 记为「未完成（status/errorCode/error）」，继续 G1 后续交付；不要等待人工确认。
 - `result.json` 与 `QA_RESULT_JSON` 都缺失：按 `status=ERROR`、`errorCode=INTERNAL`、「QA 未完成（无结果）」处理并继续 G1。
 
@@ -446,7 +453,7 @@ node "$SKILL_DIR/bin/result.mjs" --stage risk-analysis --key <KEY> --run-id <run
 - `commentId`（取 `comment.json.commentId`，作为 G1 评论里的「QA 评论」）。
 - `reused`（是否复用上一版）、`deliverableVersion`、`materialAttachmentIds`（来自 `reuse.json` 或 `result.json`）；复用时不要求新的 `htmlPath` / `attachmentId`。
 
-`REUSE=true` 时不会重跑阶段一，因此以 `QA_WORKSPACE/.qa/runs/<runId>/reuse.json` 和 `reuse.mjs` 输出的 `QA_RESULT_JSON` 为准：读取上一版 `conclusion`、`deliverableVersion`、`commentId`，并据此执行合并规则；此时 `result.json` 缺失是正常现象，**不得判为 QA 未完成或运营性失败**。
+`status=REUSED` 时不会重跑阶段一，因此以 `prepare.mjs` 输出、`QA_WORKSPACE/.qa/runs/<runId>/reuse.json` 和 `reuse.mjs` 输出的 `QA_RESULT_JSON` 为准：读取上一版 `conclusion`、`suggestedVersion`（或 `deliverableVersion`）、`commentId`，并据此执行合并规则；此时 `result.json` 缺失是正常现象，**不得判为 QA 未完成或运营性失败**。
 
 **合并规则（硬约束）**：
 

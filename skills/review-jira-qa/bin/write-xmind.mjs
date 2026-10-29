@@ -41,8 +41,9 @@ async function main() {
   }
   const spec = await readJson(specPath);
   const leaves = validateSpec(spec);
+  const pending = leaves.filter((leaf) => String(leaf.title || '').startsWith('【待确认】')).length;
   if (boolArg(args, 'check-only')) {
-    process.stdout.write(`LEAVES=${leaves.length}\nCHECK=OK\n`);
+    process.stdout.write(`LEAVES=${leaves.length}\nPENDING_LEAVES=${pending}\nCHECK=OK\n`);
     return;
   }
   const version = String(args.version || spec.deliverableVersion || '1.0').replace(/^v/, '');
@@ -53,9 +54,9 @@ async function main() {
     : path.join(workspace, 'outputs', ...(spec.scope ? String(spec.scope).split('/') : []), spec.jiraKey, 'test-cases', filename);
   await ensureDir(path.dirname(out));
   await writeFileAtomic(out, buildXMind(spec));
-  process.stdout.write(`XMIND=${out}\nLEAVES=${leaves.length}\nVERSION=${version}\n`);
+  process.stdout.write(`XMIND=${out}\nLEAVES=${leaves.length}\nFORMAL_LEAVES=${leaves.length - pending}\nPENDING_LEAVES=${pending}\nVERSION=${version}\n`);
 }
 
 main().catch((error) =>
-  handleFatal(error, { argv: process.argv.slice(2), stage: "design", comment: false, script: "write-xmind" }),
+  handleFatal(error, { argv: process.argv.slice(2), stage: "design", script: "write-xmind" }),
 );

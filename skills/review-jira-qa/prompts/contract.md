@@ -38,7 +38,7 @@
 12. 测试代码仅在补充环境和技术细节后另行生成
 
 标准执行口令：
-- `/review-jira-qa <Jira需求Key或URL>`：执行阶段一，自动读取 Jira 单当前最新需求附件，生成需求准入门禁清单 HTML；结论为「通过」时默认继续执行阶段二，否则停止。
+- `/qa-risk-analysis <Jira需求Key或URL>`：执行阶段一，自动读取 Jira 单当前最新需求附件，生成需求准入门禁清单 HTML；结论为「通过」时默认继续执行阶段二，否则停止。
 - `/qa-design <Jira需求Key或URL>`：执行阶段二，自动读取 Jira 最新需求附件与本地最新需求准入门禁清单，输出 XMind 后停止。
 - `/qa-cases <Jira需求Key或URL>`：执行阶段三，自动读取 Jira 最新需求附件、最新人工复核测试方案与 XMind，生成 Excel 和 Xray CSV 并完成一致性校验。
 

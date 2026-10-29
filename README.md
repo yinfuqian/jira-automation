@@ -390,10 +390,12 @@ powershell -ExecutionPolicy Bypass -File scripts\export_release_image.ps1 `
 PRD—原型一致性审核报告，只把评论草稿与这两份报告打成
 `<工作目录>/outputs/<KEY>-G1预检包-<时间戳>.zip` 供下载）、
 `review-jira-req`（按 OpenSpec 好需求标准评审需求质量，同时读取 Jira 附件并抽取文本/图片证据，
-产出 Markdown 报告，对 Jira 只读）、`review-jira-qa`（三段式 QA 交付技能；由 G1 调用时只执行
+产出 Markdown 报告，对 Jira 只读）、`review-jira-qa`（QA 技能；仓库内只启用
 阶段一需求准入门禁，按 B1–B7 / C1–C6 判定，并按 `coverage-required.json` 覆盖全部 AC、做同类扫描；
-材料与上一版一致时由 `reuse.mjs` 复用结论，否则产出 HTML 清单、上传附件并写 QA 评论；所有脚本统一 exit 0，
-通过 `status=ERROR/SKIPPED` 区分运营性失败与输入不适用，不阻塞 G1 后续交付；阶段二/三仅供人工触发）、
+`prepare.mjs --stage 1` 合并前置检查、材料下载、同材料复用、摘要与 AC 基线，READY 后用 `scan.mjs`
+生成候选并写含 `checks/coverage/scans` 的 `gate.spec.json`，再产出 HTML 清单、上传附件并写 QA 评论；
+所有脚本统一 exit 0，通过 `status=ERROR/SKIPPED` 区分运营性失败与输入不适用，不阻塞 G1 后续交付。
+阶段二/三文件仅为 `preflight` 安装包完整性保留，不对外启用）、
 `review-jira-design`（对照定稿 PRD 审核产品原型初稿，
 检查需求完整性、PRD—原型一致性、流程与状态覆盖，产出简洁可执行的自包含 HTML 报告；对 Jira 只读，
 由 `jira-gate-1` 与 `jira-gate-1-mock` 在需求质量评审之后调用）与 `jira-code`（读取需求单的「开发方案」附件，从方案指定的基线分支拉出
