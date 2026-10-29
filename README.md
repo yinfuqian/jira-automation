@@ -396,6 +396,13 @@ PRD—原型一致性审核报告，只把评论草稿与这两份报告打成
 生成候选并写含 `checks/coverage/scans` 的 `gate.spec.json`，再产出 HTML 清单、上传附件并写 QA 评论；
 所有脚本统一 exit 0，通过 `status=ERROR/SKIPPED` 区分运营性失败与输入不适用，不阻塞 G1 后续交付。
 阶段二/三文件仅为 `preflight` 安装包完整性保留，不对外启用）、
+`jira-qa-2`（只执行 QA 阶段二：生成测试方案与测试点 XMind，上传 Jira 并写
+`QA-测试方案结果v<版本>` 评论，等待人工复核；产物打成
+`outputs/<KEY>-QA测试方案包-<时间戳>.zip`，可通过
+`GET /skill/task/<task_id>/artifacts/<文件名>` 下载）与
+`jira-qa-3`（只执行 QA 阶段三：先从 Jira 取回最新 `-测试方案-vX.Y.md` 与 `-测试用例-vX.Y.xmind`，
+校验 `QA-测试方案复核通过v<版本>` 评论后生成 Excel 与 Xray CSV；不写 Jira，缺复核时返回
+`BLOCKED` 记「待人工复核」；产物打成 `outputs/<KEY>-QA交付包-<时间戳>.zip`）、
 `review-jira-design`（对照定稿 PRD 审核产品原型初稿，
 检查需求完整性、PRD—原型一致性、流程与状态覆盖，产出简洁可执行的自包含 HTML 报告；对 Jira 只读，
 由 `jira-gate-1` 与 `jira-gate-1-mock` 在需求质量评审之后调用）与 `jira-code`（读取需求单的「开发方案」附件，从方案指定的基线分支拉出

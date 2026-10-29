@@ -1,0 +1,4 @@
+interface:
+  display_name: "Jira QA 阶段三（Excel 与 Xray CSV）"
+  short_description: "只执行 QA 阶段三：从 Jira 取回人工复核后的测试方案与 XMind，刷新最终方案，生成 Excel 测试用例与 Xray CSV，校验一致后打包 zip 供下载；不写 Jira"
+  default_prompt: "用 $jira-qa-3 处理这个 Jira 需求单。只执行阶段三：prepare.mjs --stage 3 会先从 Jira 取回最新方案与 XMind 并校验 QA-测试方案复核通过v<版本> 评论；READY 时刷新最终方案，extract-cases 生成 cases.json，build-cases 生成 Excel 与 Xray CSV，validate-cases 校验后打包 outputs/<KEY>-QA交付包-<时间戳>.zip。缺复核证据时记「待人工复核」，不生成半成品；不上传 Jira、不写评论、不改状态。"
