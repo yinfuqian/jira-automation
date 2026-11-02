@@ -51,7 +51,7 @@ const mapLevel = (v) => {
 /* ══════════════════════════ PRD 索引 ══════════════════════════ */
 const GENERIC_LEAF = ['数据', '状态', '异常', '交互', '业务规则', '产品逻辑', '前置与触发',
   '用户可见文案', '需求说明', '核心测试场景', '决策台账'];
-const PRD_IDS = {}, PRD_SEC = {}, PRD_TEXT = {}, PRD_DETAIL = {};
+const PRD_IDS = {}, PRD_SEC = {}, PRD_TEXT = {}, PRD_DETAIL = {}, ID_SEC = {};
 const STOPWORD = ['阶段校验', '两阶段校验', '状态表', '状态表处理中行', '矩阵', '前置条件',
   '两组前置条件', '等', '第', '两', '各'];
 
@@ -62,11 +62,18 @@ function grabText(lines, i, n) {
     if (/^#{2,5}\s/.test(l)) break;
     if (/^[-*\s]*\*\*[A-Z]{2,4}-\d{3}/.test(l)) break;
     if (/^(关联功能|关联规则|关联)\s*[：:]/.test(l)) continue;
-    if (/^\|/.test(l)) continue;
+    if (/^\|/.test(l)) {
+      if (/^\|[\s:|-]+\|?$/.test(l)) continue;
+      const cells = l.split('|').slice(1, -1).map((x) => x.trim().replace(/\*\*/g, '')).filter(Boolean);
+      const isAssoc = /^关联\s*(功能|规则)?$/.test(cells[0] || '');
+      if (cells.length >= 3 && !isAssoc) out.push('【' + cells[0] + '】' + cells.slice(1).join(' — '));
+      else if (cells.length >= 2 && !isAssoc) out.push(cells.join('：'));
+      continue;
+    }
     if (!l) continue;
     out.push(l.replace(/^[-*]\s*/, '').replace(/\*\*/g, ''));
   }
-  return txt(out.join(' ')).slice(0, n);
+  return txt(out.join('；')).slice(0, n);
 }
 
 function buildPrdIndex(prdPath) {
@@ -80,6 +87,7 @@ function buildPrdIndex(prdPath) {
       if (im) {
         if (!PRD_IDS[im[1]]) PRD_IDS[im[1]] = txt(im[2]);
         PRD_TEXT[im[1]] = PRD_TEXT[im[1]] || grabText(lines, i, 1200);
+        ID_SEC[im[1]] = ID_SEC[im[1]] || m[1];
         t = txt(im[2]);
       }
       secTitle[m[1]] = t;
@@ -99,6 +107,11 @@ function buildPrdIndex(prdPath) {
     }
     m = /^\|\s*([A-Z]{2,4}-\d{3})\s*\|\s*([^|]+?)\s*\|/.exec(ln);
     if (m && !PRD_IDS[m[1]]) PRD_IDS[m[1]] = txt(m[2]);
+  });
+  Object.keys(ID_SEC).forEach((id) => {
+    if (PRD_TEXT[id]) return;
+    const child = Object.keys(secTitle).find((k) => k.startsWith(ID_SEC[id] + '.') && PRD_TEXT['§' + k]);
+    if (child) PRD_TEXT[id] = PRD_TEXT['§' + child];
   });
   Object.keys(secTitle).forEach((k) => {
     const leaf = secTitle[k];
@@ -182,7 +195,7 @@ function rangeLabel(a, b) {
 }
 
 /* ═══════════════════ 浮层内容：三种形态分点 ═══════════════════ */
-const TIP_LABEL = /(WHEN|THEN|关联功能|关联规则|关联|前置条件|后置条件|触发与作用域|触发|作用域|进入与默认|操作与联动|处理中|成功后|取消\/关闭\/返回|取消确认|失败\/冲突|异常处理|用户可见文案|业务规则|需求说明|产品逻辑|交互|状态|数据|验收标准|后台|技术补充)[：:]/g;
+const TIP_LABEL = /(WHEN|THEN|关联功能|关联规则|关联\s*(?:FR|AC)?|前置条件|后置条件|触发与作用域|触发|作用域|进入与默认|操作与联动|处理中|成功后|取消\/关闭\/返回|取消确认|失败\/冲突|异常处理|用户可见文案|业务规则|规则项|规则内容|词库选择|优先级\/互斥|例外与边界|需求说明|产品逻辑|交互|状态|数据|验收标准|展示项|约束|后台|技术补充)[：:]/g;
 function tipContent(detail) {
   let t = txt(detail || '').replace(/\s+/g, ' ').trim();
   if (!t) return '<p class="tp">PRD 中与该编号对应的条目</p>';
@@ -410,6 +423,28 @@ function renderPoints(list, ctx) {
   }).join('');
 }
 
+/* ---------- 责任人标签：显式字段优先，其次自动识别行首角色 ---------- */
+const ROLE_WORD = '原型作者|产品经理|产品|设计|开发|测试|研发|运营|业务|前端|后端';
+const ROLE_RE = new RegExp('^((?:' + ROLE_WORD + ')(?:（[^）]{1,24}）)?(?:\\s*[+＋、/]\\s*(?:' + ROLE_WORD + ')(?:（[^）]{1,24}）)?)*)');
+function splitOwner(q){
+  const raw = String(q.怎么改 || '');
+  if (/^\s*<span class="owner">/.test(raw)) return { owner: '', rest: raw };
+  if (q.责任人) {
+    const role = String(q.责任人).trim();
+    let rest = raw;
+    if (role && rest.indexOf(role) === 0) rest = rest.slice(role.length).replace(/^[\s，,、:：]+/, '');
+    return { owner: role, rest };
+  }
+  const m = ROLE_RE.exec(raw);
+  if (m && m[1] && m[1].length <= 40) {
+    return { owner: m[1], rest: raw.slice(m[1].length).replace(/^[\s，,、:：]+/, '') };
+  }
+  return { owner: '', rest: raw };
+}
+function fixHtml(q, ctx){
+  const o = splitOwner(q);
+  return (o.owner ? '<span class="owner">' + esc(o.owner) + '</span>' : '') + annotate(o.rest, ctx);
+}
 /* ══════════════════════════ 渲染报告 ══════════════════════════ */
 function render(content, template) {
   const F = (k, d) => (content[k] === undefined ? (d || '') : content[k]);
@@ -457,7 +492,7 @@ function render(content, template) {
           </div>
           <h3 class="issue-title">${annotate(q.标题, ctx)}</h3>
           <div class="fact"><span class="k">影响</span><p class="lead">${annotate(q.影响, ctx)}</p></div>
-          <div class="fact"><span class="k">怎么改</span><p>${annotate(q.怎么改, ctx)}</p></div>
+          <div class="fact"><span class="k">怎么改</span><p>${fixHtml(q, ctx)}</p></div>
           <div class="fact"><span class="k">完成标准</span><p class="soft">${q.完成标准 ? annotate(q.完成标准, ctx) : '—'}</p></div>
 
           <details class="evidence">
@@ -478,8 +513,6 @@ function render(content, template) {
                   ${q.原型出处 ? `<span class="src">出处 ${esc(q.原型出处)}</span>` : ''}
                 </div>
               </div>
-              ${(q.截图 && q.截图.length) ? `<div class="shots">${q.截图.map((s) =>
-                `<figure><img alt="${esc(s.说明 || '原型截图')}" src="${s.data}"><figcaption>${esc(s.说明 || '')}</figcaption></figure>`).join('')}</div>` : ''}
               ${q.技术定位 ? `<div class="tech"><span class="k">技术定位</span><span class="v">${esc(q.技术定位)}</span></div>` : ''}
               ${(q.核对说明 && q.核对说明.length) ? `<ul class="ev-note">${q.核对说明.map((x) => `<li>${annotate(x, ctx)}</li>`).join('')}</ul>` : ''}
             </div>

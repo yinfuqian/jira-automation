@@ -17,7 +17,6 @@ PROJECT_ROOT = BACKEND_DIR.parent
 SKILL_DIR = PROJECT_ROOT / "skills" / "review-jira-design"
 
 NODE = shutil.which("node")
-EVIDENCE_SCRIPT = SKILL_DIR / "scripts" / "capture_prototype_evidence.mjs"
 BUILD_SCRIPT = SKILL_DIR / "scripts" / "build-report.mjs"
 REPORT_TEMPLATE = SKILL_DIR / "references" / "report-template.html"
 CONTENT_EXAMPLE = SKILL_DIR / "references" / "content-example.json"
@@ -31,14 +30,21 @@ class ReviewDesignSkillPackagingTests(unittest.TestCase):
             SKILL_DIR / "SKILL.md",
             SKILL_DIR / "agents" / "openai.yaml",
             SKILL_DIR / "references" / "review-checks.md",
-            SKILL_DIR / "references" / "evidence-capture.md",
             CONTENT_EXAMPLE,
             REPORT_TEMPLATE,
-            EVIDENCE_SCRIPT,
             BUILD_SCRIPT,
         ]
         for path in expected:
             self.assertTrue(path.is_file(), f"缺少技能文件：{path}")
+
+    def test_screenshot_evidence_files_are_removed(self):
+        """1.2 起不采集截图，旧的截图脚本与说明不得继续随技能分发。"""
+        obsolete = [
+            SKILL_DIR / "references" / "evidence-capture.md",
+            SKILL_DIR / "scripts" / "capture_prototype_evidence.mjs",
+        ]
+        for path in obsolete:
+            self.assertFalse(path.exists(), f"旧截图文件应删除：{path}")
 
     def test_skill_is_registered_under_its_directory_name(self):
         """注册表按目录名定位技能，front matter 的 name 必须与之一致。"""
@@ -61,18 +67,13 @@ class ReviewDesignSkillPackagingTests(unittest.TestCase):
 
         self.assertIn("/data/skills/review-jira-design", text)
         self.assertIn("对 Jira 只读", text)
-        self.assertIn("截图未验证", text)
+        self.assertIn("不采集截图", text)
+        self.assertIn("责任人", text)
+        self.assertNotIn("capture_prototype_evidence", text)
+        self.assertNotIn("截图未验证", text)
         # 四种结论口径都要留在技能定义里。
         for conclusion in ("退回补齐", "有条件通过", "通过", "审核未完成"):
             self.assertIn(conclusion, text)
-
-    def test_evidence_script_does_not_touch_jira_or_post_data(self):
-        """截图脚本只操作本地文件与本地浏览器，不得访问 Jira 或外发数据。"""
-        source = EVIDENCE_SCRIPT.read_text(encoding="utf-8")
-
-        self.assertNotIn("jira", source.lower())
-        self.assertNotIn("fetch(", source)
-        self.assertNotIn("Authorization", source)
 
     def test_report_template_keeps_style_and_render_hooks(self):
         """SKILL.md 要求保留模板样式与浮层/折叠交互，这里锁定生成脚本依赖的结构。"""
@@ -91,6 +92,7 @@ class ReviewDesignSkillPackagingTests(unittest.TestCase):
 
         self.assertIn("结论", payload)
         self.assertIn("问题", payload)
+        self.assertIn("责任人", payload["问题"][0])
 
 
 @unittest.skipUnless(NODE, "未安装 node，跳过脚本语法检查")
@@ -149,35 +151,9 @@ class ReportBuildScriptTests(unittest.TestCase):
             self.assertNotIn("{{", html)
             self.assertIn("<style>", html)
             self.assertIn("tipbox", html)
-
-
-@unittest.skipUnless(NODE, "未安装 node，跳过脚本语法检查")
-class EvidenceScriptSyntaxTests(unittest.TestCase):
-    def test_evidence_script_parses(self):
-        result = subprocess.run(
-            [NODE, "--check", str(EVIDENCE_SCRIPT)],
-            capture_output=True,
-            encoding="utf-8",
-            errors="replace",
-            check=False,
-            timeout=60,
-        )
-
-        self.assertEqual(result.returncode, 0, result.stderr)
-
-    def test_usage_exit_code_when_args_missing(self):
-        """缺参数时按脚本约定以退出码 2 报用法，不静默成功。"""
-        result = subprocess.run(
-            [NODE, str(EVIDENCE_SCRIPT)],
-            capture_output=True,
-            encoding="utf-8",
-            errors="replace",
-            check=False,
-            timeout=60,
-        )
-
-        self.assertEqual(result.returncode, 2)
-        self.assertIn("用法", result.stderr)
+            # 1.2 起责任角色由内容 JSON 的「责任人」字段渲染为标签。
+            self.assertIn('class="owner"', html)
+            self.assertIn("原型作者（产品确认口径）", html)
 
 
 if __name__ == "__main__":

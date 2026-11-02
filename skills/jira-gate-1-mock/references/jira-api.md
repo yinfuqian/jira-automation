@@ -140,7 +140,7 @@ Jira 错误响应形如 `{"errorMessages":["..."],"errors":{...}}`，`jira.mjs` 
 | `[打包失败]（missing-argument）` | 少了 `--key` / `--comment` / `--report`；按脚本头部注释的用法补齐 |
 | 打包输出里 `warnings` 非空 | 评论草稿残留 Markdown 语法或缺检查项标记，或设计报告里还有 `{{...}}` 占位符；按 `SKILL.md` §7、§8、§11 修好再重新打包 |
 | 报告里出现 `{{需求名称}}` 之类的原文 | `review-jira-design` 的模板占位符没替换完；回到它的 `SKILL.md` §7 重新生成，不要手工改模板 |
-| `review-jira-design` 截图脚本报找不到 Playwright / 浏览器 | 容器内通常没有浏览器；按它的「无法截取时」记为"截图未验证"，用 HTML 路径 + selector 定位，**不要安装浏览器、不要伪造截图** |
+| `review-jira-design` 报告脚本报错 | 按它的 `SKILL.md` 核对 `--prd` / `--content` / `--out` 参数与内容 JSON 字段；该版本不采集截图，**不要安装浏览器、不要伪造截图** |
 | 设计报告缺失或落在技能目录里 | 报告必须写到 `<工作目录>/work/jira-gate/<KEY>/design/`（技能目录是只读挂载）；按 `SKILL.md` §11 的路径重跑 |
 | 压缩包里的中文文件名乱码 | 解压工具过旧；`pack-deliverables.mjs` 已置 UTF-8 标志位，建议用系统资源管理器或 `Expand-Archive` / `bsdtar` 解压 |
 | 单子上看不到评论/附件（预期如此） | 本技能不写 Jira：评论只在压缩包内的 `comment.txt`，报告只在压缩包内；要留痕请改用 `jira-gate-1` |
