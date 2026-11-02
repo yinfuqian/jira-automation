@@ -132,9 +132,9 @@ COPY . .
 # 使用示例用户表完成构建自检；该文件不会复制到最终运行镜像。
 RUN find /app -type f -name '*.sh' -exec sed -i 's/\r$//' {} + \
     && chmod +x /app/docker-entrypoint.sh /app/migrate_db.sh /app/start.sh /app/start_worker.sh \
-    && mkdir -p /data/upload /data/paddle-cache /app/app/logs /tmp/jira-automation-repos \
+    && mkdir -p /data/upload /data/paddle-cache /data/config /app/app/logs /tmp/jira-automation-repos \
     && python -m pip check \
-    && python -m compileall -q app.py celery_worker.py extensions.py app bootstrap_schema.py init_database.py manage_users.py verify_runtime.py \
+    && python -m compileall -q app.py celery_worker.py chatbot_gateway.py extensions.py app bootstrap_schema.py init_database.py manage_users.py verify_runtime.py \
     && AUTH_USERS_FILE=/app/users.example.csv python verify_runtime.py --build \
     && AUTH_USERS_FILE=/app/users.example.csv python verify_runtime.py --ocr \
     && rm -rf /app/app/logs/* \
@@ -165,6 +165,7 @@ COPY --from=build /app/bootstrap_schema.py /app/bootstrap_schema.py
 COPY --from=build /app/init_database.py /app/init_database.py
 COPY --from=build /app/manage_users.py /app/manage_users.py
 COPY --from=build /app/verify_runtime.py /app/verify_runtime.py
+COPY --from=build /app/chatbot_gateway.py /app/chatbot_gateway.py
 COPY --from=build /app/docker-entrypoint.sh /app/docker-entrypoint.sh
 COPY --from=build /app/migrate_db.sh /app/migrate_db.sh
 COPY --from=build /app/start.sh /app/start.sh
@@ -180,7 +181,7 @@ RUN chmod +x /app/docker-entrypoint.sh /app/migrate_db.sh /app/start.sh /app/sta
     && jdk 8 javac -version >/dev/null \
     && (command -v 7z >/dev/null || command -v 7zz >/dev/null || command -v 7za >/dev/null \
         || echo "提示：镜像内没有 7-Zip 系命令，7z/rar 归档将由 bsdtar 处理") \
-    && mkdir -p /data/upload /data/skills /data/codex /data/skill-workspace /app/app/logs /tmp/jira-automation-repos
+    && mkdir -p /data/upload /data/skills /data/codex /data/skill-workspace /data/config /app/app/logs /tmp/jira-automation-repos
 
 EXPOSE 5000
 

@@ -23,6 +23,8 @@
 | `api-dev` | Flask API、认证、上传、Git 和分析任务提交（开发环境） | `6000` |
 | `worker-analysis-dev` | Celery 日志分析、图片识别与 GitLab 维护任务（开发环境） | 无宿主机端口 |
 | `worker-skill-dev` | Celery 技能（Codex Agent）执行（开发环境） | 无宿主机端口 |
+| `worker-chatbot-dev` | Celery 企业微信代码问答任务执行（开发环境） | 无宿主机端口 |
+| `chatbot-gateway-dev` | 企业微信智能机器人长连接网关，必须单实例（开发环境） | 无宿主机端口 |
 | `beat-dev` | 开发环境定时任务调度：每分钟清理排队过期技能任务，并按配置周期同步 GitLab 产品与模块 | 无宿主机端口 |
 | `migrate` | 创建数据库并执行 `flask db upgrade` | 一次性容器 |
 | `mysql` | 业务数据、知识库和用户操作日志 | `3306` |
@@ -36,9 +38,12 @@
 
 ```powershell
 Copy-Item .env.example .env
-docker compose --env-file .env -f docker-compose-dev.yaml up -d api-dev worker-analysis-dev worker-skill-dev beat-dev
+# start.sh 按 DEPLOY_ENV=dev 启动开发服务；DEPLOY_ENV=prod 时启动生产服务。
+bash start.sh
 docker compose -f docker-compose-dev.yaml ps -a
 ```
+
+首次本地构建或修改依赖后，先执行 `docker compose build`（本仓库需附加 `-f docker-compose-dev.yaml`）。
 
 开发环境重建 API 与 Celery Worker（不会重启数据库，也不会删除数据；会重新读取 `.env`）：
 
@@ -53,6 +58,8 @@ bash restart-master.sh
 ```
 
 两个脚本都使用 `docker compose up -d --force-recreate` 重建指定服务，因此修改 `.env` / `.env.production` 后会立即生效；dev 默认重建 `api-dev`、`worker-analysis-dev`、`worker-skill-dev` 和 `beat-dev`，生产默认重建 `api`、`worker-analysis`、`worker-skill` 和 `beat`。`docker compose restart` 不会重新读取环境文件。脚本支持传入 Compose 服务名，例如 `bash restart-dev.sh api-dev`、`bash restart-dev.sh worker-skill-dev` 或 `bash restart-master.sh worker-analysis`。如确需临时覆盖配置文件，可使用 `COMPOSE_FILE`、`ENV_FILE` 环境变量。
+
+企业微信机器人是可选能力。`bash start.sh` 默认 `DEPLOY_ENV=dev`，使用 `docker-compose-dev.yaml` 与 `worker-chatbot-dev`、`chatbot-gateway-dev`；执行 `DEPLOY_ENV=prod bash start.sh` 时改用 `docker-compose-prod.yaml` 与不带后缀的 `worker-chatbot`、`chatbot-gateway`。生产日常重启仍可使用 `bash restart-master.sh`。`COMPOSE_FILE`、`ENV_FILE` 可单独覆盖。
 
 GitLab 产品与模块会在 `worker-analysis-dev` 启动时自动同步一次，beat-dev 随后按 `GITLAB_SYNC_INTERVAL_HOURS` 周期同步，默认 12 小时。`POST /git/sync-projects` 继续作为 Windows 客户端的手动同步入口。
 
@@ -742,6 +749,63 @@ node ..\skills\jira-gate-bug\scripts\analysis-cli.mjs render --input <结果JSON
 - 想先验证链路而不碰 Jira，可临时新建一个只回复结论的测试技能目录，并把 `SKILLS_DIR` 指向该目录。
 - 本地 `node` 版本需与容器内一致（默认 `0.142.5`）；用 `codex --version` 确认，必要时通过 `CODEX_BIN` 指定完整路径。
 - 首次运行会在 `CODEX_HOME` 内生成 Codex CLI 自身的状态文件（`state_*.sqlite` 等，与业务数据库无关），并保留技能工作目录，均属预期行为。本地默认指向 `backend/local-data/codex-home`，容器内落在 `codex-home` 卷，都不会污染仓库目录。
+
+## 企业微信代码问答机器人
+
+在群里 @机器人 提问，机器人先让人用序号选项目（如「call3.1主线」），再按该项目对应的多个仓库分支检出代码，由 Codex 分析后给出带 `文件:行号` 引用的回答。
+
+### 组成
+
+| 组件 | 作用 |
+|---|---|
+| `backend/chatbot_gateway.py` | 常驻长连接进程，订阅 `wss://openws.work.weixin.qq.com`、收发消息 |
+| `backend/app/chatbot/` | 协议、会话、仓库检出、答案生成与审计 |
+| Celery 队列 `chatbot` | 执行代码检出与模型分析（`chatbot.answer`） |
+| `config/chatbot.json` | 项目、模块分支映射与问答阈值；`.env` 只保留 BotID/Secret |
+
+### 交互流程
+
+1. 群内首次 @机器人：返回项目菜单；因为企业微信只在群聊 @ 时推送消息回调，后续发送序号、提问、切换项目都要重新 @机器人。单聊会提示改用群聊。
+2. 用户提问：网关立刻建一条流式消息（「正在分析…」），再把任务投递给 Celery。
+3. worker 把该项目下各模块以 `git worktree` 检出到独立目录，调用 `codex exec` 只读分析。
+4. 结果经 Redis 频道 `chatbot:reply` 回到网关，网关按覆盖式流式刷新做打字机效果，最后 `finish=true`。
+
+### 关键约束
+
+- 同一机器人同时只能有一条长连接：网关必须单实例部署，不能水平扩容。
+- 只在群聊里被 @ 时触发；单聊直接提示改用群聊。回答范围包括代码、SQL、配置和接口文档。
+- 流式消息自首次发送起 10 分钟内必须 `finish=true`；超过配置的软截止时间会改为主动推送 `aibot_send_msg`。
+- 单会话 30 条/分钟；打字机分段数由 `config/chatbot.json` 的 `gateway.typewriter_max_chunks` 控制，默认 12 段、间隔 2 秒。
+- 仓库地址优先取 `repos.module_repo_urls`，其次 `repos.repo_url_template`，最后用 GitLab 搜索接口按模块名解析（凭据复用 `GIT_BASE_URL`/`GIT_USER`/`GIT_PASSWORD`/`GITLAB_PRIVATE_TOKEN`）。
+- 修改 `config/chatbot.json` 或 `.env` 后需要重建网关与 Worker，进程不会热加载。
+
+### 部署
+
+```bash
+# 1. 在 .env 中只填写机器人凭证
+CHATBOT_BOT_ID=你的BotID
+CHATBOT_BOT_SECRET=你的Secret
+
+# 2. 启动 API、专用 worker 与网关（三者都要读取同一份映射文件）
+docker compose --env-file .env.production -f docker-compose-prod.yaml up -d api worker-chatbot chatbot-gateway
+```
+
+生产 Compose 的 `worker-chatbot`、`chatbot-gateway` 通过 `${ENV_FILE:-.env}` 读取环境文件。
+使用 `--env-file .env.production` 启动时，请确保该文件里有 `ENV_FILE=.env.production`（部署示例已包含），
+否则容器内的机器人凭证和 GitLab 凭据会读不到。`bash start.sh` 在凭证齐全时才会追加这两个服务。
+首次部署或新增 `chatbot_questions` 表时，先执行一次
+`docker compose --env-file .env.production -f docker-compose-prod.yaml run --rm migrate`。
+
+项目与分支映射维护在 `config/chatbot.json`：`projects` 数组的顺序就是群聊菜单里的序号，每个项目的 `modules` 写成 `模块名: 分支`，不使用的模块直接不写。修改后需要重启 `worker-chatbot` 与 `chatbot-gateway`。
+
+### 只读接口
+
+| 接口 | 说明 |
+|---|---|
+| `GET /chatbot/health` | 配置是否加载、项目数、网关是否在线（免登录） |
+| `GET /chatbot/projects` | 项目与模块分支清单，用于核对映射 |
+| `GET /chatbot/questions?limit=20` | 最近问答记录（问题、结论、耗时、状态） |
+| `POST /chatbot/reload` | 重新读取配置文件并校验；变更实际生效需重启网关与 Worker |
 
 ## Git 与外部基础设施
 

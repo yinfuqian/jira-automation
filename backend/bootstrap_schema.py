@@ -229,6 +229,32 @@ DDL_STATEMENTS = [
         FOREIGN KEY(module_id) REFERENCES modules (id)
     )
     """,
+    # 企业微信代码问答审计表：与 alembic 迁移 e5d2a8c14b73 保持一致。
+    """
+    CREATE TABLE IF NOT EXISTS chatbot_questions (
+        id INTEGER NOT NULL AUTO_INCREMENT,
+        task_id VARCHAR(64) NOT NULL,
+        chatid VARCHAR(128),
+        chattype VARCHAR(16),
+        userid VARCHAR(128),
+        project_key VARCHAR(64),
+        project_name VARCHAR(128),
+        question TEXT,
+        answer TEXT,
+        status VARCHAR(20) NOT NULL DEFAULT 'running',
+        error TEXT,
+        duration_ms INTEGER,
+        created_at DATETIME,
+        finished_at DATETIME,
+        PRIMARY KEY (id),
+        UNIQUE KEY ix_chatbot_questions_task_id (task_id),
+        KEY ix_chatbot_questions_chatid (chatid),
+        KEY ix_chatbot_questions_userid (userid),
+        KEY ix_chatbot_questions_project_key (project_key),
+        KEY ix_chatbot_questions_status (status),
+        KEY ix_chatbot_questions_created_at (created_at)
+    )
+    """,
 ]
 
 

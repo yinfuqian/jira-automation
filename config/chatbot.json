@@ -1,0 +1,113 @@
+{
+  "gateway": {
+    "ws_url": "wss://openws.work.weixin.qq.com",
+    "heartbeat_seconds": 30,
+    "reply_channel": "chatbot:reply",
+    "kick_backoff_seconds": 60,
+    "reconnect_min_seconds": 1,
+    "reconnect_max_seconds": 60,
+    "typewriter_chunk_chars": 400,
+    "typewriter_interval_ms": 2000,
+    "typewriter_max_chunks": 12,
+    "stream_soft_deadline_seconds": 480
+  },
+  "repos": {
+    "cache_dir": "",
+    "repo_url_template": "",
+    "module_repo_urls": {
+      "yicall-common": "https://code.in.wezhuiyi.com/yicall/yicall-common.git",
+      "yicall-management": "https://code.in.wezhuiyi.com/yicall/yicall-management.git",
+      "yicall-dialog": "https://code.in.wezhuiyi.com/yicall/yicall-dialog.git",
+      "yicall-task": "https://code.in.wezhuiyi.com/yicall/yicall-task.git",
+      "yicall-openapi": "https://code.in.wezhuiyi.com/yicall/yicall-openapi.git",
+      "yicall-management-system": "https://code.in.wezhuiyi.com/yicall/yicall-management-system.git",
+      "fe-yicall-web": "https://code.in.wezhuiyi.com/yicall/fe-yicall-web.git",
+      "llm-management": "https://code.in.wezhuiyi.com/yicall/llm-management.git",
+      "aiforce2": "https://code.in.wezhuiyi.com/aiforce/aiforce2.git",
+      "aiforce-web": "https://code.in.wezhuiyi.com/aiforce/aiforce-web.git",
+      "asr-tts-adaptor": "https://code.in.wezhuiyi.com/asr-tts-adaptor/asr-tts-adaptor.git"
+    },
+    "tls_verify": true,
+    "clone_timeout_seconds": 900,
+    "fetch_concurrency": 4,
+    "max_repo_size_mb": 2048
+  },
+  "answer": {
+    "timeout_seconds": 900,
+    "max_answer_chars": 12000,
+    "reasoning_effort": "medium",
+    "sandbox": "read-only"
+  },
+  "session_ttl_seconds": 14400,
+  "projects": [
+    {
+      "key": "yicall-3.1-main",
+      "name": "call3.1主线",
+      "description": "主版本",
+      "modules": {
+        "yicall-common": "release/3.1",
+        "yicall-management": "release/3.1",
+        "yicall-dialog": "release/3.1",
+        "yicall-task": "release/3.1",
+        "yicall-openapi": "release/3.1",
+        "fe-yicall-web": "release/3.1",
+        "llm-management": "release/3.2",
+        "aiforce2": "release/2.7",
+        "aiforce-web": "release/v2.7",
+        "asr-tts-adaptor": "release/0.5.0"
+      }
+    },
+    {
+      "key": "yicall-3.1-zszq",
+      "name": "call3.1招商证券",
+      "description": "招商证券定制版",
+      "modules": {
+        "yicall-common": "release/3.1-zszq",
+        "yicall-management": "release/3.1-zszq",
+        "yicall-dialog": "release/3.1-zszq",
+        "yicall-task": "release/3.1-zszq",
+        "yicall-openapi": "release/3.1-zszq",
+        "fe-yicall-web": "release/v3.1-zhaoshangzhengquan",
+        "aiforce2": "release/2.7",
+        "aiforce-web": "release/v2.7",
+        "asr-tts-adaptor": "release/0.5.0"
+      }
+    },
+    {
+      "key": "yicall-3.0-xyyh",
+      "name": "call3.0兴业银行",
+      "description": "兴业银行定制版",
+      "modules": {
+        "fe-yicall-web": "release/3.1-xyyh",
+        "aiforce2": "release/xyyh/2.7",
+        "aiforce-web": "release/v2.7",
+        "asr-tts-adaptor": "release/0.5.0",
+        "yicall-management-system": "release/xyyh/3.1"
+      }
+    },
+    {
+      "key": "yicall-3.0-thjj",
+      "name": "call3.0天宏基金",
+      "description": "天弘基金定制版",
+      "modules": {
+        "fe-yicall-web": "release/3.0-tianhongjijin",
+        "aiforce2": "release/3.0.24-thjj",
+        "aiforce-web": "release/v2.7",
+        "asr-tts-adaptor": "release/0.5.0",
+        "yicall-management-system": "release/3.0.24/thjj"
+      }
+    },
+    {
+      "key": "yicall-3.0-fgjj",
+      "name": "call3.0富国基金",
+      "description": "富国基金定制版",
+      "modules": {
+        "fe-yicall-web": "release/3.0-guofujijin",
+        "aiforce2": "release/2.7-fgjj",
+        "aiforce-web": "release/v2.7",
+        "asr-tts-adaptor": "release/0.5.0",
+        "yicall-management-system": "release/3.0.12/fgjj"
+      }
+    }
+  ]
+}

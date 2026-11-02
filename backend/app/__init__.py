@@ -17,6 +17,7 @@ from app.skillrun.tickets import verify_download_ticket
 from app.auth.middleware import install_authentication, register_ticket_verifier
 from app.auth.account_requests import build_account_request_service
 from app.auth.routes import auth_bp
+from app.chatbot.routes import chatbot_bp
 from app.auth.sessions import SessionService
 from app.observability.request_logging import install_request_logging
 from app.auth.users import UnavailableUserStore, UserStore
@@ -65,6 +66,7 @@ def create_app(config_overrides=None, redis_client=None):
     app.register_blueprint(analysis_bp, url_prefix="/analysis")
     app.register_blueprint(git_bp, url_prefix="/git")
     app.register_blueprint(skill_bp, url_prefix="/skill")
+    app.register_blueprint(chatbot_bp, url_prefix="/chatbot")
     app.register_blueprint(dashboard_bp, url_prefix="/dashboard")
     # 交付物下载票据：让 /skill/task/<task_id> 里的 download_url 能直接在浏览器打开。
     register_ticket_verifier("/skill/task/", verify_download_ticket)

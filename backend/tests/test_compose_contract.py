@@ -16,6 +16,8 @@ class ComposeContractTests(unittest.TestCase):
             "api-dev",
             "worker-analysis-dev",
             "worker-skill-dev",
+            "worker-chatbot-dev",
+            "chatbot-gateway-dev",
             "beat-dev",
             "migrate",
         ):
@@ -29,16 +31,24 @@ class ComposeContractTests(unittest.TestCase):
         source = DEV_COMPOSE_PATH.read_text(encoding="utf-8")
 
         self.assertNotIn("build:", source)
-        self.assertEqual(source.count("image: ${BACKEND_IMAGE}"), 5)
-        self.assertEqual(source.count('network_mode: "host"'), 5)
+        self.assertEqual(source.count("image: ${BACKEND_IMAGE}"), 7)
+        self.assertEqual(source.count('network_mode: "host"'), 7)
         self.assertIn("0.0.0.0:6000", source)
         self.assertIn('"${API_PORT}:6000"', source)
 
     def test_split_workers_have_unique_celery_node_names(self):
-        """host 网络下两个 Worker 共用主机名，必须显式设置唯一节点名供巡检识别。"""
+        """host 网络下多个 Worker 共用主机名，必须显式设置唯一节点名供巡检识别。"""
         expected = {
-            DEV_COMPOSE_PATH: ("worker-analysis-dev@%h", "worker-skill-dev@%h"),
-            PROD_COMPOSE_PATH: ("worker-analysis@%h", "worker-skill@%h"),
+            DEV_COMPOSE_PATH: (
+                "worker-analysis-dev@%h",
+                "worker-skill-dev@%h",
+                "worker-chatbot-dev@%h",
+            ),
+            PROD_COMPOSE_PATH: (
+                "worker-analysis@%h",
+                "worker-skill@%h",
+                "worker-chatbot@%h",
+            ),
         }
         for path, hostnames in expected.items():
             source = path.read_text(encoding="utf-8")
@@ -48,8 +58,8 @@ class ComposeContractTests(unittest.TestCase):
     def test_online_compose_mounts_runtime_data_and_skills(self):
         source = DEV_COMPOSE_PATH.read_text(encoding="utf-8")
 
-        self.assertEqual(source.count("env_file:\n      - .env"), 5)
-        self.assertEqual(source.count("./data/users-dev.csv:/data/users.csv:ro"), 5)
+        self.assertEqual(source.count("env_file:\n      - .env"), 7)
+        self.assertEqual(source.count("./data/users-dev.csv:/data/users.csv:ro"), 7)
         self.assertNotIn(":/users.csv", source)
         for mount in (
             "./data/upload-dev:/data/upload",
@@ -89,6 +99,38 @@ class ComposeContractTests(unittest.TestCase):
         self.assertIn("API_PORT=6000", source)
         self.assertNotIn("CELERY_ANALYSIS_CONCURRENCY", source)
         self.assertNotIn("CELERY_SKILL_CONCURRENCY", source)
+        # 机器人只把凭证放环境变量，项目与分支映射必须留在配置文件。
+        self.assertIn("CHATBOT_BOT_ID=", source)
+        self.assertNotIn("CHATBOT_PROJECT_", source)
+
+    def test_chatbot_config_is_mounted_as_a_file_backed_contract(self):
+        """API、机器人 Worker 和网关都要能读取同一份项目映射文件。"""
+        config_path = PROJECT_ROOT / "config" / "chatbot.json"
+        self.assertTrue(config_path.is_file())
+        for path in (DEV_COMPOSE_PATH, PROD_COMPOSE_PATH):
+            source = path.read_text(encoding="utf-8")
+            self.assertEqual(source.count("./config:/data/config:ro"), 3)
+
+    def test_start_script_selects_services_by_deploy_env(self):
+        """启动脚本按 DEPLOY_ENV 选择生产或开发的服务名，并包含机器人服务。"""
+        source = (PROJECT_ROOT / "start.sh").read_text(encoding="utf-8")
+        self.assertNotIn("run --rm migrate", source)
+        self.assertIn("DEPLOY_ENV", source)
+        self.assertIn("docker-compose-dev.yaml", source)
+        self.assertIn("docker-compose-prod.yaml", source)
+        self.assertIn("worker-chatbot", source)
+        self.assertIn("chatbot-gateway", source)
+        # ps 不接受 up 专用参数，避免脚本在查询状态时直接失败。
+        ps_line = next(line for line in source.splitlines() if " compose " in line and " ps " in line)
+        self.assertNotIn("--force-recreate", ps_line)
+        self.assertNotIn("--remove-orphans", ps_line)
+
+    def test_production_restart_script_uses_non_dev_chatbot_services(self):
+        """生产脚本必须使用不带 -dev 后缀的服务名，不能引用开发容器。"""
+        source = (PROJECT_ROOT / "restart-master.sh").read_text(encoding="utf-8")
+        self.assertIn("SERVICES+=(worker-chatbot chatbot-gateway)", source)
+        self.assertNotIn("worker-chatbot-dev", source)
+        self.assertNotIn("chatbot-gateway-dev", source)
 
     def test_readme_uses_online_compose_and_environment_specific_restart_scripts(self):
         readme = (PROJECT_ROOT / "README.md").read_text(encoding="utf-8")

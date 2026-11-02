@@ -12,6 +12,7 @@ ANONYMOUS_ENDPOINTS = {
     "health.live",
     "health.ready",
     "skill.jira_webhook",
+    "chatbot.health",
 }
 
 # 允许用 ?ticket= 签名票据免请求头访问的路径前缀与校验函数，由业务模块在装配时注册。

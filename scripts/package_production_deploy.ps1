@@ -40,6 +40,11 @@ $mavenConfigTarget = Join-Path $staging "config/maven"
 New-Item -ItemType Directory -Force -Path $mavenConfigTarget | Out-Null
 Copy-Item -LiteralPath $mavenConfigSource -Destination $mavenConfigTarget
 
+# 机器人项目与分支映射随包分发；BotID/Secret 不在这里，仍由 .env.production 提供。
+$chatbotConfigSource = Join-Path $projectRoot "config/chatbot.json"
+$chatbotConfigTarget = Join-Path $staging "config"
+Copy-Item -LiteralPath $chatbotConfigSource -Destination $chatbotConfigTarget
+
 # 技能定义随部署包一起发布；技能令牌等本地文件不打包。
 Copy-Item -LiteralPath (Join-Path $projectRoot "skills") -Destination $staging -Recurse
 
