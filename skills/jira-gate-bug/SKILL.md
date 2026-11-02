@@ -84,7 +84,7 @@ node <技能目录>/scripts/jira-cli.mjs log-exemption <KEY|URL>
 - 存在任一 `MUST` 缺失或命中一票打回红线 → **打回**：
   1. 按「输出模板 · 打回」写评论（列出 `(x)` 项与要补的内容）。
   2. `node <技能目录>/scripts/jira-cli.mjs gate-set <KEY> --file gate.json`，`gate.json` 内容 `{"result":"不通过","selfCheck":"无"}`（字段不存在时会返回 `skipped`，不影响评论，继续即可）。
-  3. 如果 `jira-config.json` 配置了 `rejectTransitionName`，再执行 `jira-cli.mjs transition <KEY> --name <名称>`；脚本会保留并恢复流转前的原经办人（处理人），不能让门禁账号留在经办人字段。**未配置时不要自行流转状态**，打回结论以评论与门禁字段为准。
+  3. 执行 `jira-cli.mjs transition <KEY> --name <名称>`。技能目录自带 `jira-config.json`，默认把 `rejectTransitionName` 配置为 `打回`。脚本优先执行状态流转，随后把经办人设置为 Jira `reporter`（提单人）；如果当前状态没有名为“打回”的可用流转，则保持状态不变但仍转派给提单人，并在总结中说明 `transitionSkipped=true`。不允许经办人留在原处理人、门禁账号或其它用户。提单人缺失或经办人回写失败时必须如实报告，不能把打回说成完成。
   4. 结束本次任务，不做故障分析。
 
 ### 3. 自查结果检查
@@ -122,7 +122,7 @@ node <技能目录>/scripts/jira-cli.mjs attachments <KEY|URL> <工作目录>/<K
 3. 影响版本与精准 Tag：门禁只要求工单中存在明确的模块版本号，可来自调用方 `inputs.version`、评论固定块、该模块自己的 `模块:Tag`、Jira 影响版本字段，或概要、描述、评论和可辨认图片中的模块版本号；描述/评论里写成 `模块:Tag` 时，Tag 与该模块成对使用，其它模块的版本不会互相覆盖。修复版本不作为来源。自动分析时，主模块和非公共关联模块仍须把该版本按规则解析为 GitLab 中真实存在的精准 Tag，不能只停留在业务版本号，也不能使用 `master`、`feature/*` 等分支。评论区固定块只写需要独立分析和拉取的模块，不写公共组件；公共组件由代码分析按需联动处理。
 4. 仓库地址与 Git Tag：由 `config/scope-mapping.json` 根据产品、模块和版本规则确定；故障分析只关注 Tag，不使用 `master`、`feature/*` 等分支。Jira「产品归属」只约束主模块；关联模块按模块名在 `scope-mapping.json` 中反查自己的产品，不能一律套用主产品。例如产品归属为 `Aiforce` 时，`bot-portal` 仍应从 `bot` 产品解析出 `bot/bot-portal` 仓库。同一模块配置在多个产品下且主产品不持有该模块时，按映射歧义通知维护人，不猜。
 5. 调用 `resolve` 后按失败类型分流：
-   - 工单缺少产品、模块或版本，或指定 Tag 在远端不存在：按「输出模板 · 缺分析参数」写评论，写门禁字段 `{"result":"未检查","selfCheck":"无"}`，结束任务。
+   - 工单缺少产品、模块或版本，或指定 Tag 在远端不存在：按「输出模板 · 缺分析参数」写评论，写门禁字段 `{"result":"未检查","selfCheck":"无"}`，再按 `rejectTransitionName` 执行打回流转并确认经办人已经变为提单人，结束任务。
    - 工单已提供产品、模块和版本，但 `resolve` 返回 `"reason":"scope-mapping-missing"`、`"scope-mapping-invalid"` 或 `"scope-mapping-ambiguous"` 且 `"skipped":true`：这是内部映射配置缺口，不是提单人缺信息。该分支会正常退出并输出 JSON，**不能因为 `ok:false` 就停止**。直接使用返回的 `comment` 字段原样写评论（其中会 @ 映射维护人），写门禁字段 `{"result":"未检查","selfCheck":"无"}`，然后执行 `jira-cli.mjs assign <KEY> --user <mappingOwner.name>` 把经办人转派给映射维护人（默认 `yinfuqian1193`，即尹甫乾）。转派只改经办人、不改工作流状态；不要按缺参打回、不要继续分析，结束任务。
 
 参数齐全、映射成功且远端精准 Tag 校验通过时，直接继续执行 4.3，不需要再向提单人或研发确认模块、仓库地址或 Tag。
@@ -375,12 +375,12 @@ h4. 日志/复现豁免判定
 }
 ```
 
-  `rejectTransitionName` 默认不配置：**默认只写评论与门禁字段，不动工作流状态**。配置后执行打回流转时，会自动保留并恢复流转前的原经办人（处理人）；恢复失败必须如实报告，不能把打回说成已完成。
+  仓库自带的 `jira-config.json` 已配置 `rejectTransitionName: "打回"`。门禁不通过或缺少分析参数时，脚本先尝试工作流打回，再回读工单并把经办人设置为 Jira `reporter`（提单人）。当前状态没有“打回”流转时，脚本返回 `transitionSkipped=true` 并保持状态不变，但经办人仍必须回到提单人。提单人缺失或经办人回写失败必须如实报告，不能把打回说成已完成。
 
 ## 硬性约束
 
-- 除门禁字段、打回后的经办人恢复和映射缺失时的经办人转派外不修改缺陷单字段；打回时不得让门禁账号占用经办人字段，必须恢复流转前的原经办人；映射缺失时经办人必须转派给 `mappingOwner.name`。
-- 未配置 `rejectTransitionName` 时不流转状态、不关闭缺陷单。
+- 除门禁字段、打回后的经办人回写和映射缺失时的经办人转派外不修改缺陷单字段；打回流转后经办人必须是提单人（`reporter`），不得留在原处理人或门禁账号；映射缺失时经办人必须转派给 `mappingOwner.name`。
+- 找不到 `rejectTransitionName` 指定的流转时不要改用其它流转名称；保留当前工作流状态，仍把经办人设为提单人，并如实报告当前可用流转及 `transitionSkipped=true`。
 - 不编造分析结论：评论里的结论必须来自 `analysis-cli.mjs` 的输出。
 - 不把“检索工作”反问给提单人；不因为某项无法判定而停止其余项检查。
 - 不生成报告类文档作为唯一交付物；报告必须作为附件进入缺陷单。

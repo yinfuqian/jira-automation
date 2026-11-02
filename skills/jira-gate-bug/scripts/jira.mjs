@@ -106,10 +106,11 @@ export function parseIssueKey(input) {
 /** 返回技能目录的绝对路径（统一用正斜杠，失败时返回 null） */
 export function skillDir() {
   try {
-    const m = String(import.meta.url).match(/^file:\/\/\/(.+)\/scripts\/jira\.mjs(?:[?#].*)?$/i);
-    if (!m) return null;
-    let dir = m[1];
+    // 当前文件在 scripts/ 下，目录基准必须回到技能根目录。
+    // pathname 会保留 Unix 的根斜杠；Windows 的 /C:/... 再去掉前导斜杠。
+    let dir = new URL("../", import.meta.url).pathname;
     try { dir = decodeURIComponent(dir); } catch (e) { /* 保留原始路径 */ }
+    if (/^\/[A-Za-z]:\//.test(dir)) dir = dir.slice(1);
     return dir.replace(/\\/g, "/").replace(/\/+$/, "");
   } catch (e) {
     return null;
@@ -1089,8 +1090,8 @@ export async function setIssueAssignee(keyOrUrl, user, options = {}) {
 
 /**
  * 执行一次流转，transition 可传流转名或 id。
- * 默认保留流转前的经办人：打回后回读工单，必要时恢复原经办人，
- * 避免工作流 post-function 把经办人改成门禁账号。
+ * 缺陷单打回后，经办人必须回到提单人：工作流 post-function 若把经办人
+ * 改成门禁账号或其他人，流转完成后统一纠正为 reporter。
  */
 export async function transitionIssue(keyOrUrl, transition, options = {}) {
   const key = parseIssueKey(keyOrUrl);
@@ -1098,35 +1099,48 @@ export async function transitionIssue(keyOrUrl, transition, options = {}) {
   if (!key) throw new Error("无法解析 Jira 问题 Key：" + keyOrUrl);
   const wanted = String(transition || "").trim();
   if (!wanted) throw new Error("缺少流转名称或 id");
-  const preserveAssignee = options.restoreAssignee !== false;
-  const issue = options.issue || (preserveAssignee ? await getIssue(keyOrUrl, options) : null);
-  const originalAssignee = assigneeRef(issue && issue.assignee);
+  const issue = options.issue || await getIssue(keyOrUrl, options);
+  const reporter = assigneeRef(issue && issue.reporter);
+  if (!reporter) {
+    throw new Error("缺陷单缺少提单人（reporter），无法执行打回并转派给提单人");
+  }
   const transitions = await listTransitions(key, options);
   const target = transitions.find((t) => t.name === wanted || t.id === wanted || t.to === wanted);
-  if (!target) {
-    throw new Error("未找到流转：" + wanted + "；当前可用流转：" + transitions.map((t) => t.name).join("、"));
+  if (target) {
+    await request("POST", "/rest/api/2/issue/" + encodeURIComponent(key) + "/transitions", {
+      ...options,
+      body: { transition: { id: target.id } },
+    });
   }
-  await request("POST", "/rest/api/2/issue/" + encodeURIComponent(key) + "/transitions", {
-    ...options,
-    body: { transition: { id: target.id } },
-  });
 
-  let assigneeRestore = {
+  let assigneeUpdate = {
     ok: true,
-    skipped: !originalAssignee,
-    reason: originalAssignee ? "already-restored" : "no-original-assignee",
+    target: "reporter",
+    changed: false,
+    reason: "already-assigned-to-reporter",
+    assignee: reporter,
   };
-  if (originalAssignee) {
-    const current = await getIssue(keyOrUrl, options);
-    const currentAssignee = assigneeRef(current && current.assignee);
-    if (!currentAssignee || currentAssignee.name !== originalAssignee.name) {
-      await setIssueAssignee(keyOrUrl, originalAssignee, options);
-      assigneeRestore = { ok: true, restored: true, assignee: originalAssignee };
-    } else {
-      assigneeRestore = { ok: true, restored: false, assignee: originalAssignee };
-    }
+  const current = await getIssue(keyOrUrl, options);
+  const currentAssignee = assigneeRef(current && current.assignee);
+  if (!currentAssignee || currentAssignee.name !== reporter.name) {
+    await setIssueAssignee(keyOrUrl, reporter, options);
+    assigneeUpdate = {
+      ok: true,
+      target: "reporter",
+      changed: true,
+      reason: "assigned-to-reporter",
+      assignee: reporter,
+    };
   }
-  return { ok: true, key, transition: target, assigneeRestore };
+  return {
+    ok: true,
+    key,
+    transition: target || null,
+    transitionExecuted: Boolean(target),
+    transitionSkipped: !target,
+    availableTransitions: target ? undefined : transitions,
+    assigneeUpdate,
+  };
 }
 
 /** 读取技能目录或 ~/.codex/jira/config.json，用于覆盖门禁字段名与打回流转 */

@@ -6,5 +6,7 @@ COMPOSE_FILE="${COMPOSE_FILE:-docker-compose-dev.yaml}"
 ENV_FILE="${ENV_FILE:-.env}"
 export COMPOSE_FILE ENV_FILE
 
-docker compose --env-file "${ENV_FILE}" -f "${COMPOSE_FILE}" up -d api worker
-docker compose --env-file "${ENV_FILE}" -f "${COMPOSE_FILE}" ps api worker
+docker compose --env-file "${ENV_FILE}" -f "${COMPOSE_FILE}" up -d --force-recreate --remove-orphans api worker-analysis worker-skill beat
+docker compose --env-file "${ENV_FILE}" -f "${COMPOSE_FILE}" ps --force-recreate --remove-orphans api worker-analysis worker-skill beat
+
+

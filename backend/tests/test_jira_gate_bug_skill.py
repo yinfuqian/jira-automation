@@ -82,8 +82,18 @@ class DefectGateSkillDefinitionTests(unittest.TestCase):
             "jira-cli.mjs assign",
             "ANALYSIS_API_TOKEN",
             "rejectTransitionName",
+            "打回流转后经办人必须是提单人",
         ):
             self.assertIn(required, content)
+
+    def test_reject_transition_is_enabled_and_targets_reporter(self):
+        """仓库配置必须启用打回流转，脚本必须把经办人设为 reporter。"""
+        config = json.loads((SKILL_DIR / "jira-config.json").read_text(encoding="utf-8"))
+        script = (SKILL_DIR / "scripts" / "jira.mjs").read_text(encoding="utf-8")
+
+        self.assertEqual(config["rejectTransitionName"], "打回")
+        self.assertIn("issue.reporter", script)
+        self.assertIn('target: "reporter"', script)
 
     def test_skill_documents_loopback_analysis_without_token(self):
         """说明文件必须明确同机回环免令牌，避免模型在发请求前自行阻断。"""
@@ -1389,8 +1399,25 @@ console.log(JSON.stringify(extractFaultAnalysisScope(issue, {
         self.assertEqual(payload["missing"], [])
 
     @unittest.skipIf(NODE_BIN is None, "需要 node 运行时才能执行技能脚本")
-    def test_reject_transition_restores_original_assignee(self):
-        """打回流转后必须恢复原经办人，不能让门禁账号留在经办人字段。"""
+    def test_skill_dir_is_absolute_and_loads_reject_config(self):
+        """Linux 与 Windows 都必须解析出绝对技能目录，否则 jira-config.json 永远读不到。"""
+        jira_url = (SKILL_DIR / "scripts" / "jira.mjs").as_uri()
+        driver = """
+const { skillDir, loadConfig } = await import("__JIRA__");
+const loaded = await loadConfig();
+console.log(JSON.stringify({ dir: skillDir(), loaded }));
+""".replace("__JIRA__", jira_url)
+
+        output = self.run_node(driver)
+        payload = json.loads(output.strip().splitlines()[-1])
+
+        self.assertTrue(Path(payload["dir"]).is_absolute())
+        self.assertEqual(payload["loaded"]["config"]["rejectTransitionName"], "打回")
+        self.assertTrue(payload["loaded"]["source"].endswith("/jira-config.json"))
+
+    @unittest.skipIf(NODE_BIN is None, "需要 node 运行时才能执行技能脚本")
+    def test_reject_transition_assigns_reporter(self):
+        """打回流转后必须把经办人设为提单人，不能恢复原处理人或留在门禁账号。"""
         jira_url = (SKILL_DIR / "scripts" / "jira.mjs").as_uri()
         driver = """
 const { transitionIssue } = await import("__JIRA__");
@@ -1449,10 +1476,49 @@ console.log(JSON.stringify({ calls, result }));
         payload = json.loads(output.strip().splitlines()[-1])
         assignee_call = next(item for item in payload["calls"] if item["method"] == "PUT" and item["path"].endswith("/assignee"))
 
-        self.assertEqual(assignee_call["body"], {"name": "zhangsan"})
-        self.assertTrue(payload["result"]["assigneeRestore"]["ok"])
-        self.assertTrue(payload["result"]["assigneeRestore"]["restored"])
-        self.assertEqual(payload["result"]["assigneeRestore"]["assignee"]["name"], "zhangsan")
+        self.assertEqual(assignee_call["body"], {"name": "reporter"})
+        self.assertTrue(payload["result"]["assigneeUpdate"]["ok"])
+        self.assertTrue(payload["result"]["assigneeUpdate"]["changed"])
+        self.assertEqual(payload["result"]["assigneeUpdate"]["target"], "reporter")
+        self.assertEqual(payload["result"]["assigneeUpdate"]["assignee"]["name"], "reporter")
+
+    @unittest.skipIf(NODE_BIN is None, "需要 node 运行时才能执行技能脚本")
+    def test_reject_without_available_transition_still_assigns_reporter(self):
+        """当前状态没有打回流转时状态保持不变，但经办人仍必须回到提单人。"""
+        jira_url = (SKILL_DIR / "scripts" / "jira.mjs").as_uri()
+        driver = """
+const { transitionIssue } = await import("__JIRA__");
+const calls = [];
+function response(data, status = 200) {
+  return { ok: status >= 200 && status < 300, status, async text() { return data === null ? "" : JSON.stringify(data); } };
+}
+function issueRaw() {
+  return { key: "KEY-30", id: "30", self: "https://jira.in.wezhuiyi.com/rest/api/2/issue/30", fields: { summary: "缺陷单信息不完整", status: { name: "技术排查中" }, issuetype: { name: "缺陷" }, assignee: { name: "zhangsan", displayName: "张三" }, reporter: { name: "reporter", displayName: "报告人" }, components: [], subtasks: [], comment: { total: 0, comments: [] } } };
+}
+globalThis.fetch = async (url, init = {}) => {
+  const parsed = new URL(String(url));
+  const body = init.body ? JSON.parse(String(init.body)) : null;
+  calls.push({ method: init.method, path: parsed.pathname, body });
+  if (init.method === "GET" && parsed.pathname.endsWith("/issue/KEY-30")) return response(issueRaw());
+  if (init.method === "GET" && parsed.pathname.endsWith("/issue/KEY-30/transitions")) return response({ transitions: [{ id: "11", name: "开发处理", to: { name: "测试中" } }] });
+  if (init.method === "PUT" && parsed.pathname.endsWith("/issue/KEY-30/assignee")) return response(null, 204);
+  return response({ errorMessages: ["unexpected request"] }, 500);
+};
+const result = await transitionIssue("KEY-30", "打回");
+console.log(JSON.stringify({ calls, result }));
+""".replace("__JIRA__", jira_url)
+
+        output = self.run_node(driver)
+        payload = json.loads(output.strip().splitlines()[-1])
+        paths = [(item["method"], item["path"]) for item in payload["calls"]]
+        assignee_call = next(item for item in payload["calls"] if item["method"] == "PUT" and item["path"].endswith("/assignee"))
+
+        self.assertNotIn(("POST", "/rest/api/2/issue/KEY-30/transitions"), paths)
+        self.assertTrue(payload["result"]["transitionSkipped"])
+        self.assertFalse(payload["result"]["transitionExecuted"])
+        self.assertEqual(payload["result"]["availableTransitions"][0]["name"], "开发处理")
+        self.assertEqual(assignee_call["body"], {"name": "reporter"})
+        self.assertTrue(payload["result"]["assigneeUpdate"]["changed"])
 
     @unittest.skipIf(NODE_BIN is None, "需要 node 运行时才能执行技能脚本")
     def test_set_issue_assignee_uses_login_name(self):

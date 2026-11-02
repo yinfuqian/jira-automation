@@ -56,16 +56,16 @@
 
 ## 5. 可选流转（打回）
 
-默认**不流转状态**。只有 `jira-config.json` 配置了 `rejectTransitionName`（例如 `"打回"`）时才执行：
+技能目录自带 `jira-config.json`，默认配置 `rejectTransitionName: "打回"`：
 
 ```bash
 node scripts/jira-cli.mjs transitions <KEY|URL>
 node scripts/jira-cli.mjs transition <KEY|URL> --name 打回
 ```
 
-流转名必须与 Jira 中实际可用流转完全一致，脚本会先列出并匹配，找不到时报错并给出可用列表。
+流转名必须与 Jira 中实际可用流转完全一致，脚本会先列出并匹配。当前状态没有该流转时不猜测其它流转名称，保持工作流状态不变，但仍把经办人转给提单人，并在结果中返回 `transitionSkipped=true` 和当前可用流转列表。
 
-打回时 `transitionIssue()` 会先记录流转前的原经办人；流转后再次读取工单，如果工作流 post-function 或其它规则把经办人改成了门禁账号，再调用 `PUT /assignee` 恢复原经办人。原经办人为空时跳过恢复。经办人恢复失败会抛错，执行结果不能当作打回成功。
+打回时 `transitionIssue()` 会先确认工单存在提单人 `reporter`，能匹配到“打回”时执行流转，之后再次读取工单；只要当前经办人不是提单人，就调用 `PUT /assignee` 把经办人设置为提单人的登录名。没有匹配流转时跳过状态变化，但仍执行经办人回写。提单人缺失或经办人回写失败会抛错，执行结果不能当作打回成功。
 
 ## 6. 附件与报告
 

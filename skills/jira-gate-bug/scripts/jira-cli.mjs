@@ -17,7 +17,7 @@
  *   node scripts/jira-cli.mjs gate-set <KEY|URL> --file <JSON> # 写入门禁字段
  *   node scripts/jira-cli.mjs transitions <KEY|URL>           # 列出可用流转
  *   node scripts/jira-cli.mjs assign <KEY|URL> --user <登录名>  # 转派经办人（不改变状态）
- *   node scripts/jira-cli.mjs transition <KEY|URL> --name <流转名> # 打回时自动恢复原经办人
+ *   node scripts/jira-cli.mjs transition <KEY|URL> --name <流转名> # 打回后转派给提单人；无该流转时只转派
  *
  * 令牌来源：--token 参数、JIRA_TOKEN 环境变量，或 jira.mjs 默认查找的令牌文件。
  */
@@ -47,7 +47,7 @@ const USAGE = `用法：
   node scripts/jira-cli.mjs gate-set <KEY|URL> --file <JSON文件>
   node scripts/jira-cli.mjs transitions <KEY|URL>
   node scripts/jira-cli.mjs assign <KEY|URL> --user <登录名>  # 映射缺失时转派给 mappingOwner
-  node scripts/jira-cli.mjs transition <KEY|URL> --name <流转名>  # 打回时自动恢复原经办人`;
+  node scripts/jira-cli.mjs transition <KEY|URL> --name <流转名>  # 打回后转派给提单人；无该流转时只转派`;
 
 
 /** 解析命令行参数，支持 --key value 形式的选项与位置参数 */
