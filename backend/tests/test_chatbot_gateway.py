@@ -660,6 +660,12 @@ class RoutesTest(unittest.TestCase):
         self.assertEqual(payload["project_count"], 5)
         self.assertIn("gateway", payload)
 
+    def test_create_app_publishes_redis_client_to_extensions(self):
+        """网关与 chatbot worker 从 extensions.redis 取连接，create_app 必须写回该模块。"""
+        import extensions
+
+        self.assertIsNotNone(extensions.redis)
+
     def test_chatbot_answer_task_is_registered(self):
         """装配 Flask 应用后 Celery 必须能识别 chatbot.answer，否则 worker 拒收任务。"""
         from extensions import celery
