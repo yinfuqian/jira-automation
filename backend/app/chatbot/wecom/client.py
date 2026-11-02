@@ -136,27 +136,39 @@ class WeComLongConnection:
             max_size=8 * 1024 * 1024,
         ) as ws:
             self._ws = ws
-            response = await self.request(
-                CMD_SUBSCRIBE, {"bot_id": self._bot_id, "secret": self._secret}
-            )
-            errcode = response.get("errcode", 0)
-            if errcode not in (0, None):
-                raise WeComConnectionError(
-                    f"订阅失败：errcode={errcode} errmsg={response.get('errmsg')}"
-                )
-            logger.info("长连接订阅成功，开始接收消息")
-
-            heartbeat = asyncio.create_task(self._heartbeat_loop())
+            # 必须先启动收包循环再发订阅请求：订阅响应也要靠它写入 Future，
+            # 否则 request() 会一直等一个没人读取的响应，直到超时。
+            receiver = asyncio.create_task(self._receive_loop(ws), name="wecom-receiver")
+            heartbeat = None
             try:
-                async for raw in ws:
-                    self._dispatch(raw)
+                response = await self.request(
+                    CMD_SUBSCRIBE, {"bot_id": self._bot_id, "secret": self._secret}
+                )
+                errcode = response.get("errcode", 0)
+                if errcode not in (0, None):
+                    raise WeComConnectionError(
+                        f"订阅失败：errcode={errcode} errmsg={response.get('errmsg')}"
+                    )
+                logger.info("长连接订阅成功，开始接收消息")
+
+                heartbeat = asyncio.create_task(self._heartbeat_loop())
+                # 收包循环正常退出代表连接已关闭；异常退出则从这里向上抛出并重连。
+                await receiver
             finally:
-                heartbeat.cancel()
-                try:
-                    await heartbeat
-                except asyncio.CancelledError:
-                    pass
+                if heartbeat is not None:
+                    heartbeat.cancel()
+                    await asyncio.gather(heartbeat, return_exceptions=True)
+                if not receiver.done():
+                    receiver.cancel()
+                # 取回收包任务的异常，避免 "Task exception was never retrieved"。
+                await asyncio.gather(receiver, return_exceptions=True)
                 self._fail_pending("连接已关闭")
+
+    async def _receive_loop(self, ws):
+        """持续读取服务端报文，直到连接关闭；订阅响应也由这里唤醒。"""
+        async for raw in ws:
+            self._dispatch(raw)
+
     def _dispatch(self, raw):
         """解析一帧报文：回调交给业务层，响应用于唤醒等待中的请求。"""
         try:
