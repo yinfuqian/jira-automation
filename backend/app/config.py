@@ -274,7 +274,7 @@ class Config:
     SKILL_API_TOKEN_PATHS = _env_or("SKILL_API_TOKEN_PATHS", "/skill")
     SKILL_API_USERNAME = _env_or("SKILL_API_USERNAME", "external-api")
     SKILL_URL_ALLOWED_HOSTS = _env_or("SKILL_URL_ALLOWED_HOSTS", DEFAULT_SKILL_URL_ALLOWED_HOSTS)
-    # 企业微信机器人的项目映射由 config/chatbot.json 提供，
+    # 企业微信机器人的项目映射由镜像内置的 /app/config/chatbot.json 提供，
     # BotID/Secret 只从 .env 的 CHATBOT_BOT_ID、CHATBOT_BOT_SECRET 读取。
     # 交付物下载票据：浏览器直接打开 download_url 时无法附加请求头，改用短时效 HMAC 签名票据。
     # 签名密钥缺省回退 SKILL_API_TOKEN；生产环境建议单独配置随机值，便于轮换票据而不影响接口调用。

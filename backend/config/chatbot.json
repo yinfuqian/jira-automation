@@ -30,11 +30,12 @@
     "tls_verify": true,
     "clone_timeout_seconds": 900,
     "fetch_concurrency": 4,
-    "max_repo_size_mb": 2048
+    "max_repo_size_mb": 2048,
+    "refresh_interval_seconds": 3600
   },
   "answer": {
     "timeout_seconds": 900,
-    "max_answer_chars": 12000,
+    "max_answer_chars": 1200,
     "reasoning_effort": "medium",
     "sandbox": "danger-full-access"
   },

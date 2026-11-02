@@ -33,6 +33,12 @@ _AUTH_IN_URL = re.compile(r"(https?://)[^/@\s]+@", re.IGNORECASE)
 # 进程内缓存「模块 → 仓库地址」，避免每次问答都请求 GitLab。
 _RESOLVED_URLS = {}
 
+# 缓存新鲜度默认窗口：1 小时内复用已拉取的提交，超过后才在问答时再次 fetch。
+DEFAULT_REFRESH_INTERVAL_SECONDS = 3600
+
+# 拉取时间标记写在缓存仓库的 .git 目录内，不污染工作区，也不依赖额外存储。
+_FETCH_MARKER_NAME = "chatbot-fetched-at"
+
 
 class RepoError(RuntimeError):
     """仓库解析、检出或工作树操作失败。"""
@@ -245,14 +251,63 @@ def _init_cache_repo(repo_dir, clean_url, timeout):
     _run_git(["git", "remote", "add", "origin", clean_url], timeout=timeout, cwd=str(repo_dir))
 
 
+def _fetch_marker_path(repo_dir) -> Path:
+    """返回记录最近一次成功拉取时间的标记文件路径。"""
+    return Path(repo_dir) / ".git" / _FETCH_MARKER_NAME
+
+
+def _cache_is_fresh(repo_dir, refresh_interval_seconds) -> bool:
+    """判断缓存是否仍在新鲜度窗口内；标记缺失或损坏时按过期处理。"""
+    if refresh_interval_seconds <= 0:
+        return False
+    try:
+        fetched_at = float(_fetch_marker_path(repo_dir).read_text(encoding="utf-8").strip())
+    except (OSError, ValueError):
+        return False
+    age = time.time() - fetched_at
+    # 时钟回拨导致 age 为负时按过期处理，避免长期不更新代码。
+    return 0 <= age < refresh_interval_seconds
+
+
+def _write_fetch_marker(repo_dir):
+    """记录本次拉取成功的时刻；写入失败不影响问答主流程。"""
+    marker = _fetch_marker_path(repo_dir)
+    temp_path = marker.with_name(f"{marker.name}.tmp")
+    try:
+        marker.parent.mkdir(parents=True, exist_ok=True)
+        temp_path.write_text(str(time.time()), encoding="utf-8")
+        temp_path.replace(marker)
+    except OSError:
+        logger.debug("写入仓库拉取时间标记失败：%s", marker, exc_info=True)
+
+
+def _cache_ref_exists(repo_dir, cache_ref) -> bool:
+    """检查缓存 ref 是否可用；不存在时说明必须重新拉取。"""
+    try:
+        _run_git(
+            ["git", "rev-parse", "--verify", "--quiet", cache_ref],
+            timeout=60,
+            cwd=str(repo_dir),
+        )
+    except RepoError:
+        return False
+    return True
+
+
 def prepare_cache_repo(module, branch, settings, lock_client=None):
-    """确保缓存仓库存在且已拉取到指定分支的最新提交，返回 (目录, 最新 ref)。"""
+    """确保缓存仓库可用于本次问答，返回 (目录, 缓存 ref)。
+
+    新鲜度窗口内复用已有缓存，窗口过期或缓存缺失时才拉取分支最新提交。
+    """
     repo_url = resolve_repo_url(module, settings)
     repo_dir = _cache_repo_dir(settings, module, branch)
     timeout = int(settings.repos.clone_timeout_seconds or 900)
     fetch_url = resolve_fetch_url(settings, repo_url)
     cache_ref = f"refs/chatbot/cache/{safe_segment(branch)}"
     lock_key = f"chatbot:repo-lock:{safe_segment(module)}:{safe_segment(branch)}"
+    refresh_interval = int(
+        getattr(settings.repos, "refresh_interval_seconds", DEFAULT_REFRESH_INTERVAL_SECONDS)
+    )
 
     with RedisLock(lock_client, lock_key, ttl_seconds=timeout + 60, wait_seconds=timeout):
         if not (repo_dir / ".git").exists():
@@ -260,6 +315,13 @@ def prepare_cache_repo(module, branch, settings, lock_client=None):
             if repo_dir.exists():
                 shutil.rmtree(repo_dir, ignore_errors=True)
             _init_cache_repo(repo_dir, repo_url, timeout)
+
+        # 新鲜度窗口内直接复用缓存 ref，跳过网络拉取；第一个人问答时仍会同步最新代码。
+        if _cache_is_fresh(repo_dir, refresh_interval) and _cache_ref_exists(repo_dir, cache_ref):
+            logger.info(
+                "模块 %s 的 %s 分支缓存未超过 %d 秒，跳过拉取", module, branch, refresh_interval
+            )
+            return repo_dir, cache_ref
 
         try:
             _run_git(
@@ -277,6 +339,8 @@ def prepare_cache_repo(module, branch, settings, lock_client=None):
             )
         except RepoError as exc:
             raise RepoError(f"拉取 {module} 的 {branch} 分支失败：{exc}") from exc
+
+        _write_fetch_marker(repo_dir)
 
     return repo_dir, cache_ref
 

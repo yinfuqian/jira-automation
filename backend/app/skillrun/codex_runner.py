@@ -200,12 +200,19 @@ def build_codex_command(
     extra_args=(),
 ) -> list:
     """构造 codex exec 命令行参数，密钥通过环境变量注入而不出现在命令行中。"""
+    sandbox_mode = str(sandbox or DEFAULT_SANDBOX).strip() or DEFAULT_SANDBOX
     command = [
         str(codex_bin or "codex"),
         "exec",
         "--skip-git-repo-check",
-        "--sandbox",
-        str(sandbox or DEFAULT_SANDBOX),
+    ]
+    if sandbox_mode == "danger-full-access":
+        # 容器内不允许创建非特权 user namespace，--sandbox 仍会触发 bwrap；
+        # 改用官方「外部已隔离」模式，彻底跳过 bwrap 与审批，隔离由容器提供。
+        command.append("--dangerously-bypass-approvals-and-sandbox")
+    else:
+        command += ["--sandbox", sandbox_mode]
+    command += [
         "-C",
         str(workspace_dir),
         "--json",

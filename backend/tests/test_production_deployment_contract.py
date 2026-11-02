@@ -95,7 +95,7 @@ class ProductionDeploymentContractTests(unittest.TestCase):
             "deploy/.env.production.example",
             "deploy/users.example.csv",
             "deploy/README.md",
-            "config/chatbot.json",
+            "backend/config/chatbot.json",
             "scripts/build_release_images.ps1",
             "scripts/export_release_image.ps1",
             "scripts/package_production_deploy.ps1",
@@ -111,7 +111,12 @@ class ProductionDeploymentContractTests(unittest.TestCase):
         self.assertIn("docker save", export_script)
         self.assertIn("docker-compose-prod.yaml", package_script)
         self.assertIn("restart-master.sh", package_script)
-        self.assertIn("chatbot.json", package_script)
+        # 项目映射随镜像构建，部署包不再单独分发 chatbot.json。
+        self.assertNotIn("chatbot.json", package_script)
+        chatbot_settings = (PROJECT_ROOT / "backend" / "app" / "chatbot" / "settings.py").read_text(
+            encoding="utf-8"
+        )
+        self.assertIn('"config" / "chatbot.json"', chatbot_settings)
         self.assertNotIn("backend/app", package_script)
 
     def test_production_environment_example_is_not_git_ignored(self):
