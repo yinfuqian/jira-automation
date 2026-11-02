@@ -8,6 +8,7 @@ import sys
 import tempfile
 import unittest
 from pathlib import Path
+from types import SimpleNamespace
 from unittest.mock import patch
 
 
@@ -20,6 +21,7 @@ from app.chatbot.wecom import protocol  # noqa: E402
 from app.chatbot.session import ChatSessionStore  # noqa: E402
 from app.chatbot.settings import ChatbotConfigError, load_settings  # noqa: E402
 from app.chatbot.tasks import _truncate_utf8  # noqa: E402
+from app.chatbot.wecom import client as client_module  # noqa: E402
 from app.chatbot.wecom.client import WeComConnectionError, WeComLongConnection  # noqa: E402
 from app.chatbot.wecom.gateway import ChatbotGateway  # noqa: E402
 
@@ -235,6 +237,86 @@ class ProtocolTest(unittest.TestCase):
         self.assertEqual(WeComLongConnection._ensure_success({"errcode": 0}, "发送")["errcode"], 0)
         with self.assertRaises(WeComConnectionError):
             WeComLongConnection._ensure_success({"errcode": 45009, "errmsg": "rate limit"}, "发送")
+
+
+class FakeWebSocket:
+    """最小 WebSocket 替身：收到订阅帧后把响应放回接收队列。"""
+
+    def __init__(self):
+        """初始化发送记录与接收队列。"""
+        self.sent = []
+        self.incoming = asyncio.Queue()
+
+    async def send(self, raw):
+        """记录上行帧，并对订阅请求返回成功响应。"""
+        frame = json.loads(raw)
+        self.sent.append(frame)
+        if frame.get("cmd") == protocol.CMD_SUBSCRIBE:
+            await self.incoming.put(
+                {
+                    "headers": {"req_id": (frame.get("headers") or {}).get("req_id")},
+                    "errcode": 0,
+                    "errmsg": "ok",
+                }
+            )
+            await self.incoming.put(None)
+
+    def __aiter__(self):
+        """支持 async for 读取下行帧。"""
+        return self
+
+    async def __anext__(self):
+        """队列里的 None 表示服务端关闭连接。"""
+        raw = await self.incoming.get()
+        if raw is None:
+            raise StopAsyncIteration
+        return json.dumps(raw, ensure_ascii=False)
+
+    async def close(self):
+        """关闭连接。"""
+        return None
+
+
+class FakeConnect:
+    """模拟 websockets.connect() 的异步上下文管理器。"""
+
+    def __init__(self, websocket):
+        """保存待返回的连接对象。"""
+        self.websocket = websocket
+
+    async def __aenter__(self):
+        """进入上下文时返回 WebSocket。"""
+        return self.websocket
+
+    async def __aexit__(self, exc_type, exc, tb):
+        """退出上下文时不吞异常。"""
+        return False
+
+
+class ClientReceiveLoopTest(unittest.IsolatedAsyncioTestCase):
+    """验证订阅响应由收包循环读取，不会被 request() 的自锁卡住。"""
+
+    async def test_subscribe_response_is_read_while_request_waits(self):
+        """订阅请求发出后应立即读到响应，而不是等到超时。"""
+        websocket = FakeWebSocket()
+        fake_module = SimpleNamespace(connect=lambda *args, **kwargs: FakeConnect(websocket))
+        callbacks = []
+
+        async def on_callback(payload):
+            callbacks.append(payload)
+
+        connection = WeComLongConnection(
+            "wss://example.invalid",
+            "bot-id",
+            "secret",
+            on_callback,
+            heartbeat_seconds=300,
+        )
+        with patch.object(client_module, "websockets", fake_module):
+            await asyncio.wait_for(connection._serve_once(), timeout=2)
+
+        self.assertEqual(websocket.sent[0]["cmd"], protocol.CMD_SUBSCRIBE)
+        self.assertEqual(websocket.sent[0]["body"]["bot_id"], "bot-id")
 
 
 class TaskHelpersTest(unittest.TestCase):
