@@ -1,0 +1,104 @@
+"""session 模块负责把会话状态放进 Redis，供网关与 Celery worker 共享。
+
+网关与 worker 是不同进程，会话（当前选中的项目）、消息去重标记、
+流式消息上下文都必须落在 Redis，不能放在进程内存。
+"""
+from __future__ import annotations
+
+import json
+import time
+
+
+# 会话键：一个用户在一个会话（群或单聊）里选中的项目。
+SESSION_KEY = "chatbot:session:{chatid}:{userid}"
+# 消息去重键：企业微信在超时或网络抖动时会重推，同一 msgid 只能处理一次。
+MSGID_KEY = "chatbot:msgid:{msgid}"
+# 流式消息上下文：worker 结束后需要据此回推最终内容。
+STREAM_KEY = "chatbot:stream:{task_id}"
+# 网关存活标记：健康检查据此判断长连接进程是否还在。
+ALIVE_KEY = "chatbot:gateway:alive"
+
+
+def _text(value):
+    """把标识类参数归一化为去空白的字符串。"""
+    return str(value or "").strip()
+
+
+class ChatSessionStore:
+    """基于 Redis 的会话存储；所有键都带 TTL，避免无限增长。"""
+
+    def __init__(self, client, ttl_seconds=14400, dedupe_ttl_seconds=86400):
+        """注入 Redis 客户端与关键 TTL。"""
+        self._client = client
+        self._ttl = max(60, int(ttl_seconds or 14400))
+        self._dedupe_ttl = max(60, int(dedupe_ttl_seconds or 86400))
+
+    def _session_key(self, chatid, userid):
+        """拼出会话键；单聊没有 chatid 时用 userid 兜底。"""
+        return SESSION_KEY.format(chatid=_text(chatid) or _text(userid), userid=_text(userid))
+
+    def get_project_key(self, chatid, userid):
+        """读取当前会话选中的项目标识，未选择时返回空串。"""
+        raw = self._client.get(self._session_key(chatid, userid))
+        if not raw:
+            return ""
+        try:
+            payload = json.loads(raw)
+        except (TypeError, ValueError):
+            return ""
+        return _text(payload.get("project_key"))
+
+    def set_project(self, chatid, userid, project_key):
+        """记录当前会话选中的项目，并刷新 TTL。"""
+        payload = {"project_key": _text(project_key), "updated_at": time.time()}
+        self._client.set(
+            self._session_key(chatid, userid),
+            json.dumps(payload, ensure_ascii=False),
+            ex=self._ttl,
+        )
+
+    def clear_project(self, chatid, userid):
+        """清除当前会话的项目选择，下次提问会重新弹出菜单。"""
+        self._client.delete(self._session_key(chatid, userid))
+
+    def claim_msgid(self, msgid):
+        """抢占消息处理权；返回 True 表示首次处理，False 表示重复推送。"""
+        key = MSGID_KEY.format(msgid=_text(msgid))
+        if not _text(msgid):
+            return True
+        return bool(self._client.set(key, "1", nx=True, ex=self._dedupe_ttl))
+
+    def save_stream(self, task_id, payload):
+        """保存一条流式消息的上下文，供 worker 结束后回推。"""
+        self._client.set(
+            STREAM_KEY.format(task_id=_text(task_id)),
+            json.dumps(payload, ensure_ascii=False),
+            ex=self._ttl,
+        )
+
+    def load_stream(self, task_id):
+        """读取流式消息上下文，缺失时返回空字典。"""
+        raw = self._client.get(STREAM_KEY.format(task_id=_text(task_id)))
+        if not raw:
+            return {}
+        try:
+            payload = json.loads(raw)
+        except (TypeError, ValueError):
+            return {}
+        return payload if isinstance(payload, dict) else {}
+
+    def drop_stream(self, task_id):
+        """删除流式消息上下文。"""
+        self._client.delete(STREAM_KEY.format(task_id=_text(task_id)))
+
+    def mark_alive(self, ttl_seconds=90):
+        """写入网关心跳；健康检查读取该键判断长连接进程是否存活。"""
+        self._client.set(ALIVE_KEY, str(time.time()), ex=max(10, int(ttl_seconds)))
+
+    def alive_at(self):
+        """返回网关最近一次心跳时间戳，未上报时返回 0。"""
+        raw = self._client.get(ALIVE_KEY)
+        try:
+            return float(raw or 0)
+        except (TypeError, ValueError):
+            return 0.0

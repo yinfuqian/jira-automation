@@ -177,6 +177,7 @@ class AsyncConfigTests(unittest.TestCase):
                 "skillrun.run_skill": {"queue": "skill"},
                 "skillrun.expire_queued_tasks": {"queue": "maintenance"},
                 "git.sync_projects": {"queue": "maintenance"},
+                "chatbot.answer": {"queue": "chatbot"},
             },
         )
 

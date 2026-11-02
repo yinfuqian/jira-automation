@@ -152,6 +152,8 @@ console.log(JSON.stringify([m.isSupportedIssueType("故事"), m.isSupportedIssue
         self.assertNotIn("退回补充→评审中", text)
         self.assertIn("### 12. 打包交付", text)
         self.assertIn("### 11. 生成原型设计准入报告（review-jira-design）", text)
+        self.assertIn("不采集截图", text)
+        self.assertNotIn("capture_prototype_evidence", text)
         self.assertIn("### 13. 收尾：清理本次任务的工作区中间产物", text)
         self.assertIn("pack-deliverables.mjs", text)
         self.assertIn("outputs/<KEY>-G1预检包-", text)

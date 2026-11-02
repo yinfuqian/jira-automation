@@ -2,14 +2,14 @@
 
 生产服务器只需要本目录中的部署文件和已发布镜像，不需要项目源码，也不要执行 `docker compose up --build`。
 
-生产 Compose 中的 `api`、`worker-analysis`、`worker-skill`、`migrate` 统一使用 Docker host 网络：API 直接监听宿主机 `${API_PORT:-5000}`。启动前请确认该端口未被其他进程占用。
+生产 Compose 中的 `api`、`worker-analysis`、`worker-skill`、`worker-chatbot`、`chatbot-gateway`、`migrate` 统一使用 Docker host 网络：API 直接监听宿主机 `${API_PORT:-5000}`。启动前请确认该端口未被其他进程占用。
 
 MySQL 和 Redis 必须在 `.env.production` 中填写宿主机可访问的真实 IP 或域名。不要填写 `mysql`、`redis`、`api` 等 Compose 服务名，因为 host 网络不提供 Compose DNS 名称解析。前端如单独部署，应把 `/api` 请求代理到宿主机的 `API_PORT`。
 
 ## 首次部署
 
 1. 将 `docker-compose-prod.yaml`、`.env.production.example`、`users.example.csv`、`restart-master.sh` 和本说明放在同一目录；
-   解压部署包时 `config/maven/settings.xml` 要保持 `config/maven/` 相对路径不变（生产 Compose 按该路径挂载）。
+   解压部署包时 `config/maven/settings.xml` 与 `config/chatbot.json` 要保持 `config/` 相对路径不变（生产 Compose 按该路径挂载）。
 2. 将 `.env.production.example` 复制为 `.env.production`，填写镜像地址、MySQL、Redis、模型和第三方接口配置。
 3. 将 `users.example.csv` 复制为 `data/users.csv`（Compose 将它挂载到所有服务的 `/data/users.csv`），修改默认密码并由管理员持续维护。
 4. 如需使用技能执行接口（`/skill`），把 `skills/` 目录上传到与 Compose 文件同级的位置（容器只读挂载为 `/data/skills`），技能所需的模型参数在 `.env.production` 中配置。
@@ -21,7 +21,26 @@ docker compose --env-file .env.production -f docker-compose-prod.yaml up -d
 docker compose --env-file .env.production -f docker-compose-prod.yaml ps -a
 ```
 
-`migrate` 是一次性迁移容器，成功完成后显示为 `Exited (0)` 属于正常状态。`api`、`worker-analysis`、`worker-skill` 和 `beat` 应保持运行。
+`migrate` 是一次性迁移容器，成功完成后显示为 `Exited (0)` 属于正常状态。`api`、`worker-analysis`、`worker-skill`、`beat` 以及启用后的 `worker-chatbot`、`chatbot-gateway` 应保持运行。
+
+### 企业微信代码问答机器人（可选）
+
+1. 在 `.env.production` 中填写 `CHATBOT_BOT_ID`、`CHATBOT_BOT_SECRET`；项目与模块分支映射维护在 `config/chatbot.json`，按需调整后重启服务。
+2. 启动 API、专用 Worker 与长连接网关（三者共用 `config/chatbot.json`）：
+
+```bash
+docker compose --env-file .env.production -f docker-compose-prod.yaml up -d api worker-chatbot chatbot-gateway
+```
+
+3. 检查网关存活状态：`curl http://127.0.0.1:${API_PORT:-5000}/chatbot/health`。
+
+机器人服务通过 `${ENV_FILE:-.env}` 读取环境文件，因此必须保证 `.env.production` 里有
+`ENV_FILE=.env.production`（示例已包含），并且始终用 `--env-file .env.production` 启动。
+首次部署或新增 `chatbot_questions` 表时，先执行一次
+`docker compose --env-file .env.production -f docker-compose-prod.yaml run --rm migrate`。
+机器人只在群聊被 @ 时收到回调，项目选择、提问和「切换项目」都需要重新 @机器人。
+
+`chatbot-gateway` 必须单实例运行：同一机器人同时只能保持一条长连接，扩容会互相顶替。服务器需要能主动访问 `wss://openws.work.weixin.qq.com:443`；GitLab 凭据复用 `.env.production` 中已有的 `GIT_BASE_URL`、`GIT_USER`、`GIT_PASSWORD`、`GITLAB_PRIVATE_TOKEN`。
 
 API 存活检查为 `http://服务器地址:${API_PORT:-5000}/health/live`。前端如单独部署，再访问对应的前端地址。
 
@@ -44,7 +63,7 @@ docker compose --env-file .env.production -f docker-compose-prod.yaml pull migra
 docker compose --env-file .env.production -f docker-compose-prod.yaml up -d migrate api worker-analysis worker-skill beat
 ```
 
-迁移、API、两个 Worker 和 Beat 共用同一个后端镜像，更新后端时必须一起更新。两个 Worker 默认各并发 2 个任务。
+迁移、API、三个 Worker 和 Beat 共用同一个后端镜像，更新后端时必须一起更新。三个 Worker 默认各并发 2 个任务。
 
 ## 完整更新
 

@@ -1,7 +1,7 @@
 interface:
   display_name: "ZY 原型设计准入审核"
-  short_description: "检查 PRD 与产品原型初稿是否满足设计精修准入条件"
-  default_prompt: "使用 $review-jira-design 对照定稿 PRD 审核产品原型初稿，检查需求完整性、流程状态覆盖和两者一致性，输出简洁 HTML 结论与可执行补齐建议。"
+  short_description: "检查 PRD 与产品原型初稿是否满足设计精修准入条件（不依赖截图）"
+  default_prompt: "使用 $review-jira-design 对照定稿 PRD 审核产品原型初稿，检查需求完整性、流程状态覆盖和两者一致性。本版本不采集截图、不依赖运行截图，只依据 PRD 原文与原型源码/页面结构核对，输出简洁 HTML 结论与可执行补齐建议。"
 
 policy:
   allow_implicit_invocation: true

@@ -236,6 +236,37 @@ class MigrationIdempotencyTests(unittest.TestCase):
             bootstrap_schema.SKILL_CALL_RECORDS_DDL.lower(),
         )
 
+    def test_chatbot_questions_is_created_by_alembic_migration(self):
+        """机器人问答表必须由迁移脚本创建，保证 migrate 容器能升级该表。"""
+        migration = load_migration("e5d2a8c14b73_chatbot_questions.py")
+        self.assertEqual(migration.revision, "e5d2a8c14b73")
+        self.assertEqual(migration.down_revision, "c4f1a7b9d2e6")
+
+        inspector = FakeInspector()
+        with patch.object(migration.op, "get_bind", return_value=object()), \
+                patch.object(migration.sa, "inspect", return_value=inspector), \
+                patch.object(migration.op, "create_table") as create_table, \
+                patch.object(migration.op, "create_index") as create_index:
+            migration.upgrade()
+
+        create_table.assert_called_once()
+        self.assertEqual(create_table.call_args.args[0], "chatbot_questions")
+        self.assertEqual(create_index.call_count, 6)
+
+    def test_chatbot_questions_migration_is_idempotent(self):
+        """表已存在时重复执行迁移不能报错。"""
+        migration = load_migration("e5d2a8c14b73_chatbot_questions.py")
+        inspector = FakeInspector(tables={"chatbot_questions"})
+
+        with patch.object(migration.op, "get_bind", return_value=object()), \
+                patch.object(migration.sa, "inspect", return_value=inspector), \
+                patch.object(migration.op, "create_table") as create_table, \
+                patch.object(migration.op, "create_index") as create_index:
+            migration.upgrade()
+
+        create_table.assert_not_called()
+        create_index.assert_not_called()
+
 
 if __name__ == "__main__":
     unittest.main()

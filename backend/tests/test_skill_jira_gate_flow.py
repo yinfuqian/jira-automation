@@ -120,6 +120,10 @@ class SkillJiraGateFlowTests(unittest.TestCase):
         self.assertIn("有条件通过", text)
         self.assertIn("原型设计准入", text)
         self.assertIn("设计报告附件", text)
+        # design 1.2 起不采集截图，G1 的调用说明必须同步，不能再引用已删除的截图脚本。
+        self.assertIn("不采集截图", text)
+        self.assertNotIn("capture_prototype_evidence", text)
+        self.assertNotIn("截图未验证", payload["prompt_template"])
         # 调用顺序必须是 req → design → qa，且都在 G1 评论之前。
         req_pos = text.index("### 11. 评审报告（review-jira-req）")
         design_pos = text.index("### 11.1 原型设计准入报告（review-jira-design）")
