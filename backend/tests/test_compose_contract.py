@@ -103,13 +103,18 @@ class ComposeContractTests(unittest.TestCase):
         self.assertIn("CHATBOT_BOT_ID=", source)
         self.assertNotIn("CHATBOT_PROJECT_", source)
 
-    def test_chatbot_config_is_mounted_as_a_file_backed_contract(self):
-        """API、机器人 Worker 和网关都要能读取同一份项目映射文件。"""
-        config_path = PROJECT_ROOT / "config" / "chatbot.json"
+    def test_chatbot_config_is_baked_into_backend_image(self):
+        """项目映射随镜像构建，API、机器人 Worker 与网关都不再依赖目录挂载。"""
+        config_path = PROJECT_ROOT / "backend" / "config" / "chatbot.json"
         self.assertTrue(config_path.is_file())
+        dockerfile = (PROJECT_ROOT / "backend" / "Dockerfile").read_text(encoding="utf-8")
+        self.assertIn(
+            "COPY --from=build /app/config/chatbot.json /app/config/chatbot.json",
+            dockerfile,
+        )
         for path in (DEV_COMPOSE_PATH, PROD_COMPOSE_PATH):
             source = path.read_text(encoding="utf-8")
-            self.assertEqual(source.count("./config:/data/config:ro"), 3)
+            self.assertNotIn("/data/config", source)
 
     def test_start_script_selects_services_by_deploy_env(self):
         """启动脚本按 DEPLOY_ENV 选择生产或开发的服务名，并包含机器人服务。"""

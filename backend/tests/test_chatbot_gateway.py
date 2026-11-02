@@ -6,6 +6,7 @@ import os
 import subprocess
 import sys
 import tempfile
+import time
 import unittest
 from pathlib import Path
 from types import SimpleNamespace
@@ -17,6 +18,7 @@ if str(BACKEND_DIR) not in sys.path:
     sys.path.insert(0, str(BACKEND_DIR))
 
 from app.chatbot import repos  # noqa: E402
+from app.chatbot.answer import ModuleWorkspace, WorkspaceResult, build_prompt  # noqa: E402
 from app.chatbot.wecom import protocol  # noqa: E402
 from app.chatbot.session import ChatSessionStore  # noqa: E402
 from app.chatbot.settings import ChatbotConfigError, load_settings  # noqa: E402
@@ -26,7 +28,7 @@ from app.chatbot.wecom.client import WeComConnectionError, WeComLongConnection  
 from app.chatbot.wecom.gateway import ChatbotGateway  # noqa: E402
 
 
-# 测试只用环境变量提供机器人凭证；项目映射来自仓库内的 config/chatbot.json。
+# 测试只用环境变量提供机器人凭证；项目映射来自代码目录的 backend/config/chatbot.json。
 CHATBOT_ENV = {
     "CHATBOT_BOT_ID": "",
     "CHATBOT_BOT_SECRET": "",
@@ -189,9 +191,20 @@ class SettingsTest(unittest.TestCase):
             with self.assertRaises(ChatbotConfigError):
                 load_settings(path)
 
+    def test_config_resolves_from_code_directory(self):
+        """默认从代码目录读取配置，镜像内即 /app/config/chatbot.json，不依赖挂载。"""
+        settings = load_settings()
+        self.assertIn("chatbot.json", settings.source)
+        resolved = Path(settings.source.split("（")[-1].rstrip("）"))
+        self.assertEqual(resolved, (BACKEND_DIR / "config" / "chatbot.json").resolve())
+
     def test_answer_uses_container_isolated_sandbox(self):
         """容器已提供隔离，问答不能使用依赖 bwrap 的只读沙箱。"""
         self.assertEqual(load_settings().answer.sandbox, "danger-full-access")
+
+    def test_answer_length_is_limited_for_product_readers(self):
+        """默认回答篇幅要收紧，避免把大段代码和检索结果推到群里。"""
+        self.assertEqual(load_settings().answer.max_answer_chars, 1200)
 
     def test_bot_credentials_come_from_env_and_secret_is_masked(self):
         """机器人凭证只读环境变量，Secret 不能出现在 repr 中。"""
@@ -331,6 +344,46 @@ class TaskHelpersTest(unittest.TestCase):
         result.encode("utf-8")
 
 
+class PromptTest(unittest.TestCase):
+    """校验问答提示词面向产品经理、输出精炼且可追溯。"""
+
+    def render_prompt(self, max_answer_chars=1200):
+        """用单个模块构造提示词，避免依赖真实代码检出。"""
+        workspace = WorkspaceResult(
+            root="/tmp/work",
+            modules=[
+                ModuleWorkspace(
+                    module="yicall-task",
+                    branch="release/3.1",
+                    directory="/tmp/work/yicall-task",
+                )
+            ],
+        )
+        project = SimpleNamespace(name="call3.1主线")
+        return build_prompt("这个功能怎么实现的", project, workspace, max_answer_chars)
+
+    def test_prompt_targets_product_readers_and_limits_evidence(self):
+        """提示词要求业务语言、四段结构，并把代码依据收敛到最多 3 条。"""
+        prompt = self.render_prompt()
+        self.assertIn("产品经理", prompt)
+        for section in ("**结论**", "**要点**", "**影响与注意**", "**依据**"):
+            self.assertIn(section, prompt)
+        self.assertIn("最多 3 条", prompt)
+        self.assertIn("禁止贴代码块", prompt)
+        self.assertIn("300~600 字", prompt)
+
+    def test_prompt_rejects_search_process_and_filler(self):
+        """回答不得输出检索过程、命令、思考步骤或空话铺垫。"""
+        prompt = self.render_prompt()
+        self.assertIn("不要输出检索过程", prompt)
+        self.assertIn("不要复述问题", prompt)
+        self.assertNotIn("必要时用表格或代码片段", prompt)
+
+    def test_prompt_length_uses_configured_limit(self):
+        """篇幅上限来自配置，便于按实际效果调整。"""
+        self.assertIn("全文控制在 800 字以内", self.render_prompt(max_answer_chars=800))
+
+
 class ReposTest(unittest.TestCase):
     """校验仓库地址与路径安全处理。"""
 
@@ -424,6 +477,8 @@ class ReposTest(unittest.TestCase):
                     cache_dir=str(root / "cache"),
                     module_repo_urls={"demo": source.as_uri()},
                     clone_timeout_seconds=60,
+                    # 该用例验证“每次都要拿到最新提交”，关闭新鲜度窗口。
+                    refresh_interval_seconds=0,
                 ),
             )
             repo_dir, cache_ref = repos.prepare_cache_repo("demo", "release/test", settings)
@@ -451,6 +506,94 @@ class ReposTest(unittest.TestCase):
             repos.remove_worktree(repo_dir, worktree_v2, settings)
             self.assertFalse(worktree.exists())
             self.assertFalse(worktree_v2.exists())
+
+    def test_cache_reuses_ref_within_refresh_window(self):
+        """新鲜度窗口内跳过拉取，窗口过期后才在问答时同步最新提交。"""
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            source = root / "source"
+            source.mkdir()
+
+            def run_git(*args):
+                """在临时源仓库执行一条 git 命令。"""
+                completed = subprocess.run(
+                    ["git", *args],
+                    cwd=str(source),
+                    capture_output=True,
+                    text=True,
+                    encoding="utf-8",
+                    errors="replace",
+                    check=False,
+                )
+                self.assertEqual(completed.returncode, 0, completed.stderr)
+                return completed.stdout
+
+            def commit_file(name, content, message):
+                """写入文件并提交到当前分支。"""
+                (source / name).write_text(content, encoding="utf-8")
+                run_git("add", ".")
+                run_git(
+                    "-c",
+                    "user.name=test",
+                    "-c",
+                    "user.email=test@example.com",
+                    "commit",
+                    "-m",
+                    message,
+                )
+
+            run_git("init", "--quiet", "-b", "main")
+            commit_file("demo.txt", "hello", "init")
+            run_git("branch", "release/test")
+
+            settings = build_settings()
+            settings = dataclasses.replace(
+                settings,
+                repos=dataclasses.replace(
+                    settings.repos,
+                    cache_dir=str(root / "cache"),
+                    module_repo_urls={"demo": source.as_uri()},
+                    clone_timeout_seconds=60,
+                    refresh_interval_seconds=3600,
+                ),
+            )
+
+            repo_dir, first_ref = repos.prepare_cache_repo("demo", "release/test", settings)
+
+            def commit_of(ref):
+                """读取缓存 ref 当前指向的提交，用于判断是否发生了拉取。"""
+                completed = subprocess.run(
+                    ["git", "rev-parse", ref],
+                    cwd=str(repo_dir),
+                    capture_output=True,
+                    text=True,
+                    encoding="utf-8",
+                    errors="replace",
+                    check=False,
+                )
+                self.assertEqual(completed.returncode, 0, completed.stderr)
+                return completed.stdout.strip()
+
+            first_commit = commit_of(first_ref)
+            # 窗口内远端有新提交，也不应该在本次问答中拉取。
+            run_git("checkout", "release/test")
+            commit_file("v2.txt", "second", "second")
+            repo_dir, cached_ref = repos.prepare_cache_repo("demo", "release/test", settings)
+            self.assertEqual(commit_of(cached_ref), first_commit)
+
+            worktree = repos.create_worktree(repo_dir, cached_ref, root / "worktree-cached", settings)
+            self.assertFalse((worktree / "v2.txt").exists())
+
+            # 把拉取标记改成两小时前，模拟窗口过期，下一次问答必须拿到新提交。
+            marker = repo_dir / ".git" / "chatbot-fetched-at"
+            marker.write_text(str(time.time() - 7200), encoding="utf-8")
+            repo_dir, refreshed_ref = repos.prepare_cache_repo("demo", "release/test", settings)
+            self.assertNotEqual(commit_of(refreshed_ref), first_commit)
+            worktree_v2 = repos.create_worktree(repo_dir, refreshed_ref, root / "worktree-refreshed", settings)
+            self.assertEqual((worktree_v2 / "v2.txt").read_text(encoding="utf-8"), "second")
+
+            repos.remove_worktree(repo_dir, worktree, settings)
+            repos.remove_worktree(repo_dir, worktree_v2, settings)
 
 class SessionTest(unittest.TestCase):
     """校验 Redis 会话行为。"""

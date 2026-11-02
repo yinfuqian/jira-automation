@@ -60,8 +60,7 @@ services:
     volumes:
       - ./data/users-dev.csv:/data/users.csv:ro
       - ./data/upload-dev:/data/upload
-      # 机器人项目与分支映射只读挂载，供 /chatbot 接口读取。
-      - ./config:/data/config:ro
+      # 机器人项目与分支映射随镜像内置（/app/config/chatbot.json），无需挂载。
       - ./data/logs-dev:/app/app/logs
       - ./data/repos-dev:/tmp/log-analyzer-repos
       # 技能目录只读挂载：Codex 运行时无法改动技能定义，也不会把内置技能写进业务技能目录。
@@ -282,7 +281,6 @@ services:
       - ./data/logs-dev:/app/app/logs
       - ./data/repos-dev:/tmp/jira-automation-repos
       - ./data/users-dev.csv:/data/users.csv:ro
-      - ./config:/data/config:ro
       - ./data/codex-dev:/data/codex
       - ./data/skill-workspace-dev:/data/skill-workspace
     restart: unless-stopped
@@ -303,7 +301,6 @@ services:
     volumes:
       - ./data/logs-dev:/app/app/logs
       - ./data/users-dev.csv:/data/users.csv:ro
-      - ./config:/data/config:ro
       - ./data/codex-dev:/data/codex
       - ./data/skill-workspace-dev:/data/skill-workspace
     restart: unless-stopped

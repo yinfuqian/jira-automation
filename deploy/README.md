@@ -9,7 +9,7 @@ MySQL 和 Redis 必须在 `.env.production` 中填写宿主机可访问的真实
 ## 首次部署
 
 1. 将 `docker-compose-prod.yaml`、`.env.production.example`、`users.example.csv`、`restart-master.sh` 和本说明放在同一目录；
-   解压部署包时 `config/maven/settings.xml` 与 `config/chatbot.json` 要保持 `config/` 相对路径不变（生产 Compose 按该路径挂载）。
+   解压部署包时 `config/maven/settings.xml` 要保持 `config/` 相对路径不变（生产 Compose 按该路径挂载）。机器人项目与分支映射已随后端镜像发布，不需要额外配置文件。
 2. 将 `.env.production.example` 复制为 `.env.production`，填写镜像地址、MySQL、Redis、模型和第三方接口配置。
 3. 将 `users.example.csv` 复制为 `data/users.csv`（Compose 将它挂载到所有服务的 `/data/users.csv`），修改默认密码并由管理员持续维护。
 4. 如需使用技能执行接口（`/skill`），把 `skills/` 目录上传到与 Compose 文件同级的位置（容器只读挂载为 `/data/skills`），技能所需的模型参数在 `.env.production` 中配置。
@@ -25,8 +25,8 @@ docker compose --env-file .env.production -f docker-compose-prod.yaml ps -a
 
 ### 企业微信代码问答机器人（可选）
 
-1. 在 `.env.production` 中填写 `CHATBOT_BOT_ID`、`CHATBOT_BOT_SECRET`；项目与模块分支映射维护在 `config/chatbot.json`，按需调整后重启服务。
-2. 启动 API、专用 Worker 与长连接网关（三者共用 `config/chatbot.json`）：
+1. 在 `.env.production` 中填写 `CHATBOT_BOT_ID`、`CHATBOT_BOT_SECRET`；项目与模块分支映射维护在源码 `backend/config/chatbot.json`，随镜像构建，调整后需重新构建并发布后端镜像。
+2. 启动 API、专用 Worker 与长连接网关（三者共用镜像内置的 `/app/config/chatbot.json`）：
 
 ```bash
 docker compose --env-file .env.production -f docker-compose-prod.yaml up -d api worker-chatbot chatbot-gateway

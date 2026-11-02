@@ -157,6 +157,8 @@ RUN ln -sf /usr/local/lib/node_modules/npm/bin/npm-cli.js /usr/local/bin/npm \
     && codex --version
 
 COPY --from=build /app/app /app/app
+# 机器人项目与分支映射随镜像发布，运行时不依赖宿主机目录挂载。
+COPY --from=build /app/config/chatbot.json /app/config/chatbot.json
 COPY --from=build /app/migrations /app/migrations
 COPY --from=build /app/app.py /app/app.py
 COPY --from=build /app/celery_worker.py /app/celery_worker.py
@@ -181,7 +183,7 @@ RUN chmod +x /app/docker-entrypoint.sh /app/migrate_db.sh /app/start.sh /app/sta
     && jdk 8 javac -version >/dev/null \
     && (command -v 7z >/dev/null || command -v 7zz >/dev/null || command -v 7za >/dev/null \
         || echo "提示：镜像内没有 7-Zip 系命令，7z/rar 归档将由 bsdtar 处理") \
-    && mkdir -p /data/upload /data/skills /data/codex /data/skill-workspace /data/config /app/app/logs /tmp/jira-automation-repos
+    && mkdir -p /data/upload /data/skills /data/codex /data/skill-workspace /app/config /app/app/logs /tmp/jira-automation-repos
 
 EXPOSE 5000
 

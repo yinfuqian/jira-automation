@@ -92,10 +92,27 @@ class CodexCommandTests(unittest.TestCase):
         self.assertEqual(command[1], "exec")
         self.assertIn("--skip-git-repo-check", command)
         self.assertIn("--ephemeral", command)
+        # 默认 danger-full-access 必须走完全绕过沙箱的参数，否则容器内会因 bwrap 失败。
+        self.assertIn("--dangerously-bypass-approvals-and-sandbox", command)
+        self.assertNotIn("--sandbox", command)
         self.assertIn("model_providers.skillrun.base_url=https://newapi.example.com/v1", command)
         self.assertIn("model_providers.skillrun.env_key=CODEX_SKILL_API_KEY", command)
         self.assertEqual(command[-1], "执行技能")
         self.assertNotIn("sk-secret", " ".join(command))
+
+    def test_explicit_read_only_still_uses_sandbox_argument(self):
+        """显式指定只读模式时保留 --sandbox，便于本地或支持 bwrap 的环境排障。"""
+        command = build_codex_command(
+            codex_bin="codex",
+            workspace_dir="/tmp/demo",
+            prompt="执行技能",
+            last_message_path="/tmp/last.md",
+            sandbox="read-only",
+        )
+
+        self.assertIn("--sandbox", command)
+        self.assertEqual(command[command.index("--sandbox") + 1], "read-only")
+        self.assertNotIn("--dangerously-bypass-approvals-and-sandbox", command)
 
     def test_env_only_exposes_configured_api_key(self):
         """密钥通过环境变量注入，并保留原有环境变量。"""

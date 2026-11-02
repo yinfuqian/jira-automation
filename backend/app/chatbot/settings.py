@@ -1,7 +1,8 @@
 """settings 模块从配置文件和 `.env` 加载智能机器人运行配置。
 
 职责边界：
-1. 项目、模块分支映射以及网关/仓库/问答参数维护在 `config/chatbot.json`；
+1. 项目、模块分支映射以及网关/仓库/问答参数维护在 `backend/config/chatbot.json`，
+   该文件随镜像一起构建，容器内位于 `/app/config/chatbot.json`，不需要宿主机挂载；
 2. 只有 BotID 与 Secret 属于敏感凭据，放在 `.env` 的 `CHATBOT_BOT_ID`、`CHATBOT_BOT_SECRET`；
 3. GitLab 凭据复用后端已有的 `GIT_BASE_URL`、`GIT_USER`、`GIT_PASSWORD`、`GITLAB_PRIVATE_TOKEN`。
 
@@ -16,13 +17,16 @@ from pathlib import Path
 
 
 # 配置文件来源说明，用于健康检查与日志。
-CONFIG_SOURCE = "配置文件 config/chatbot.json + .env 机器人凭证"
+CONFIG_SOURCE = "配置文件 backend/config/chatbot.json（镜像内置）+ .env 机器人凭证"
 # 企业微信智能机器人长连接的固定地址。
 DEFAULT_WS_URL = "wss://openws.work.weixin.qq.com"
 # 网关与 Celery worker 之间的结果通道。
 DEFAULT_REPLY_CHANNEL = "chatbot:reply"
 
-# 配置文件的默认位置：仓库根目录，以及容器内的只读挂载点。
+# 代码目录内的配置文件：本地为 backend/config/chatbot.json，容器内为 /app/config/chatbot.json。
+# 这是默认来源，随镜像发布，不依赖宿主机目录挂载。
+CODE_CONFIG_PATH = Path(__file__).resolve().parents[2] / "config" / "chatbot.json"
+# 兼容旧部署方式：仓库根目录或容器内旧挂载点仍可作为后备来源。
 PROJECT_ROOT = Path(__file__).resolve().parents[3]
 DEFAULT_CONFIG_PATH = PROJECT_ROOT / "config" / "chatbot.json"
 CONTAINER_CONFIG_PATH = Path("/data/config/chatbot.json")
@@ -133,6 +137,8 @@ class RepoSettings:
     fetch_concurrency: int = 4
     # 单个仓库允许检出的最大体积（MB），超过时按跳过处理并给出提示。
     max_repo_size_mb: int = 2048
+    # 代码缓存新鲜度窗口（秒）：窗口内问答复用缓存，超过后再次拉取；0 表示每次都拉取。
+    refresh_interval_seconds: int = 3600
 
 
 @dataclass(frozen=True)
@@ -140,7 +146,8 @@ class AnswerSettings:
     """问答阶段的时间与篇幅限制。"""
 
     timeout_seconds: int = 900
-    max_answer_chars: int = 12000
+    # 回答面向产品经理，默认限制在 1200 字以内，避免贴出大段代码与检索结果。
+    max_answer_chars: int = 1200
     reasoning_effort: str = "medium"
     # 容器内 codex 不能用依赖 bwrap 的只读沙箱，隔离由容器与只读提示词共同保证。
     sandbox: str = "danger-full-access"
@@ -195,13 +202,14 @@ class ChatbotSettings:
 
 
 def _resolve_config_path(config_path=None) -> Path:
-    """按「显式参数 → 仓库配置 → 容器挂载」顺序定位配置文件。"""
+    """按「显式参数 → 代码目录 → 仓库根目录 → 旧挂载点」顺序定位配置文件。"""
     if config_path:
         return Path(config_path).expanduser()
-    for candidate in (DEFAULT_CONFIG_PATH, CONTAINER_CONFIG_PATH):
+    # 代码目录优先：镜像内置的 /app/config/chatbot.json 不依赖任何宿主机挂载。
+    for candidate in (CODE_CONFIG_PATH, DEFAULT_CONFIG_PATH, CONTAINER_CONFIG_PATH):
         if candidate.is_file():
             return candidate
-    return DEFAULT_CONFIG_PATH
+    return CODE_CONFIG_PATH
 
 
 def _load_document(config_path=None):
@@ -209,8 +217,8 @@ def _load_document(config_path=None):
     path = _resolve_config_path(config_path)
     if not path.is_file():
         raise ChatbotConfigError(
-            f"未找到机器人配置文件 {path}；请维护 config/chatbot.json，"
-            "容器内应挂载到 /data/config/chatbot.json"
+            f"未找到机器人配置文件 {path}；请维护仓库内的 backend/config/chatbot.json，"
+            "该文件会随镜像构建到 /app/config/chatbot.json"
         )
     try:
         # utf-8-sig 兼容 Windows 编辑器写入的 BOM。
@@ -281,7 +289,7 @@ def _parse_projects(document):
 
 
 def load_settings(config_path=None) -> ChatbotSettings:
-    """从 `config/chatbot.json` 与环境变量构建机器人配置。
+    """从 `backend/config/chatbot.json` 与环境变量构建机器人配置。
 
     `config_path` 仅供测试或维护脚本显式指定文件，正常业务调用不传参。
     """
@@ -329,10 +337,13 @@ def load_settings(config_path=None) -> ChatbotSettings:
             clone_timeout_seconds=_as_int(repos.get("clone_timeout_seconds"), 900),
             fetch_concurrency=_as_int(repos.get("fetch_concurrency"), 4),
             max_repo_size_mb=_as_int(repos.get("max_repo_size_mb"), 2048),
+            refresh_interval_seconds=_as_int(
+                repos.get("refresh_interval_seconds"), 3600, minimum=0
+            ),
         ),
         answer=AnswerSettings(
             timeout_seconds=_as_int(answer.get("timeout_seconds"), 900),
-            max_answer_chars=_as_int(answer.get("max_answer_chars"), 12000),
+            max_answer_chars=_as_int(answer.get("max_answer_chars"), 1200),
             reasoning_effort=_as_text(answer.get("reasoning_effort"), "medium") or "medium",
             sandbox=_as_text(answer.get("sandbox"), "danger-full-access") or "danger-full-access",
         ),

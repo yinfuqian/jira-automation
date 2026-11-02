@@ -761,7 +761,7 @@ node ..\skills\jira-gate-bug\scripts\analysis-cli.mjs render --input <结果JSON
 | `backend/chatbot_gateway.py` | 常驻长连接进程，订阅 `wss://openws.work.weixin.qq.com`、收发消息 |
 | `backend/app/chatbot/` | 协议、会话、仓库检出、答案生成与审计 |
 | Celery 队列 `chatbot` | 执行代码检出与模型分析（`chatbot.answer`） |
-| `config/chatbot.json` | 项目、模块分支映射与问答阈值；`.env` 只保留 BotID/Secret |
+| `backend/config/chatbot.json` | 项目、模块分支映射与问答阈值，随镜像构建到 `/app/config/chatbot.json`；`.env` 只保留 BotID/Secret |
 
 ### 交互流程
 
@@ -775,9 +775,11 @@ node ..\skills\jira-gate-bug\scripts\analysis-cli.mjs render --input <结果JSON
 - 同一机器人同时只能有一条长连接：网关必须单实例部署，不能水平扩容。
 - 只在群聊里被 @ 时触发；单聊直接提示改用群聊。回答范围包括代码、SQL、配置和接口文档。
 - 流式消息自首次发送起 10 分钟内必须 `finish=true`；超过配置的软截止时间会改为主动推送 `aibot_send_msg`。
-- 单会话 30 条/分钟；打字机分段数由 `config/chatbot.json` 的 `gateway.typewriter_max_chunks` 控制，默认 12 段、间隔 2 秒。
+- 单会话 30 条/分钟；打字机分段数由 `backend/config/chatbot.json` 的 `gateway.typewriter_max_chunks` 控制，默认 12 段、间隔 2 秒。
+- 回答面向产品经理：固定「结论 / 要点 / 影响与注意 / 依据」四段，代码依据最多 3 条且放在最后，不贴代码块、SQL 与检索过程；默认 1200 字，可用 `answer.max_answer_chars` 调整。
 - 仓库地址优先取 `repos.module_repo_urls`，其次 `repos.repo_url_template`，最后用 GitLab 搜索接口按模块名解析（凭据复用 `GIT_BASE_URL`/`GIT_USER`/`GIT_PASSWORD`/`GITLAB_PRIVATE_TOKEN`）。
-- 修改 `config/chatbot.json` 或 `.env` 后需要重建网关与 Worker，进程不会热加载。
+- 每个「模块 + 分支」在 `REPO_CACHE_DIR/chatbot/repos` 下维护一份缓存仓库。`repos.refresh_interval_seconds` 默认 3600 秒：窗口内问答直接复用缓存 ref，不再 fetch；超过窗口后由下一次问答同步最新提交。设为 `0` 表示每次都拉取。
+- `backend/config/chatbot.json` 已内置到镜像，无需挂载宿主机目录；修改后必须重新构建后端镜像并重启网关与 Worker，进程不会热加载。
 - 容器内核通常不允许非特权 user namespace，`codex exec --sandbox read-only` 会因 `bwrap: No permissions to create a new namespace` 在检索前失败；因此 `answer.sandbox` 必须保持 `danger-full-access`，隔离由 Docker 容器、临时 `git worktree` 和只读提示词共同保证。
 
 ### 部署
@@ -797,7 +799,7 @@ docker compose --env-file .env.production -f docker-compose-prod.yaml up -d api 
 首次部署或新增 `chatbot_questions` 表时，先执行一次
 `docker compose --env-file .env.production -f docker-compose-prod.yaml run --rm migrate`。
 
-项目与分支映射维护在 `config/chatbot.json`：`projects` 数组的顺序就是群聊菜单里的序号，每个项目的 `modules` 写成 `模块名: 分支`，不使用的模块直接不写。修改后需要重启 `worker-chatbot` 与 `chatbot-gateway`。
+项目与分支映射维护在 `backend/config/chatbot.json`：`projects` 数组的顺序就是群聊菜单里的序号，每个项目的 `modules` 写成 `模块名: 分支`，不使用的模块直接不写。该文件随镜像构建到 `/app/config/chatbot.json`，修改后需要重新构建后端镜像，再重启 `worker-chatbot` 与 `chatbot-gateway`。
 
 ### 只读接口
 
