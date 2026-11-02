@@ -189,9 +189,9 @@ class SettingsTest(unittest.TestCase):
             with self.assertRaises(ChatbotConfigError):
                 load_settings(path)
 
-    def test_answer_runs_in_read_only_sandbox(self):
-        """机器人只做代码问答，默认沙箱必须是只读。"""
-        self.assertEqual(load_settings().answer.sandbox, "read-only")
+    def test_answer_uses_container_isolated_sandbox(self):
+        """容器已提供隔离，问答不能使用依赖 bwrap 的只读沙箱。"""
+        self.assertEqual(load_settings().answer.sandbox, "danger-full-access")
 
     def test_bot_credentials_come_from_env_and_secret_is_masked(self):
         """机器人凭证只读环境变量，Secret 不能出现在 repr 中。"""
@@ -467,6 +467,20 @@ class SessionTest(unittest.TestCase):
         self.store.clear_project("chat-1", "user-1")
         self.assertEqual(self.store.get_project_key("chat-1", "user-1"), "")
 
+    def test_pending_question_survives_project_selection(self):
+        """待回答问题在选中项目后仍可取出，且只消费一次。"""
+        self.store.set_pending_question("chat-1", "user-1", "回调入口在哪")
+        self.store.set_project("chat-1", "user-1", "yicall-3.1-main")
+        self.assertEqual(self.store.pop_pending_question("chat-1", "user-1"), "回调入口在哪")
+        self.assertEqual(self.store.pop_pending_question("chat-1", "user-1"), "")
+        self.assertEqual(self.store.get_project_key("chat-1", "user-1"), "yicall-3.1-main")
+
+    def test_clear_project_keeps_pending_question(self):
+        """切换项目只清除选择，挂起的问题要保留到重新选完项目。"""
+        self.store.set_pending_question("chat-1", "user-1", "回调入口在哪")
+        self.assertEqual(self.store.clear_project("chat-1", "user-1"), "回调入口在哪")
+        self.assertEqual(self.store.pop_pending_question("chat-1", "user-1"), "回调入口在哪")
+
     def test_msgid_is_deduplicated(self):
         """同一 msgid 只有第一次抢占成功。"""
         self.assertTrue(self.store.claim_msgid("m-1"))
@@ -505,11 +519,37 @@ class GatewayTest(unittest.IsolatedAsyncioTestCase):
         self.assertIn("群里", self.conn.markdowns[0])
 
     async def test_question_without_project_shows_menu(self):
-        """未选项目时先返回菜单，不投递任务。"""
+        """未选项目时先返回菜单并暂存问题，不投递任务。"""
         gateway = self.build()
         await gateway._handle_message(group_message("@Bot 回调入口在哪"), "req-1")
         self.assertEqual(self.enqueued, [])
         self.assertIn("请先选择", self.conn.markdowns[0])
+        self.assertIn("回调入口在哪", self.conn.markdowns[0])
+        self.assertEqual(self.store.pop_pending_question("chat-1", "user-1"), "回调入口在哪")
+
+    async def test_select_project_after_question_answers_pending_question(self):
+        """先提问再选项目时，直接沿用原问题发起分析，不再要求重复提问。"""
+        gateway = self.build()
+        await gateway._handle_message(group_message("@Bot 结果回调入口在哪", msgid="m-1"), "req-1")
+        await gateway._handle_message(group_message("@Bot 1", msgid="m-2"), "req-2")
+
+        self.assertEqual(len(self.enqueued), 1)
+        self.assertEqual(self.enqueued[0]["project_key"], "yicall-3.1-main")
+        self.assertEqual(self.enqueued[0]["question"], "结果回调入口在哪")
+        self.assertEqual(self.store.get_project_key("chat-1", "user-1"), "yicall-3.1-main")
+        self.assertEqual(self.store.pop_pending_question("chat-1", "user-1"), "")
+
+    async def test_switch_project_keeps_pending_question(self):
+        """先提问再切换项目时，重新选完项目仍直接回答原问题。"""
+        gateway = self.build()
+        await gateway._handle_message(group_message("@Bot 结果回调入口在哪", msgid="m-1"), "req-1")
+        await gateway._handle_message(group_message("@Bot 切换项目", msgid="m-2"), "req-2")
+        self.assertIn("结果回调入口在哪", self.conn.markdowns[-1])
+
+        await gateway._handle_message(group_message("@Bot 2", msgid="m-3"), "req-3")
+        self.assertEqual(len(self.enqueued), 1)
+        self.assertEqual(self.enqueued[0]["project_key"], "yicall-3.1-zszq")
+        self.assertEqual(self.enqueued[0]["question"], "结果回调入口在哪")
 
     async def test_enqueue_failure_ends_stream_and_cleans_context(self):
         """任务投递失败时要结束流式消息，并清掉不再有用的上下文。"""
