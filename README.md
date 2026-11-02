@@ -765,9 +765,9 @@ node ..\skills\jira-gate-bug\scripts\analysis-cli.mjs render --input <结果JSON
 
 ### 交互流程
 
-1. 群内首次 @机器人：返回项目菜单；因为企业微信只在群聊 @ 时推送消息回调，后续发送序号、提问、切换项目都要重新 @机器人。单聊会提示改用群聊。
+1. 群内首次 @机器人：返回项目菜单；因为企业微信只在群聊 @ 时推送消息回调，后续发送序号、提问、切换项目都要重新 @机器人。未选项目时直接提问会先暂存问题，回复序号选中项目后自动沿用原问题开始分析，无需重复输入。单聊会提示改用群聊。
 2. 用户提问：网关立刻建一条流式消息（「正在分析…」），再把任务投递给 Celery。
-3. worker 把该项目下各模块以 `git worktree` 检出到独立目录，调用 `codex exec` 只读分析。
+3. worker 把该项目下各模块以 `git worktree` 检出到独立目录，调用 `codex exec` 分析；提示词要求严格只读，不修改文件、不执行构建与测试。
 4. 结果经 Redis 频道 `chatbot:reply` 回到网关，网关按覆盖式流式刷新做打字机效果，最后 `finish=true`。
 
 ### 关键约束
@@ -778,6 +778,7 @@ node ..\skills\jira-gate-bug\scripts\analysis-cli.mjs render --input <结果JSON
 - 单会话 30 条/分钟；打字机分段数由 `config/chatbot.json` 的 `gateway.typewriter_max_chunks` 控制，默认 12 段、间隔 2 秒。
 - 仓库地址优先取 `repos.module_repo_urls`，其次 `repos.repo_url_template`，最后用 GitLab 搜索接口按模块名解析（凭据复用 `GIT_BASE_URL`/`GIT_USER`/`GIT_PASSWORD`/`GITLAB_PRIVATE_TOKEN`）。
 - 修改 `config/chatbot.json` 或 `.env` 后需要重建网关与 Worker，进程不会热加载。
+- 容器内核通常不允许非特权 user namespace，`codex exec --sandbox read-only` 会因 `bwrap: No permissions to create a new namespace` 在检索前失败；因此 `answer.sandbox` 必须保持 `danger-full-access`，隔离由 Docker 容器、临时 `git worktree` 和只读提示词共同保证。
 
 ### 部署
 

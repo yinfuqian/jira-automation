@@ -144,8 +144,9 @@ class ChatbotGateway:
             return
 
         if question.strip() in SWITCH_COMMANDS:
-            self._session.clear_project(chatid, userid)
-            await self._reply(req_id, settings.menu_text())
+            pending_question = self._session.clear_project(chatid, userid)
+            content = self._pending_menu_text(pending_question) if pending_question else settings.menu_text()
+            await self._reply(req_id, content)
             return
 
         if question.strip().isdigit():
@@ -154,15 +155,31 @@ class ChatbotGateway:
                 await self._reply(req_id, "序号超出范围。\n\n" + settings.menu_text())
                 return
             self._session.set_project(chatid, userid, project.key)
+            # 用户先提问、后选项目时，直接沿用刚才的问题发起分析，避免重复输入。
+            pending_question = self._session.pop_pending_question(chatid, userid)
+            if pending_question:
+                await self._start_answer(project, pending_question, body, req_id)
+                return
             await self._reply(req_id, self._selected_text(project))
             return
 
         current = settings.project_by_key(self._session.get_project_key(chatid, userid))
         if current is None:
-            await self._reply(req_id, settings.menu_text())
+            # 暂存原问题，选完项目后自动接着回答，用户不需要再问一遍。
+            self._session.set_pending_question(chatid, userid, question.strip())
+            await self._reply(req_id, self._pending_menu_text(question.strip()))
             return
 
         await self._start_answer(current, question.strip(), body, req_id)
+
+    def _pending_menu_text(self, question) -> str:
+        """在项目菜单后附上待回答的问题，提示选完项目会自动开始分析。"""
+        preview = question if len(question) <= 120 else question[:120] + "…"
+        return (
+            f"{self._settings.menu_text()}\n\n"
+            "选好项目后我会直接回答下面这个问题，无需重复提问：\n"
+            f"> {preview}"
+        )
 
     def _selected_text(self, project) -> str:
         """生成「已选中项目」的提示语。"""

@@ -32,7 +32,9 @@ class CodexOptions:
     api_key: str = ""
     api_key_env: str = codex_runner.DEFAULT_API_KEY_ENV
     codex_home: str = ""
-    sandbox: str = "read-only"
+    # 容器本身已是隔离边界；容器内核通常不允许非特权 user namespace，
+    # read-only / workspace-write 会因 bwrap 启动失败而无法执行任何检索命令。
+    sandbox: str = "danger-full-access"
     ephemeral: bool = True
     reasoning_effort: str = "medium"
     timeout_seconds: int = 900

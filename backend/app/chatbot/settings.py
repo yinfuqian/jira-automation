@@ -142,7 +142,8 @@ class AnswerSettings:
     timeout_seconds: int = 900
     max_answer_chars: int = 12000
     reasoning_effort: str = "medium"
-    sandbox: str = "read-only"
+    # 容器内 codex 不能用依赖 bwrap 的只读沙箱，隔离由容器与只读提示词共同保证。
+    sandbox: str = "danger-full-access"
 
 
 @dataclass(frozen=True)
@@ -333,7 +334,7 @@ def load_settings(config_path=None) -> ChatbotSettings:
             timeout_seconds=_as_int(answer.get("timeout_seconds"), 900),
             max_answer_chars=_as_int(answer.get("max_answer_chars"), 12000),
             reasoning_effort=_as_text(answer.get("reasoning_effort"), "medium") or "medium",
-            sandbox=_as_text(answer.get("sandbox"), "read-only") or "read-only",
+            sandbox=_as_text(answer.get("sandbox"), "danger-full-access") or "danger-full-access",
         ),
         projects=_parse_projects(document),
         session_ttl_seconds=_as_int(document.get("session_ttl_seconds"), 14400),

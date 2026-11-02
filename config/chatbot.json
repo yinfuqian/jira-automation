@@ -36,7 +36,7 @@
     "timeout_seconds": 900,
     "max_answer_chars": 12000,
     "reasoning_effort": "medium",
-    "sandbox": "read-only"
+    "sandbox": "danger-full-access"
   },
   "session_ttl_seconds": 14400,
   "projects": [
