@@ -2,6 +2,7 @@
 import logging
 import os
 
+import extensions
 from flask import Flask
 from flask_cors import CORS
 
@@ -39,8 +40,10 @@ def create_app(config_overrides=None, redis_client=None):
     db.init_app(app)
     migrate.init_app(app, db)
 
-    global redis
+    # 机器人网关和 chatbot worker 通过 extensions.redis 取连接，
+    # 这里必须把初始化后的客户端写回 extensions，不能只保存在 app 包内。
     redis = redis_client or init_redis(app)
+    extensions.redis = redis
     init_celery(app)
 
     try:
