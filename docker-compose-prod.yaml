@@ -89,7 +89,7 @@ services:
       - --hostname=worker-analysis@%h
       - -Q
       - analysis,maintenance
-      - --concurrency=2
+      - --concurrency=${ANALYSIS_WORKER_CONCURRENCY:-12}
     volumes:
       - ./data/users.csv:/data/users.csv:ro
       - ./data/upload:/data/upload
@@ -152,7 +152,7 @@ services:
       - --hostname=worker-skill@%h
       - -Q
       - skill
-      - --concurrency=2
+      - --concurrency=${SKILL_WORKER_CONCURRENCY:-12}
     volumes:
       - ./data/users.csv:/data/users.csv:ro
       - ./data/upload:/data/upload
@@ -277,7 +277,7 @@ services:
       - --hostname=worker-chatbot@%h
       - -Q
       - chatbot
-      - --concurrency=2
+      - --concurrency=${CHATBOT_WORKER_CONCURRENCY:-12}
     volumes:
       - ./data/logs:/app/app/logs
       - ./data/repos:/tmp/jira-automation-repos
@@ -308,7 +308,7 @@ services:
       - --hostname=worker-knowledge@%h
       - -Q
       - chatbot-knowledge,knowledge-sync
-      - --concurrency=2
+      - --concurrency=${KNOWLEDGE_WORKER_CONCURRENCY:-12}
     volumes:
       - ./data/logs:/app/app/logs
       - ./data/users.csv:/data/users.csv:ro
