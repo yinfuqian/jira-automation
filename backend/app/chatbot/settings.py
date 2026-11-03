@@ -4,7 +4,8 @@
 1. 项目、模块分支映射以及网关/仓库/问答参数维护在 `backend/config/chatbot.json`，
    该文件随镜像一起构建，容器内位于 `/app/config/chatbot.json`，不需要宿主机挂载；
 2. 只有 BotID 与 Secret 属于敏感凭据，放在 `.env` 的 `CHATBOT_BOT_ID`、`CHATBOT_BOT_SECRET`；
-3. GitLab 凭据复用后端已有的 `GIT_BASE_URL`、`GIT_USER`、`GIT_PASSWORD`、`GITLAB_PRIVATE_TOKEN`。
+3. GitLab 凭据复用后端已有的 `GIT_BASE_URL`、`GIT_USER`、`GIT_PASSWORD`、`GITLAB_PRIVATE_TOKEN`；
+4. Confluence 地址与令牌只来自环境变量，空间、标签和检索阈值来自配置文件。
 
 修改配置文件或 `.env` 后必须重启 `chatbot-gateway` 与 `worker-chatbot`，运行中的进程不会热更新。
 """
@@ -66,6 +67,22 @@ def _as_bool(value, fallback=True):
     if text in ("0", "false", "no", "off"):
         return False
     return fallback
+
+
+def _as_tuple(value):
+    """把配置中的字符串或数组归一化为去重元组，保持原顺序。"""
+    if value is None:
+        return ()
+    items = value if isinstance(value, (list, tuple)) else str(value).split(",")
+    result = []
+    seen = set()
+    for item in items:
+        text = str(item or "").strip()
+        if not text or text in seen:
+            continue
+        seen.add(text)
+        result.append(text)
+    return tuple(result)
 
 
 def _as_text(value, fallback=""):
@@ -154,6 +171,55 @@ class AnswerSettings:
 
 
 @dataclass(frozen=True)
+class ConfluenceSettings:
+    """Confluence 连接参数；敏感凭据只来自环境变量。"""
+
+    base_url: str = ""
+    username: str = ""
+    password: str = field(default="", repr=False)
+    token: str = field(default="", repr=False)
+    auth_mode: str = "bearer"
+    tls_verify: bool = True
+    request_timeout_seconds: int = 30
+
+    @property
+    def configured(self) -> bool:
+        """地址与所选鉴权模式的凭据齐备时才允许同步或在线检索。"""
+        if not self.base_url:
+            return False
+        if str(self.auth_mode or "bearer").strip().lower() == "basic":
+            return bool(self.username and self.password)
+        return bool(self.token)
+
+
+@dataclass(frozen=True)
+class KnowledgeSettings:
+    """Confluence 同步、混合检索和单结论回答参数。"""
+
+    enabled: bool = False
+    space_keys: tuple = ()
+    # 在线问答默认检索机器人账号可访问的全部空间；设置后才额外收窄在线范围。
+    online_search_space_keys: tuple = ()
+    labels: tuple = ()
+    root_page_ids: tuple = ()
+    search_limit: int = 30
+    sync_page_limit: int = 5000
+    max_pages: int = 20
+    online_candidate_limit: int = 100
+    max_chunks: int = 6
+    max_total_chars: int = 50000
+    max_chunk_chars: int = 900
+    chunk_overlap_chars: int = 120
+    attachment_max_bytes: int = 20 * 1024 * 1024
+    attachment_max_chars: int = 120000
+    min_score: float = 0.15
+    embedding_model: str = ""
+    embedding_batch_size: int = 16
+    cache_ttl_seconds: int = 300
+    sync_interval_seconds: int = 21600
+
+
+@dataclass(frozen=True)
 class ChatbotSettings:
     """一次加载得到的完整机器人配置。"""
 
@@ -162,6 +228,8 @@ class ChatbotSettings:
     gateway: GatewaySettings = field(default_factory=GatewaySettings)
     repos: RepoSettings = field(default_factory=RepoSettings)
     answer: AnswerSettings = field(default_factory=AnswerSettings)
+    confluence: ConfluenceSettings = field(default_factory=ConfluenceSettings)
+    knowledge: KnowledgeSettings = field(default_factory=KnowledgeSettings)
     projects: tuple = ()
     session_ttl_seconds: int = 14400
 
@@ -297,6 +365,8 @@ def load_settings(config_path=None) -> ChatbotSettings:
     gateway = _section(document, "gateway")
     repos = _section(document, "repos")
     answer = _section(document, "answer")
+    confluence = _section(document, "confluence")
+    knowledge = _section(document, "knowledge")
 
     return ChatbotSettings(
         source=f"{CONFIG_SOURCE}（{path}）",
@@ -346,6 +416,71 @@ def load_settings(config_path=None) -> ChatbotSettings:
             max_answer_chars=_as_int(answer.get("max_answer_chars"), 1200),
             reasoning_effort=_as_text(answer.get("reasoning_effort"), "medium") or "medium",
             sandbox=_as_text(answer.get("sandbox"), "danger-full-access") or "danger-full-access",
+        ),
+        confluence=ConfluenceSettings(
+            base_url=os.getenv("CONFLUENCE_URL", "").strip().rstrip("/"),
+            username=os.getenv("CONFLUENCE_USERNAME", "").strip(),
+            password=os.getenv("CONFLUENCE_PASSWORD", "").strip(),
+            token=os.getenv("CONFLUENCE_TOKEN", "").strip(),
+            auth_mode=_as_text(os.getenv("CONFLUENCE_AUTH_MODE"), "bearer").lower(),
+            tls_verify=_as_bool(confluence.get("tls_verify"), True),
+            request_timeout_seconds=_as_int(confluence.get("request_timeout_seconds"), 30),
+        ),
+        knowledge=KnowledgeSettings(
+            enabled=_as_bool(
+                os.getenv("KNOWLEDGE_ENABLED"),
+                _as_bool(knowledge.get("enabled"), False),
+            ),
+            space_keys=_as_tuple(
+                os.getenv("KNOWLEDGE_SPACE_KEYS") or knowledge.get("space_keys")
+            ),
+            online_search_space_keys=_as_tuple(
+                os.getenv("KNOWLEDGE_ONLINE_SEARCH_SPACE_KEYS")
+                or knowledge.get("online_search_space_keys")
+            ),
+            labels=_as_tuple(
+                os.getenv("KNOWLEDGE_LABELS") or knowledge.get("labels")
+            ),
+            root_page_ids=_as_tuple(
+                os.getenv("KNOWLEDGE_ROOT_PAGE_IDS") or knowledge.get("root_page_ids")
+            ),
+            search_limit=_as_int(knowledge.get("search_limit"), 30),
+            sync_page_limit=_as_int(
+                os.getenv("KNOWLEDGE_SYNC_PAGE_LIMIT")
+                or knowledge.get("sync_page_limit"),
+                5000,
+            ),
+            max_pages=_as_int(knowledge.get("max_pages"), 20),
+            online_candidate_limit=_as_int(
+                os.getenv("KNOWLEDGE_ONLINE_CANDIDATE_LIMIT")
+                or knowledge.get("online_candidate_limit"),
+                100,
+            ),
+            max_chunks=_as_int(knowledge.get("max_chunks"), 6),
+            max_total_chars=_as_int(knowledge.get("max_total_chars"), 50000),
+            max_chunk_chars=_as_int(knowledge.get("max_chunk_chars"), 900),
+            chunk_overlap_chars=_as_int(knowledge.get("chunk_overlap_chars"), 120, minimum=0),
+            attachment_max_bytes=_as_int(
+                os.getenv("KNOWLEDGE_ATTACHMENT_MAX_BYTES")
+                or knowledge.get("attachment_max_bytes"),
+                20 * 1024 * 1024,
+            ),
+            attachment_max_chars=_as_int(
+                os.getenv("KNOWLEDGE_ATTACHMENT_MAX_CHARS")
+                or knowledge.get("attachment_max_chars"),
+                120000,
+            ),
+            min_score=_as_float(knowledge.get("min_score"), 0.15),
+            embedding_model=_as_text(
+                os.getenv("KNOWLEDGE_EMBEDDING_MODEL") or knowledge.get("embedding_model")
+            ),
+            embedding_batch_size=_as_int(knowledge.get("embedding_batch_size"), 16),
+            cache_ttl_seconds=_as_int(knowledge.get("cache_ttl_seconds"), 300),
+            sync_interval_seconds=_as_int(
+                os.getenv("KNOWLEDGE_SYNC_INTERVAL_SECONDS")
+                or knowledge.get("sync_interval_seconds"),
+                21600,
+            ),
         ),
         projects=_parse_projects(document),
         session_ttl_seconds=_as_int(document.get("session_ttl_seconds"), 14400),

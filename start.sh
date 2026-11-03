@@ -45,6 +45,7 @@ if [ -n "${bot_id}" ] && [ -n "${bot_secret}" ]; then
   for name in worker-chatbot chatbot-gateway; do
     SERVICES+=("${name}${SUFFIX}")
   done
+  SERVICES+=("worker-knowledge${SUFFIX}")
 else
   echo "提示：未配置 CHATBOT_BOT_ID/CHATBOT_BOT_SECRET，跳过机器人服务。"
 fi

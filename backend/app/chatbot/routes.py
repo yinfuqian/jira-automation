@@ -6,7 +6,7 @@ import time
 from flask import Blueprint, jsonify, request
 
 import extensions
-from . import session as session_module
+from . import knowledge, session as session_module
 from .models.model import ChatbotQuestion
 from .settings import ChatbotConfigError, load_settings
 # 显式导入任务模块：Celery worker 通过 create_app() 装配蓝图时才会注册 chatbot.answer。
@@ -112,3 +112,45 @@ def reload_settings():
             "bot_configured": settings.bot.configured,
         }
     )
+
+
+def _enqueue_knowledge_sync(page_id=None):
+    """把同步工作交给专用队列，避免 API 被 Confluence 网络请求阻塞。"""
+    payload = {"trigger_source": "page_manual" if page_id else "manual"}
+    if page_id:
+        payload["page_id"] = str(page_id)
+    result = tasks.knowledge_sync_task.apply_async(args=[payload], queue="knowledge-sync")
+    return str(result.id or "")
+
+
+@chatbot_bp.route("/knowledge/status", methods=["GET"])
+def knowledge_status():
+    """返回知识库配置、索引规模与最近一次同步结果。"""
+    try:
+        settings = _settings()
+    except ChatbotConfigError as exc:
+        return jsonify({"ok": False, "error": str(exc)}), 503
+    payload = knowledge.knowledge_status()
+    payload.update(
+        {
+            "ok": True,
+            "enabled": settings.knowledge.enabled,
+            "confluence_configured": settings.confluence.configured,
+            "sync_interval_seconds": settings.knowledge.sync_interval_seconds,
+        }
+    )
+    return jsonify(payload)
+
+
+@chatbot_bp.route("/knowledge/sync", methods=["POST"])
+def sync_knowledge():
+    """手动投递一次全量 Confluence 同步。"""
+    task_id = _enqueue_knowledge_sync()
+    return jsonify({"ok": True, "task_id": task_id, "status": "queued"}), 202
+
+
+@chatbot_bp.route("/knowledge/pages/<page_id>/sync", methods=["POST"])
+def sync_knowledge_page(page_id):
+    """手动投递单个 Confluence 页面刷新。"""
+    task_id = _enqueue_knowledge_sync(str(page_id))
+    return jsonify({"ok": True, "task_id": task_id, "status": "queued"}), 202

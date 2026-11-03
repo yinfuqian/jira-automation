@@ -255,6 +255,91 @@ DDL_STATEMENTS = [
         KEY ix_chatbot_questions_created_at (created_at)
     )
     """,
+    # Confluence 页面当前快照：与迁移 f6e3b9d24c87 保持一致。
+    """
+    CREATE TABLE IF NOT EXISTS knowledge_documents (
+        id BIGINT NOT NULL AUTO_INCREMENT,
+        source_type VARCHAR(32) NOT NULL DEFAULT 'confluence',
+        source_id VARCHAR(128) NOT NULL,
+        space_key VARCHAR(64),
+        title VARCHAR(500) NOT NULL,
+        url VARCHAR(1000),
+        current_version INTEGER,
+        updated_at_source DATETIME,
+        labels LONGTEXT,
+        content LONGTEXT NOT NULL,
+        content_hash VARCHAR(64) NOT NULL,
+        status VARCHAR(24) NOT NULL DEFAULT 'active',
+        last_sync_run_id VARCHAR(64),
+        last_synced_at DATETIME NOT NULL,
+        created_at DATETIME NOT NULL,
+        updated_at DATETIME NOT NULL,
+        PRIMARY KEY (id),
+        UNIQUE KEY ix_knowledge_documents_source_id (source_id),
+        KEY ix_knowledge_documents_source_type (source_type),
+        KEY ix_knowledge_documents_space_key (space_key),
+        KEY ix_knowledge_documents_content_hash (content_hash),
+        KEY ix_knowledge_documents_status (status),
+        KEY ix_knowledge_documents_last_sync_run_id (last_sync_run_id)
+    )
+    """,
+    # Confluence 检索切片：页面内容变化时重建。
+    """
+    CREATE TABLE IF NOT EXISTS knowledge_chunks (
+        id BIGINT NOT NULL AUTO_INCREMENT,
+        document_id BIGINT NOT NULL,
+        chunk_index INTEGER NOT NULL,
+        heading_path VARCHAR(1000),
+        content LONGTEXT NOT NULL,
+        token_count INTEGER NOT NULL DEFAULT 0,
+        content_hash VARCHAR(64) NOT NULL,
+        embedding LONGTEXT,
+        embedding_model VARCHAR(128),
+        created_at DATETIME NOT NULL,
+        updated_at DATETIME NOT NULL,
+        PRIMARY KEY (id),
+        UNIQUE KEY uq_knowledge_chunk_document_index (document_id, chunk_index),
+        KEY ix_knowledge_chunks_document_id (document_id),
+        CONSTRAINT fk_knowledge_chunks_document FOREIGN KEY(document_id)
+            REFERENCES knowledge_documents (id) ON DELETE CASCADE
+    )
+    """,
+    # Confluence 同步批次与结果。
+    """
+    CREATE TABLE IF NOT EXISTS knowledge_sync_runs (
+        id BIGINT NOT NULL AUTO_INCREMENT,
+        run_id VARCHAR(64) NOT NULL,
+        trigger_source VARCHAR(32) NOT NULL DEFAULT 'scheduled',
+        status VARCHAR(24) NOT NULL DEFAULT 'running',
+        pages_seen INTEGER NOT NULL DEFAULT 0,
+        pages_changed INTEGER NOT NULL DEFAULT 0,
+        pages_deleted INTEGER NOT NULL DEFAULT 0,
+        error_message TEXT,
+        started_at DATETIME NOT NULL,
+        finished_at DATETIME,
+        PRIMARY KEY (id),
+        UNIQUE KEY ix_knowledge_sync_runs_run_id (run_id),
+        KEY ix_knowledge_sync_runs_status (status)
+    )
+    """,
+    # 单次机器人回答实际引用的 Confluence 页面与切片。
+    """
+    CREATE TABLE IF NOT EXISTS chatbot_answer_sources (
+        id BIGINT NOT NULL AUTO_INCREMENT,
+        task_id VARCHAR(64) NOT NULL,
+        document_id BIGINT NOT NULL,
+        chunk_id BIGINT,
+        page_version INTEGER,
+        rank INTEGER NOT NULL DEFAULT 0,
+        score FLOAT NOT NULL DEFAULT 0,
+        cited BOOLEAN NOT NULL DEFAULT TRUE,
+        created_at DATETIME NOT NULL,
+        PRIMARY KEY (id),
+        KEY ix_chatbot_answer_sources_task_id (task_id),
+        KEY ix_chatbot_answer_sources_document_id (document_id),
+        KEY ix_chatbot_answer_sources_chunk_id (chunk_id)
+    )
+    """,
 ]
 
 

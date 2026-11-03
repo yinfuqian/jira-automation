@@ -267,6 +267,64 @@ class MigrationIdempotencyTests(unittest.TestCase):
         create_table.assert_not_called()
         create_index.assert_not_called()
 
+    def test_confluence_knowledge_migration_creates_four_tables_once(self):
+        """新知识库迁移在空库创建四张表，在已有库不重复建表。"""
+        migration = load_migration("f6e3b9d24c87_confluence_knowledge.py")
+
+        inspector = FakeInspector()
+        with patch.object(migration.op, "get_bind", return_value=object()), \
+                patch.object(migration.sa, "inspect", return_value=inspector), \
+                patch.object(migration.op, "create_table") as create_table, \
+                patch.object(migration.op, "create_index"):
+            migration.upgrade()
+
+        self.assertEqual(
+            [call.args[0] for call in create_table.call_args_list],
+            [
+                "knowledge_documents",
+                "knowledge_chunks",
+                "knowledge_sync_runs",
+                "chatbot_answer_sources",
+            ],
+        )
+
+        existing = FakeInspector(
+            tables={
+                "knowledge_documents",
+                "knowledge_chunks",
+                "knowledge_sync_runs",
+                "chatbot_answer_sources",
+            },
+            indexes={
+                "knowledge_documents": {
+                    "ix_knowledge_documents_source_type",
+                    "ix_knowledge_documents_source_id",
+                    "ix_knowledge_documents_space_key",
+                    "ix_knowledge_documents_content_hash",
+                    "ix_knowledge_documents_status",
+                    "ix_knowledge_documents_last_sync_run_id",
+                },
+                "knowledge_chunks": {"ix_knowledge_chunks_document_id"},
+                "knowledge_sync_runs": {
+                    "ix_knowledge_sync_runs_run_id",
+                    "ix_knowledge_sync_runs_status",
+                },
+                "chatbot_answer_sources": {
+                    "ix_chatbot_answer_sources_task_id",
+                    "ix_chatbot_answer_sources_document_id",
+                    "ix_chatbot_answer_sources_chunk_id",
+                },
+            },
+        )
+        with patch.object(migration.op, "get_bind", return_value=object()), \
+                patch.object(migration.sa, "inspect", return_value=existing), \
+                patch.object(migration.op, "create_table") as create_table, \
+                patch.object(migration.op, "create_index") as create_index:
+            migration.upgrade()
+
+        create_table.assert_not_called()
+        create_index.assert_not_called()
+
 
 if __name__ == "__main__":
     unittest.main()

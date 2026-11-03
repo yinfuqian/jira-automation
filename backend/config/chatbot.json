@@ -39,6 +39,32 @@
     "reasoning_effort": "medium",
     "sandbox": "danger-full-access"
   },
+  "confluence": {
+    "tls_verify": true,
+    "request_timeout_seconds": 30
+  },
+  "knowledge": {
+    "enabled": false,
+    "space_keys": [],
+    "online_search_space_keys": [],
+    "labels": [],
+    "root_page_ids": [],
+    "search_limit": 30,
+    "sync_page_limit": 5000,
+    "max_pages": 20,
+    "online_candidate_limit": 100,
+    "max_chunks": 6,
+    "max_total_chars": 50000,
+    "max_chunk_chars": 900,
+    "chunk_overlap_chars": 120,
+    "attachment_max_bytes": 20971520,
+    "attachment_max_chars": 120000,
+    "min_score": 0.15,
+    "embedding_model": "",
+    "embedding_batch_size": 16,
+    "cache_ttl_seconds": 300,
+    "sync_interval_seconds": 21600
+  },
   "session_ttl_seconds": 14400,
   "projects": [
     {

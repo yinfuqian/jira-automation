@@ -287,6 +287,36 @@ services:
     depends_on:
       - api-dev
 
+  worker-knowledge-dev:
+    image: ${BACKEND_IMAGE}
+    network_mode: "host"
+    env_file:
+      - .env
+    environment:
+      PYTHONUNBUFFERED: "1"
+      # 知识问答只使用 Confluence 只读证据，不检出业务仓库。
+      SKILL_WORKSPACE_DIR: /data/skill-workspace
+      CODEX_HOME: /data/codex
+      SKILL_RECOVER_ORPHANS: "false"
+    command:
+      - celery
+      - -A
+      - celery_worker.celery_app
+      - worker
+      - --loglevel=INFO
+      - --hostname=worker-knowledge-dev@%h
+      - -Q
+      - chatbot-knowledge,knowledge-sync
+      - --concurrency=2
+    volumes:
+      - ./data/logs-dev:/app/app/logs
+      - ./data/users-dev.csv:/data/users.csv:ro
+      - ./data/codex-dev:/data/codex
+      - ./data/skill-workspace-dev:/data/skill-workspace
+    restart: unless-stopped
+    depends_on:
+      - api-dev
+
   chatbot-gateway-dev:
     image: ${BACKEND_IMAGE}
     network_mode: "host"

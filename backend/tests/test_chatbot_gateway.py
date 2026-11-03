@@ -641,9 +641,19 @@ class SessionTest(unittest.TestCase):
 class GatewayTest(unittest.IsolatedAsyncioTestCase):
     """校验群消息路由与结果推送。"""
 
-    def build(self, **gateway_overrides):
+    def build(self, knowledge_enabled=False, **gateway_overrides):
         """构造网关并替换为假连接与假任务队列。"""
         settings = build_settings(**gateway_overrides)
+        if knowledge_enabled:
+            settings = dataclasses.replace(
+                settings,
+                knowledge=dataclasses.replace(settings.knowledge, enabled=True),
+                confluence=dataclasses.replace(
+                    settings.confluence,
+                    base_url="https://confluence.example",
+                    token="read-only-token",
+                ),
+            )
         redis = FakeRedis()
         self.store = ChatSessionStore(redis, ttl_seconds=600)
         self.enqueued = []
@@ -669,6 +679,19 @@ class GatewayTest(unittest.IsolatedAsyncioTestCase):
         self.assertIn("请先选择", self.conn.markdowns[0])
         self.assertIn("回调入口在哪", self.conn.markdowns[0])
         self.assertEqual(self.store.pop_pending_question("chat-1", "user-1"), "回调入口在哪")
+
+    async def test_knowledge_question_without_project_enqueues_directly(self):
+        """知识库启用后，未选代码项目也必须立即投递，不能被项目菜单拦截。"""
+        gateway = self.build(knowledge_enabled=True)
+        await gateway._handle_message(group_message("@Bot 回调入口在哪"), "req-1")
+
+        self.assertEqual(len(self.enqueued), 1)
+        self.assertEqual(self.enqueued[0]["project_key"], "")
+        self.assertEqual(self.enqueued[0]["project_name"], "Confluence 知识库")
+        self.assertEqual(self.enqueued[0]["question"], "回调入口在哪")
+        self.assertEqual(self.conn.markdowns, [])
+        self.assertIn("Confluence 知识库", self.conn.streams[0]["content"])
+        self.assertEqual(self.store.pop_pending_question("chat-1", "user-1"), "")
 
     async def test_select_project_after_question_answers_pending_question(self):
         """先提问再选项目时，直接沿用原问题发起分析，不再要求重复提问。"""

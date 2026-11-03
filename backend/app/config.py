@@ -1,5 +1,6 @@
 """config 模块负责本文件相关的业务流程、数据转换与依赖协作。"""
 import os
+import re
 from datetime import timedelta
 from pathlib import Path
 from urllib.parse import quote_plus
@@ -96,6 +97,9 @@ def _resolve_auth_users_file():
     configured_path = os.getenv("AUTH_USERS_FILE")
     if not configured_path:
         return str(backend_dir.parent / "users.csv")
+    # 在 Linux 容器中读取 Windows 风格的配置时，不能把它误拼到工作目录下。
+    if re.match(r"^[A-Za-z]:[\\/]", configured_path):
+        return configured_path.replace("\\", "/")
     users_path = Path(configured_path).expanduser()
     if users_path.is_absolute():
         return configured_path
@@ -364,6 +368,9 @@ class Config:
         "git.sync_projects": {"queue": "maintenance"},
         # 机器人问答耗时较长，单独排队，避免把 Jira 门禁任务堵在后面。
         "chatbot.answer": {"queue": "chatbot"},
+        # Confluence 在线问答与定时同步各自独立，避免同步大页面阻塞用户提问。
+        "chatbot.knowledge_answer": {"queue": "chatbot-knowledge"},
+        "knowledge.sync_confluence": {"queue": "knowledge-sync"},
     }
     CELERY_BROKER_TRANSPORT_OPTIONS = {
         "socket_keepalive": True,
@@ -385,6 +392,15 @@ class Config:
             "task": "skillrun.expire_queued_tasks",
             "schedule": timedelta(seconds=SKILL_QUEUE_SWEEP_INTERVAL_SECONDS),
         }
+    }
+    KNOWLEDGE_SYNC_INTERVAL_SECONDS = max(
+        60, int(os.getenv("KNOWLEDGE_SYNC_INTERVAL_SECONDS", "21600"))
+    )
+    CELERY_BEAT_SCHEDULE["confluence-knowledge-sync"] = {
+        "task": "knowledge.sync_confluence",
+        "schedule": timedelta(seconds=KNOWLEDGE_SYNC_INTERVAL_SECONDS),
+        "kwargs": {"payload": {"trigger_source": "scheduled"}},
+        "options": {"queue": "knowledge-sync"},
     }
     if GITLAB_SYNC_ENABLED:
         CELERY_BEAT_SCHEDULE["gitlab-project-sync"] = {

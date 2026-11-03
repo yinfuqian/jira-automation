@@ -17,6 +17,7 @@ class ComposeContractTests(unittest.TestCase):
             "worker-analysis-dev",
             "worker-skill-dev",
             "worker-chatbot-dev",
+            "worker-knowledge-dev",
             "chatbot-gateway-dev",
             "beat-dev",
             "migrate",
@@ -31,8 +32,8 @@ class ComposeContractTests(unittest.TestCase):
         source = DEV_COMPOSE_PATH.read_text(encoding="utf-8")
 
         self.assertNotIn("build:", source)
-        self.assertEqual(source.count("image: ${BACKEND_IMAGE}"), 7)
-        self.assertEqual(source.count('network_mode: "host"'), 7)
+        self.assertEqual(source.count("image: ${BACKEND_IMAGE}"), 8)
+        self.assertEqual(source.count('network_mode: "host"'), 8)
         self.assertIn("0.0.0.0:6000", source)
         self.assertIn('"${API_PORT}:6000"', source)
 
@@ -43,11 +44,13 @@ class ComposeContractTests(unittest.TestCase):
                 "worker-analysis-dev@%h",
                 "worker-skill-dev@%h",
                 "worker-chatbot-dev@%h",
+                "worker-knowledge-dev@%h",
             ),
             PROD_COMPOSE_PATH: (
                 "worker-analysis@%h",
                 "worker-skill@%h",
                 "worker-chatbot@%h",
+                "worker-knowledge@%h",
             ),
         }
         for path, hostnames in expected.items():
@@ -58,8 +61,8 @@ class ComposeContractTests(unittest.TestCase):
     def test_online_compose_mounts_runtime_data_and_skills(self):
         source = DEV_COMPOSE_PATH.read_text(encoding="utf-8")
 
-        self.assertEqual(source.count("env_file:\n      - .env"), 7)
-        self.assertEqual(source.count("./data/users-dev.csv:/data/users.csv:ro"), 7)
+        self.assertEqual(source.count("env_file:\n      - .env"), 8)
+        self.assertEqual(source.count("./data/users-dev.csv:/data/users.csv:ro"), 8)
         self.assertNotIn(":/users.csv", source)
         for mount in (
             "./data/upload-dev:/data/upload",
@@ -124,6 +127,7 @@ class ComposeContractTests(unittest.TestCase):
         self.assertIn("docker-compose-dev.yaml", source)
         self.assertIn("docker-compose-prod.yaml", source)
         self.assertIn("worker-chatbot", source)
+        self.assertIn("worker-knowledge", source)
         self.assertIn("chatbot-gateway", source)
         # ps 不接受 up 专用参数，避免脚本在查询状态时直接失败。
         ps_line = next(line for line in source.splitlines() if " compose " in line and " ps " in line)
@@ -133,7 +137,10 @@ class ComposeContractTests(unittest.TestCase):
     def test_production_restart_script_uses_non_dev_chatbot_services(self):
         """生产脚本必须使用不带 -dev 后缀的服务名，不能引用开发容器。"""
         source = (PROJECT_ROOT / "restart-master.sh").read_text(encoding="utf-8")
-        self.assertIn("SERVICES+=(worker-chatbot chatbot-gateway)", source)
+        self.assertIn(
+            "SERVICES+=(worker-chatbot worker-knowledge chatbot-gateway)",
+            source,
+        )
         self.assertNotIn("worker-chatbot-dev", source)
         self.assertNotIn("chatbot-gateway-dev", source)
 

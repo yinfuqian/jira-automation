@@ -125,6 +125,13 @@ class ChatbotGateway:
         userid = str((body.get("from") or {}).get("userid") or "")
         msgid = str(body.get("msgid") or "")
 
+        logger.info(
+            "收到群聊消息：msgid=%s chatid=%s userid=%s",
+            msgid,
+            chatid,
+            userid,
+        )
+
         if chattype != protocol.CHAT_TYPE_GROUP:
             await self._reply(req_id, SINGLE_CHAT_NOTICE)
             return
@@ -147,6 +154,11 @@ class ChatbotGateway:
             pending_question = self._session.clear_project(chatid, userid)
             content = self._pending_menu_text(pending_question) if pending_question else settings.menu_text()
             await self._reply(req_id, content)
+            return
+
+        # 知识库问答不依赖代码项目选择，收到问题后直接投递知识队列。
+        if settings.knowledge.enabled and settings.confluence.configured:
+            await self._start_answer(None, question.strip(), body, req_id)
             return
 
         if question.strip().isdigit():
@@ -206,12 +218,21 @@ class ChatbotGateway:
         task_id = f"cb-{uuid.uuid4().hex}"
         stream_id = protocol.new_stream_id()
         started_at = time.time()
-        modules = project.module_items()
-
-        placeholder = (
-            f"正在分析 **{project.name}** 的 {len(modules)} 个模块代码…\n\n"
-            "首次分析需要拉取仓库，通常 1~3 分钟，请稍候。"
-        )
+        if project is None:
+            placeholder = (
+                "正在查询 **Confluence 知识库**…\n\n"
+                "我会从已同步资料中给出一个结论，请稍候。"
+            )
+            project_key = ""
+            project_name = "Confluence 知识库"
+        else:
+            modules = project.module_items()
+            placeholder = (
+                f"正在分析 **{project.name}** 的 {len(modules)} 个模块代码…\n\n"
+                "首次分析需要拉取仓库，通常 1~3 分钟，请稍候。"
+            )
+            project_key = project.key
+            project_name = project.name
         try:
             await self._connection.send_stream(req_id, stream_id, placeholder, False)
         except Exception as exc:  # noqa: BLE001 - 占位失败不影响后续推送
@@ -224,8 +245,8 @@ class ChatbotGateway:
             "chatid": chatid,
             "chattype": chattype,
             "userid": userid,
-            "project_key": project.key,
-            "project_name": project.name,
+            "project_key": project_key,
+            "project_name": project_name,
             "question": question,
             "started_at": started_at,
         }

@@ -22,7 +22,7 @@ if [ "${#SERVICES[@]}" -eq 0 ]; then
   bot_id="${CHATBOT_BOT_ID:-$(read_env_value CHATBOT_BOT_ID)}"
   bot_secret="${CHATBOT_BOT_SECRET:-$(read_env_value CHATBOT_BOT_SECRET)}"
   if [ -n "${bot_id}" ] && [ -n "${bot_secret}" ]; then
-    SERVICES+=(worker-chatbot chatbot-gateway)
+    SERVICES+=(worker-chatbot worker-knowledge chatbot-gateway)
   else
     echo "提示：未配置 CHATBOT_BOT_ID/CHATBOT_BOT_SECRET，跳过 worker-chatbot 与 chatbot-gateway。"
   fi

@@ -24,6 +24,7 @@
 | `worker-analysis-dev` | Celery 日志分析、图片识别与 GitLab 维护任务（开发环境） | 无宿主机端口 |
 | `worker-skill-dev` | Celery 技能（Codex Agent）执行（开发环境） | 无宿主机端口 |
 | `worker-chatbot-dev` | Celery 企业微信代码问答任务执行（开发环境） | 无宿主机端口 |
+| `worker-knowledge-dev` | Confluence 知识检索与半天同步任务（开发环境） | 无宿主机端口 |
 | `chatbot-gateway-dev` | 企业微信智能机器人长连接网关，必须单实例（开发环境） | 无宿主机端口 |
 | `beat-dev` | 开发环境定时任务调度：每分钟清理排队过期技能任务，并按配置周期同步 GitLab 产品与模块 | 无宿主机端口 |
 | `migrate` | 创建数据库并执行 `flask db upgrade` | 一次性容器 |
@@ -761,6 +762,7 @@ node ..\skills\jira-gate-bug\scripts\analysis-cli.mjs render --input <结果JSON
 | `backend/chatbot_gateway.py` | 常驻长连接进程，订阅 `wss://openws.work.weixin.qq.com`、收发消息 |
 | `backend/app/chatbot/` | 协议、会话、仓库检出、答案生成与审计 |
 | Celery 队列 `chatbot` | 执行代码检出与模型分析（`chatbot.answer`） |
+| Celery 队列 `chatbot-knowledge` / `knowledge-sync` | 单结论知识问答与 Confluence 定时同步 |
 | `backend/config/chatbot.json` | 项目、模块分支映射与问答阈值，随镜像构建到 `/app/config/chatbot.json`；`.env` 只保留 BotID/Secret |
 
 ### 交互流程
@@ -809,6 +811,30 @@ docker compose --env-file .env.production -f docker-compose-prod.yaml up -d api 
 | `GET /chatbot/projects` | 项目与模块分支清单，用于核对映射 |
 | `GET /chatbot/questions?limit=20` | 最近问答记录（问题、结论、耗时、状态） |
 | `POST /chatbot/reload` | 重新读取配置文件并校验；变更实际生效需重启网关与 Worker |
+
+## Confluence 只读知识问答
+
+启用后，机器人优先从 Confluence 检索证据并只返回一个结论。回答固定为「答案 / 依据 / 来源」，不会一次返回多个候选答案；证据不足时明确回答未找到依据，不凭模型记忆补写。页面按标题和长度切片后存入 MySQL，默认每 6 小时同步一次，首次启动自动同步；索引未命中时会在线补搜，问答前还会刷新命中的页面。
+
+```env
+KNOWLEDGE_ENABLED=true
+CONFLUENCE_URL=https://confluence.example.com
+CONFLUENCE_AUTH_MODE=bearer
+CONFLUENCE_TOKEN=只读访问令牌
+CONFLUENCE_USERNAME=
+CONFLUENCE_PASSWORD=
+KNOWLEDGE_SYNC_INTERVAL_SECONDS=21600
+```
+
+使用 Basic Auth 时可把鉴权模式改为 basic，并填写用户名和密码。知识库默认关闭。backend/config/chatbot.json 的 knowledge.space_keys、labels、root_page_ids 限定同步范围；范围为空表示只索引机器人账号有权访问的全部页面。系统只调用 Confluence 读取接口，不创建、修改或删除页面。向量模型是可选项，未配置 KNOWLEDGE_EMBEDDING_MODEL 时自动使用关键词检索。
+
+```text
+GET  /chatbot/knowledge/status
+POST /chatbot/knowledge/sync
+POST /chatbot/knowledge/pages/<page_id>/sync
+```
+
+手动同步接口只把任务投递到 knowledge-sync 队列，不在 API 请求内等待 Confluence。部署后先执行数据库迁移，再启动 worker-knowledge；生产与开发服务名分别为 worker-knowledge、worker-knowledge-dev。
 
 ## Git 与外部基础设施
 

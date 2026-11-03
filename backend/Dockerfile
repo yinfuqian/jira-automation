@@ -63,7 +63,7 @@ RUN --mount=type=bind,source=offline/apt,target=/opt/apt-offline \
 # 既能保证两个版本来源一致，也不会把离线 apt 依赖清单（backend/offline/apt）扩大到上百个 java 相关 deb。
 # 下面两组地址按顺序尝试、命中即用；企业内网可以用 --build-arg 把内部制品库排在最前面。
 ARG JDK8_VERSION=8u504b01
-ARG JDK21_VERSION=21.0.12.1_1
+ARG JDK21_VERSION=21.0.13_9
 ARG MAVEN_VERSION=3.9.9
 ARG ADOPTIUM_MIRRORS="https://mirrors.tuna.tsinghua.edu.cn/Adoptium https://mirrors.huaweicloud.com/adoptium"
 ARG MAVEN_URLS="https://mirrors.huaweicloud.com/apache/maven/maven-3/${MAVEN_VERSION}/binaries/apache-maven-${MAVEN_VERSION}-bin.tar.gz https://repo.maven.apache.org/maven2/org/apache/maven/apache-maven/${MAVEN_VERSION}/apache-maven-${MAVEN_VERSION}-bin.tar.gz"
@@ -187,7 +187,7 @@ RUN chmod +x /app/docker-entrypoint.sh /app/migrate_db.sh /app/start.sh /app/sta
 
 EXPOSE 5000
 
-HEALTHCHECK --interval=30s --timeout=10s --start-period=60s --retries=3 \
+HEALTHCHECK --interval=30s --timeout=30s --start-period=60s --retries=3 \
   CMD python verify_runtime.py --runtime || exit 1
 
 ENTRYPOINT ["/app/docker-entrypoint.sh"]
