@@ -31,7 +31,7 @@ metadata:
 本技能执行**两套并列判定**，两套都必须完整执行，互不替代：
 
 1. **G2 技术方案准出**：检查项、等级（`MUST` / `CONDITIONAL` / `SHOULD` / `OBSERVE`）与判定原则以 [references/checklist.md](references/checklist.md)（技术方案准出 Checklist）为准。
-2. **PDCA 开发交付物检查（RD）**：以 [references/pdca-standard.md](references/pdca-standard.md)（通用团队交付物 PDCA 规范）为准，本次只执行其中 **§5.1 开发交付物**的 10 项必查项，以及 §2.4 事实源边界、§2.5 复用既有能力判别、§4 结论口径、§5.4 / §5.5 / §5.6 特殊情形、§6 报告格式、§10 禁止事项。
+2. **PDCA 开发交付物检查（RD）**：以 [references/pdca-standard.md](references/pdca-standard.md)（通用团队交付物 PDCA 规范，`tools_version: V2.2.1`、`template_version: V1.0`）为准，本次只执行其中 **§5.1 开发交付物**的 10 项必查项，以及 §2.4 事实源边界、§2.5 复用既有能力判别、§4 结论口径、§5.4 / §5.5 / §5.6 特殊情形、§6 报告格式、§7.2 Jira 评论格式、§10 禁止事项。
 
 **先读完这两份参考再开始判定**，不要凭印象发明标准。PDCA 部分的具体执行口径见 §5.2。
 
@@ -248,6 +248,7 @@ PRD-DELIVERY：唯一业务事实源
 **结论口径**
 
 - 结论只有 `通过` / `不通过` 两个取值，**不使用「有条件通过」「基本一致」「需确认」等中间档**。
+- 本次只执行 RD 一类，RD 结论仍只有 `通过` / `不通过` 两档；母版为 UI 新增的「检查未完成」不参与 RD 结论，仅在 PRD 缺失、不可读或版本无法唯一确定时作为**执行状态**记录，且不改变 G2 结论。
 - `通过`：10 项必查项全部核对且无问题；`通过` 必须给出**页面 + 控件 + 触发条件**式的证据定位（技术方案章节 + PRD 稳定编号），不得只写「已实现」「有相关逻辑」。
 - `不通过`：任一必查项缺失、与 PRD 不一致，或缺少可核验证据；提供不出依据的「已确认」「已定口径」同样判不通过。
 - 交付物以「当前系统不具备该能力」「运行时没有该链路」「本期不支持」缩减 PRD 已确认范围时：该论断只算待证事实，判 `不通过`，整改要求固定为「补齐实现，承接 PRD 原范围」。
@@ -267,8 +268,8 @@ node <技能目录>/scripts/jira-cli.mjs attach-list <KEY|URL>
 ```
 
 - 文件名：`{{需求名称}}_RD_{{YYYYMMDD}}_{{NN}}_PDCA.md`，`NN` 从 `01` 起递增。先用 `attach-list` 找同需求、同角色、同日期的已有报告，取最大 `NN + 1`；不得覆盖历史快照。
-- 报告顶部写规范 §6 的最小 front-matter（`artifact_type: pdca`、`mode: jira`、`role`、`source_prd`、`source_prd_version`、`checked_deliverable`、`generated_at`、`jira_issue`、`report_name` 等）。
-- 章节只保留 **一、PDCA 结论**、**二、开发侧方案检查结果与问题项**、**五、附录**（输入材料、必查项核对表、AC 追溯明细、未检查项、变更记录）；不生成 UI / 测试章节，也不把未触发的角色写成「未检查」。
+- 报告顶部按规范 §6 写**最小 front-matter**（`artifact_type: pdca`、`mode: jira`、`source_prd`、`source_prd_version`、`checked_deliverable`、`generated_at`、`pdca_template_version: "V1.0"`、`jira_issue`、`report_name` 等）；字段与母版保持一致，不自行增删。
+- 章节按规范 §6.1.2 只保留 **一、PDCA 结论**、**二、开发侧方案检查结果与问题项**、**五、附录**（输入材料、必查项核对表、AC 追溯明细、未检查项、变更记录）；不生成 UI / 测试章节，也不把未触发的角色写成「未检查」。
 - 色标统一用 🟢 / 🔴 / ⚪；问题编号用 `D-` 前缀，每项一张卡：影响 → 怎么改 → 完成标准 → PRD 要求 vs 交付物实际。
 - **责任方只写交付方（研发）**，不把产品列为交付物问题的责任方。
 - 上传前用 `mypermissions` 检查 `CREATE_ATTACHMENTS`；上传失败或缺权限时，评论里的「PDCA 报告」行改写为「未上传（原因）」，PDCA 结论保持不变，不要重试或改名绕开。
