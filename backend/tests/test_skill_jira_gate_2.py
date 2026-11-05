@@ -110,12 +110,15 @@ class Gate2DefinitionTests(unittest.TestCase):
         self.assertIn("检查未完成", text)
         self.assertIn("不生成空报告", text)
 
-    def test_checklist_cross_references_pdca_standard(self):
-        """原有 G2 Checklist 仍是门禁主判定，并显式声明与 PDCA 并行。"""
-        text = (GATE2_DIR / "references" / "checklist.md").read_text(encoding="utf-8")
+    def test_skill_declares_g2_and_pdca_parallel_judgement(self):
+        """最新 checklist 不再写 PDCA 交叉引用，并行判定由 SKILL.md 声明。"""
+        checklist = (GATE2_DIR / "references" / "checklist.md").read_text(encoding="utf-8")
+        skill = (GATE2_DIR / "SKILL.md").read_text(encoding="utf-8")
 
-        self.assertIn("pdca-standard.md", text)
-        self.assertIn("并行判定", text)
+        self.assertNotIn("pdca-standard.md", checklist)
+        self.assertIn("references/pdca-standard.md", skill)
+        self.assertIn("两套并列判定", skill)
+        self.assertIn("两套都必须完整执行", skill)
 
     def test_pdca_standard_is_vendored_verbatim(self):
         """PDCA 规范随技能分发，保留关键章节与结论口径。"""
@@ -129,15 +132,34 @@ class Gate2DefinitionTests(unittest.TestCase):
         self.assertIn("不要评价 PRD 或产品交付原型自身质量", text)
 
     def test_checklist_contains_all_g2_items(self):
+        """最新 checklist 只保留 6 项 MUST，且未命中的 N/A 不输出。"""
         text = (GATE2_DIR / "references" / "checklist.md").read_text(encoding="utf-8")
 
         self.assertIn("# 技术方案准出 Checklist", text)
-        for index in range(1, 11):
+        for index in range(1, 7):
             self.assertIn(f"G2-M{index:02d}", text)
         for index in range(1, 12):
             self.assertIn(f"G2-C{index:02d}", text)
-        self.assertIn("开发接管测试", text)
+        self.assertNotIn("G2-M07", text)
+        self.assertNotIn("G2-M08", text)
+        self.assertIn("可实施性与阻断判定", text)
+        self.assertIn("N/A", text)
         self.assertIn("OpenSpec", text)
+
+    def test_skill_uses_simplified_comment_contract(self):
+        """评论按 checklist 9.2 精简：通过不列检查项，退回只列失败项。"""
+        text = (GATE2_DIR / "SKILL.md").read_text(encoding="utf-8")
+
+        self.assertIn("6 项 `MUST`", text)
+        self.assertNotIn("10 项 `MUST`", text)
+        self.assertIn("通过时不列检查项", text)
+        self.assertIn("退回补充时只列不通过项", text)
+        self.assertIn("不输出通过项、`N/A`、机器判定明细与阻断项数量", text)
+        self.assertIn("不读取、不引用、不输出 G1 结论", text)
+        self.assertIn("不校验代码基线", text)
+        self.assertIn("G2-M01 输入与事实源", text)
+        self.assertIn("G2-M06 开发接管与任务约束", text)
+        self.assertNotIn("G2-M10", text)
 
     def test_runtime_prompt_mentions_precheck_and_return_flow(self):
         payload = json.loads((GATE2_DIR / "runtime.json").read_text(encoding="utf-8"))
@@ -152,6 +174,10 @@ class Gate2DefinitionTests(unittest.TestCase):
         self.assertIn("D-01", payload["prompt_template"])
         self.assertIn("_PDCA.md", payload["prompt_template"])
         self.assertIn("role=RD", payload["prompt_template"])
+        self.assertIn("6 项 MUST", payload["prompt_template"])
+        self.assertNotIn("10 项 MUST", payload["prompt_template"])
+        self.assertIn("不输出通过项", payload["prompt_template"])
+        self.assertIn("checklist §3.1", payload["prompt_template"])
         # 类型门禁必须覆盖 PDCA 判定与报告生成。
         self.assertIn("不执行 G2 与 PDCA 判定", payload["prompt_template"])
         self.assertIn("不生成 PDCA 报告", payload["prompt_template"])
