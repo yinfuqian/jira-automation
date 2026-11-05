@@ -21,6 +21,7 @@ GATE_SKILL_DIR = SKILLS_ROOT / "jira-gate-1"
 
 NODE = shutil.which("node")
 PACK_SCRIPT = MOCK_SKILL_DIR / "scripts" / "pack-deliverables.mjs"
+PROTOTYPE_SCRIPT = MOCK_SKILL_DIR / "scripts" / "detect-prototype.mjs"
 
 # 预演版脚本里不允许出现写 Jira 的方法；这些名字一旦出现说明只读边界被破坏。
 WRITE_METHODS = ("POST", "PUT", "PATCH", "DELETE")
@@ -42,6 +43,7 @@ class MockSkillPackagingTests(unittest.TestCase):
             MOCK_SKILL_DIR / "scripts" / "extract.py",
             MOCK_SKILL_DIR / "scripts" / "report-conclusion.mjs",
             MOCK_SKILL_DIR / "scripts" / "workdir-cleanup.mjs",
+            PROTOTYPE_SCRIPT,
             PACK_SCRIPT,
         ]
         for path in expected:
@@ -178,6 +180,9 @@ console.log(JSON.stringify({{ result, flags: [ok.supported, ok.productSupported,
         self.assertIn("Bot/Call/See/Pal/Learn/Aiforce", payload["prompt_template"])
         self.assertIn("review-jira-req", payload["prompt_template"])
         self.assertIn("review-jira-design", payload["prompt_template"])
+        self.assertIn("detect-prototype.mjs", payload["prompt_template"])
+        self.assertIn("hasPrototype", payload["prompt_template"])
+        self.assertIn("不适用", payload["prompt_template"])
         self.assertIn("pack-deliverables.mjs", payload["prompt_template"])
 
     def test_skill_documents_read_only_and_package_delivery(self):
@@ -203,7 +208,11 @@ console.log(JSON.stringify({{ result, flags: [ok.supported, ok.productSupported,
         self.assertIn("退回补充→需求设计", text)
         self.assertNotIn("退回补充→评审中", text)
         self.assertIn("### 12. 打包交付", text)
-        self.assertIn("### 11. 生成原型设计准入报告（review-jira-design）", text)
+        self.assertIn("### 3.1 原型材料判定（决定是否调用 review-jira-design）", text)
+        self.assertIn("detect-prototype.mjs", text)
+        self.assertIn("hasPrototype", text)
+        self.assertIn("不适用（本单未上传原型）", text)
+        self.assertIn("### 11. 生成原型设计准入报告（仅单子已上传原型时）", text)
         self.assertIn("不采集截图", text)
         self.assertNotIn("capture_prototype_evidence", text)
         self.assertIn("### 13. 收尾：清理本次任务的工作区中间产物", text)
@@ -221,13 +230,52 @@ console.log(JSON.stringify({{ result, flags: [ok.supported, ok.productSupported,
         self.assertNotIn("jira-cli.mjs transition ", text)
         self.assertNotIn("上传评审报告附件", text)
 
-    def test_skill_requires_two_review_skills(self):
-        """预演流程必须依次调用需求评审与原型设计审核。"""
+    def test_skill_requires_design_review_only_with_prototype(self):
+        """预演流程先调用需求评审；设计审核只在单子已上传原型时执行。"""
         text = (MOCK_SKILL_DIR / "SKILL.md").read_text(encoding="utf-8")
 
         self.assertIn("review-jira-req", text)
         self.assertIn("review-jira-design", text)
         self.assertLess(text.index("### 10. 生成需求质量评审报告"), text.index("### 11. 生成原型设计准入报告"))
+        self.assertIn("仅当单子已上传原型材料时", text)
+        self.assertIn("不调用 `review-jira-design`、不生成也不进包设计报告", text)
+        self.assertIn("无原型时跳过设计审核", text)
+
+
+@unittest.skipUnless(NODE, "未安装 node，跳过原型判定测试")
+class PrototypeDetectionTests(unittest.TestCase):
+    """预演版与正式版共用同一套原型判定口径。"""
+
+    def detect(self, files):
+        """在临时目录写入文件后运行判定脚本，返回 JSON 结果。"""
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            for name, content in files.items():
+                target = root / name
+                target.parent.mkdir(parents=True, exist_ok=True)
+                target.write_text(content, encoding="utf-8")
+            result = subprocess.run(
+                [NODE, str(PROTOTYPE_SCRIPT), "--dir", str(root), "--json"],
+                capture_output=True,
+                encoding="utf-8",
+                errors="replace",
+                check=False,
+                timeout=60,
+            )
+        self.assertEqual(result.returncode, 0, result.stderr)
+        return json.loads(result.stdout)
+
+    def test_prd_only_is_not_prototype(self):
+        """只有 PRD 时判定没有原型，预演包不应生成设计报告。"""
+        payload = self.detect({"PRD_DELIVERY.md": "# PRD", "PRD.html": "<html><title>PRD</title></html>"})
+
+        self.assertFalse(payload["hasPrototype"])
+        self.assertEqual(payload["hits"], [])
+
+    def test_image_and_named_html_count_as_prototype(self):
+        """原型图和原型 HTML 都要触发设计审核。"""
+        self.assertTrue(self.detect({"image-2026.png": "x"})["hasPrototype"])
+        self.assertTrue(self.detect({"Prototype.html": "<html></html>"})["hasPrototype"])
 
 
 @unittest.skipUnless(NODE, "未安装 node，跳过打包脚本测试")
@@ -286,6 +334,17 @@ class PackDeliverablesTests(unittest.TestCase):
             self.assertIn("CALL-1941-需求评审报告-宋立志.md", names)
             self.assertIn("需修改", archived.read("CALL-1941-需求评审报告-宋立志.md").decode("utf-8"))
             self.assertIn("(x)", archived.read("CALL-1941-G1预检评论.txt").decode("utf-8"))
+
+    def test_packs_two_files_when_issue_has_no_prototype(self):
+        """单子没有原型时不传 --design，压缩包只含评论草稿与需求评审报告。"""
+        payload = json.loads(self.run_pack("--key", "CALL-1941", "--comment", "comment.txt", "--report", "report.md").stdout)
+
+        self.assertEqual(
+            [entry["name"] for entry in payload["entries"]],
+            ["CALL-1941-G1预检评论.txt", "CALL-1941-需求评审报告-宋立志.md"],
+        )
+        with zipfile.ZipFile(payload["zip"]) as archived:
+            self.assertNotIn("CALL-1941-原型设计准入报告.html", archived.namelist())
 
     def test_zip_marks_filenames_as_utf8(self):
         """中文文件名必须置 UTF-8 标志位，否则 Windows 解压会乱码。"""

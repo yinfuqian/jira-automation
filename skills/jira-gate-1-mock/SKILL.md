@@ -1,13 +1,13 @@
 ---
 name: jira-gate-1-mock
-description: 对 Jira 需求单做 G1 需求准入检查（PRD 准入）的只读预演版。取数范围、判定标准与结论口径和 jira-gate-1 一致，只处理类型为「故事」且产品归属为 Bot / Call / See / Pal / Learn / Aiforce 之一的单子；按 PRD 需求准入 Checklist 逐项判定，用绿勾 (/) / 红叉 (x) 生成评论草稿，再依次调用 review-jira-req 与 review-jira-design 产出需求质量评审报告和 PRD—原型一致性审核报告。全程不写 Jira——不写评论、不回写门禁字段、不上传附件、不流转状态、不实际 @ 人，而是把评论草稿与两份报告打成压缩包供下载。当用户要求“预演 / 演练 / 试跑 G1 准入检查”“检查需求是否达标但先不要在单子上留痕”，或给出 Jira 需求链接并要求做准入检查且不要写评论时使用。
+description: 对 Jira 需求单做 G1 需求准入检查（PRD 准入）的只读预演版。取数范围、判定标准与结论口径和 jira-gate-1 一致，只处理类型为「故事」且产品归属为 Bot / Call / See / Pal / Learn / Aiforce 之一的单子；按 PRD 需求准入 Checklist 逐项判定，用绿勾 (/) / 红叉 (x) 生成评论草稿，调用 review-jira-req 产出需求质量评审报告；仅当单子已上传原型材料时调用 review-jira-design 产出 PRD—原型一致性审核报告，未上传原型则跳过设计审核并记「不适用」。全程不写 Jira——不写评论、不回写门禁字段、不上传附件、不流转状态、不实际 @ 人，而是把评论草稿、需求评审报告（以及有原型时的设计报告）打成压缩包供下载。当用户要求“预演 / 演练 / 试跑 G1 准入检查”“检查需求是否达标但先不要在单子上留痕”，或给出 Jira 需求链接并要求做准入检查且不要写评论时使用。
 metadata:
   short-description: G1 需求准入检查只读预演，结果打包下载
 ---
 
 # Jira G1 需求准入检查（预演版）
 
-用户给一个 Jira 需求链接，你自己打开它，读完描述、附件、依赖、子任务和历史评论，按 PRD 需求准入 Checklist 逐项判定，给出**通过 / 退回补充**结论；再依次跑需求质量评审（`review-jira-req`）与原型设计准入审核（`review-jira-design`），最后把**评论草稿**和**两份报告**打成压缩包交给用户。
+用户给一个 Jira 需求链接，你自己打开它，读完描述、附件、依赖、子任务和历史评论，按 PRD 需求准入 Checklist 逐项判定，给出**通过 / 退回补充**结论；再跑需求质量评审（`review-jira-req`）；**仅当单子已上传原型材料时**再跑原型设计准入审核（`review-jira-design`）。最后把**评论草稿**、**需求评审报告**（以及有原型时的**设计报告**）打成压缩包交给用户。
 
 ## 与 jira-gate-1 的关系
 
@@ -18,7 +18,7 @@ metadata:
 | 结论评论 | 写入需求单评论区 | 只写成评论草稿文件，随压缩包交付 |
 | 门禁字段 | 回写 `G1准入结论` / `G1预检时间` | 不写字段，只在对话里给出「预演值」 |
 | 评审报告 | 上传为需求单附件 | 作为压缩包内的文件交付 |
-| 原型设计准入审核 | 无这一步 | 在需求质量评审之后调用 `review-jira-design`，报告进压缩包 |
+| 原型设计准入审核 | 仅单子已上传原型材料时调用 | 在需求质量评审之后，仅当单子已上传原型材料时调用 `review-jira-design`，报告进压缩包；未上传原型记「不适用」 |
 | 状态流转 | 通过不流转；退回补充 → 「需求设计」 | 不流转，只在草稿与对话摘要里写「建议流转」 |
 | `@` 流转人 | 退回补充时真实 `@` | 不实际 `@`，只在草稿里给出建议对象与登录名文本 |
 | 对 Jira 的权限 | 读 + 写 | **只读** |
@@ -33,10 +33,12 @@ metadata:
 <工作目录>/outputs/<KEY>-G1预检包-<时间戳>.zip
   ├── <KEY>-G1预检评论.txt          # 评论草稿，Jira wiki 标记，可直接粘贴到需求单评论区
   ├── <KEY>-需求评审报告-宋立志.md   # 需求质量评审报告（review-jira-req 产出）
-  └── <KEY>-原型设计准入报告.html     # PRD—原型一致性审核报告（review-jira-design 产出，自包含 HTML）
+  └── <KEY>-原型设计准入报告.html     # 可选：仅在单子已上传原型材料时生成并进包
 ```
 
-另外在对话里给出摘要：单据类型 + 通过/退回补充 + 关键阻断项 + 评审结论（不合格/需修改/合格）+ 设计准入结论（退回补齐/有条件通过/通过/审核未完成）+ 压缩包的绝对路径。
+压缩包固定包含评论草稿与需求评审报告；**只有单子已上传原型材料时**才额外包含原型设计准入报告，未上传原型时压缩包内没有该文件。
+
+另外在对话里给出摘要：单据类型 + 通过/退回补充 + 关键阻断项 + 评审结论（不合格/需修改/合格）+ 设计准入结论（退回补齐/有条件通过/通过/审核未完成；无原型时为「不适用」）+ 压缩包的绝对路径。
 
 **不要在需求单上留任何痕迹**：不写评论、不改字段、不传附件、不流转状态。
 
@@ -75,20 +77,22 @@ metadata:
   node <技能目录>/scripts/jira-cli.mjs get <KEY|URL>
   # 下载附件到工作目录
   node <技能目录>/scripts/jira-cli.mjs attachments <KEY|URL> work/jira-gate/<KEY>/attachments
+  # 判定单子是否上传了原型材料，决定要不要执行 review-jira-design（见 §3.1）
+  node <技能目录>/scripts/detect-prototype.mjs --dir work/jira-gate/<KEY>/attachments --json
   # 建议流转人（只读，仅用于在草稿里写「建议处理人」，不会真的 @）
   node <技能目录>/scripts/jira-cli.mjs flow-owner <KEY|URL>
 
   # --- 先跑 review-jira-req 五步流水线生成报告 md（见 §10）---
   node <技能目录>/scripts/report-conclusion.mjs <报告路径> <KEY>   # → 不合格 / 需修改 / 合格
 
-  # --- 再跑 review-jira-design（读它的 SKILL.md 按步骤执行）---
+  # --- 仅 hasPrototype=true 时再跑 review-jira-design（读它的 SKILL.md 按步骤执行）---
   #     报告落 work/jira-gate/<KEY>/design/<KEY>-原型设计准入报告.html（见 §11）
 
-  # --- 交付：评论草稿与两份报告都就绪后，打成压缩包（见 §12）---
+  # --- 交付：评论草稿与需求评审报告就绪后，打成压缩包；有原型时追加 --design（见 §12）---
   node <技能目录>/scripts/pack-deliverables.mjs --key <KEY> \
     --comment work/jira-gate/<KEY>/comment.txt \
-    --report reports/review-report-<时间戳>.md \
-    --design work/jira-gate/<KEY>/design/<KEY>-原型设计准入报告.html
+    --report reports/review-report-<时间戳>.md
+    # 有原型时再追加：--design work/jira-gate/<KEY>/design/<KEY>-原型设计准入报告.html
   ```
 
   附件解析仍走 Python：`python <技能目录>/scripts/extract.py <附件目录> --out <附件目录>/../attachments.txt`。
@@ -183,13 +187,35 @@ const owner = await j.resolveFlowOwner(issue);          // 只读：拿到建议
 - 解压失败时会输出 `[压缩包解压失败]` 及尝试过的命令与报错，**这种情况必须如实记为“附件无法解析”，不能当成“附件没有内容”，也不要臆测包内内容**。
 - 可选 `--unpack-dir <目录>` 指定解压位置；默认的 `__unpacked` 目录在遍历时会跳过，不会重复解析；同名解压结果自动加 `-2` 后缀，不覆盖上一次结果。
 
+### 3.1 原型材料判定（决定是否调用 review-jira-design）
+
+**只有单子里确实上传了原型材料，才调用 `review-jira-design`。** 附件下载并解压完成后，执行：
+
+```bash
+node <技能目录>/scripts/detect-prototype.mjs --dir work/jira-gate/<KEY>/attachments --json
+```
+
+输出 JSON 的关键字段是 `hasPrototype`、`reason`、`hits`、`ambiguous`。判定口径：
+
+- 文件名或相对路径含 `原型`、`prototype`、`mockup`、`wireframe`、`axure`、`figma`、`蓝湖`、`墨刀`、`交互` 等关键词 → 视为已上传原型。
+- 图片附件（`png/jpg/jpeg/gif/webp/bmp/svg`）且文件名不像 PRD、评审报告、技术方案等文档 → 视为已上传原型图。
+- `html/htm` 附件：路径命中关键词，或正文前 64KB 出现原型关键词 → 视为已上传原型初稿。
+- 未展开的压缩包、无关键词的 HTML → 进入 `ambiguous`，需要先解压，或打开该 HTML 人工确认是不是原型。
+
+处理规则：
+
+- `hasPrototype=true` → 按 §11 正常执行设计审核，并把 HTML 报告加进压缩包。
+- `hasPrototype=false` 且 `ambiguous` 为空 → **跳过 §11**：不调用 `review-jira-design`、不生成也不进包设计报告，对话摘要与 `.skill-result.json` 记「设计准入：不适用（本单未上传原型）」，继续 §12 打包与后续交付。
+- `hasPrototype=false` 但 `ambiguous` 非空 → 必须逐个确认（解压压缩包、打开 HTML 看是不是原型页面）；确认后仍没有原型才可跳过，并在对话摘要里写明判定依据（例如「仅有 PRD.html 与未含原型的压缩包」）。不得因为「懒得看」直接判为无原型。
+- 判定结论要写进任务记录与对话摘要，便于追溯为什么没执行设计审核。
+
 ### 4. 取数：通道 B —— 应用内浏览器（无令牌时兜底）
 
 没有配置令牌时，用已登录的应用内浏览器打开需求单：
 
 1. `cua.createBrowserTab("iab", issueUrl)` 打开单子。
 2. 用 `tab.playwright.evaluate(() => document.body.innerText)` 取正文，可拿到概要与描述、附件列表、问题链接、子任务、评论；**同时确认页面上的「类型」字段是「故事」、「产品归属」属于 Bot/Call/See/Pal/Learn/Aiforce 之一**，任一项不满足就立即停止。
-3. 附件：点击附件链接触发下载，再对下载目录跑 `extract.py`（压缩包会自动解压，见上一节）。
+3. 附件：点击附件链接触发下载，再对下载目录跑 `extract.py`（压缩包会自动解压，见上一节）；随后用 `detect-prototype.mjs --dir <附件目录>` 判定是否上传了原型，决定要不要执行 §11。
 4. 预演版**不要在页面评论区输入或提交任何内容**；评论只落本地草稿文件。
 
 注意：Jira 的 `/rest/...` 地址在浏览器里会被拦截（`ERR_BLOCKED_BY_CLIENT`），**不要在浏览器里访问 REST 地址**；浏览器只用于读页面。通道 B 的结论必须注明“基于页面内容检查”。
@@ -305,9 +331,11 @@ node <技能目录>/scripts/report-conclusion.mjs "reports/review-report-<时间
 - 报告 md 是压缩包里的交付物之一：不要贴进评论草稿、不要省略它。
 - 报告只留在本地不算完成——必须真正进到 §12 的压缩包里。
 
-### 11. 生成原型设计准入报告（review-jira-design）
+### 11. 生成原型设计准入报告（仅单子已上传原型时）
 
-需求质量评审（§10）跑完之后，再调用同仓库的 `review-jira-design`：对照定稿 PRD 审核产品原型初稿，检查需求完整性、PRD—原型一致性、流程与状态覆盖。它的产物是自包含 HTML 报告，**同样作为压缩包内的文件交付**。
+需求质量评审（§10）跑完之后，先按 §3.1 的判定结果决定要不要执行本节：**只有 `hasPrototype=true` 时**才调用同仓库的 `review-jira-design`，对照定稿 PRD 审核产品原型初稿，检查需求完整性、PRD—原型一致性、流程与状态覆盖。它的产物是自包含 HTML 报告，**同样作为压缩包内的文件交付**。
+
+`hasPrototype=false` 且 `ambiguous` 为空时，**整节跳过**：不调用 `review-jira-design`、不生成设计报告、不向压缩包传 `--design`，设计准入结论记「不适用（本单未上传原型）」。
 
 **技能位置**：容器内固定为 `/data/skills/review-jira-design`（桌面端为 `<仓库>/skills/review-jira-design`）。先完整读它的 `SKILL.md`，严格按它的步骤、检查项与结论口径执行；它**对 Jira 只读、不发起任何网络写请求**，不要改动它的脚本与报告模板。
 
@@ -315,7 +343,8 @@ node <技能目录>/scripts/report-conclusion.mjs "reports/review-report-<时间
 
 - **定稿 PRD**：§3 已下载的附件里版本唯一可定位的那份（如 `PRD_DELIVERY.md` 或解压后的 `附件.rar/xxx_PRD_DELIVERY.md`）。存在多个候选时按需求单描述锁定用户指定的唯一对象，**不要按文件名相似度自行挑选**。
 - **产品原型初稿**：附件里的业务 HTML（如 `Prototype.html`）及其必要资源；有多个原型时以需求单描述指定的入口为准。
-- 两者都缺失或无法定位时，不要跳过本步骤、也不要自造一个「通过」。照常生成报告，结论写「审核未完成」并写明缺什么（文件缺失 / 无法打开 / 对象无法唯一定位）——原型缺失本身对 G1 就是有用信息，落到检查项清单的原型相关行即可。
+- PRD 缺失或无法定位、原型文件存在但无法打开时，不要跳过本步骤、也不要自造一个「通过」。照常生成报告，结论写「审核未完成」并写明缺什么（文件缺失 / 无法打开 / 对象无法唯一定位）。
+- 如果复核后发现原型材料实际为空，回到 §3.1 按「不适用」处理，不要为了凑报告强行生成「审核未完成」。
 
 **证据口径**：本版本**不采集截图**，只依据 PRD 原文、原型源码与页面结构核对；未实际运行、内网资源不可达或无法判断的内容标记为「未验证」，**不要伪造截图或运行证据，也不要安装浏览器**。
 
@@ -325,13 +354,13 @@ node <技能目录>/scripts/report-conclusion.mjs "reports/review-report-<时间
 
 ### 12. 打包交付
 
-评论草稿、评审报告与原型设计准入报告都就绪后，用本技能自带的打包脚本生成压缩包（自研 ZIP 实现，容器与 Windows 桌面端都不依赖系统 `zip` 命令）：
+评论草稿与评审报告就绪后，用本技能自带的打包脚本生成压缩包（自研 ZIP 实现，容器与 Windows 桌面端都不依赖系统 `zip` 命令）。**只有 `hasPrototype=true` 并生成了设计报告时**，才追加 `--design`：
 
 ```bash
 node <技能目录>/scripts/pack-deliverables.mjs --key <KEY> \
   --comment work/jira-gate/<KEY>/comment.txt \
-  --report "reports/review-report-<时间戳>.md" \
-  --design "work/jira-gate/<KEY>/design/<KEY>-原型设计准入报告.html"
+  --report "reports/review-report-<时间戳>.md"
+  # 有原型时再追加：--design "work/jira-gate/<KEY>/design/<KEY>-原型设计准入报告.html"
 ```
 
 输出 JSON（`ok` / `zip` / `zipBytes` / `entries` / `warnings`）：
@@ -344,20 +373,20 @@ node <技能目录>/scripts/pack-deliverables.mjs --key <KEY> \
   "zipBytes": 905,
   "entries": [
     { "name": "CALL-1941-G1预检评论.txt", "bytes": 666 },
-    { "name": "CALL-1941-需求评审报告-宋立志.md", "bytes": 63 },
-    { "name": "CALL-1941-原型设计准入报告.html", "bytes": 284517 }
+    { "name": "CALL-1941-需求评审报告-宋立志.md", "bytes": 63 }
   ],
   "warnings": []
 }
 ```
 
+- 无原型时 `entries` 只有评论草稿与需求评审报告两项；有原型时才会多出 `<KEY>-原型设计准入报告.html`。
 - 默认输出目录是 `<工作目录>/outputs/`；可用 `--out` 改到别处，用 `--zip-name` 指定压缩包名。
-- `--design` 指定 §11 的设计准入报告，进包后固定命名为 `<KEY>-原型设计准入报告.html`；该参数可选，但流程上必须提供（确实没有原型时，报告的结论是「审核未完成」，仍要进包说明这一点）。
+- `--design` 指定 §11 的设计准入报告，进包后固定命名为 `<KEY>-原型设计准入报告.html`；**仅在单子已上传原型、确实生成了报告时传入**。无原型时不要传空路径或占位文件。
 - 可用 `--extra <文件>` 追加附加文件（可重复），例如取数摘要 `issue.md`；正常流程不需要。
 - `warnings` 是交付件的格式提醒：评论草稿的 Markdown 残留、缺检查项标记、缺「报告附件」行，以及设计报告里未替换的 `{{...}}` 模板占位符、缺少结论区块等。**非空时回到 §7、§8 或 §11 修好再重新打包**，不要把半成品交出去。
 - **打包后必须读回确认**：确认 JSON 里 `ok` 为 `true`、`zipBytes` 大于 0，并用 shell 列出 `outputs/` 里的压缩包（如 `Get-ChildItem outputs` 或 `ls -l outputs`）核对文件名与体积。只有读回确认到了，才能在对话里说“已生成压缩包”。
 - 打包失败时脚本用**退出码 1** 和 `[打包失败] ...` 输出告警（常见原因：草稿或报告路径写错、单号格式非法）。如实报告原因，不要重试同一个不存在的路径。
-- 顺序固定为：**生成需求质量评审报告 → 回填评审结论到评论草稿 → 生成原型设计准入报告 → 打包 → 清理（§13）**。
+- 顺序固定为：**生成需求质量评审报告 → 回填评审结论到评论草稿 → （有原型时）生成原型设计准入报告 → 打包 → 清理（§13）**。
 
 ### 写机器可读结果（清理前必做）
 
@@ -375,10 +404,10 @@ node <技能目录>/scripts/pack-deliverables.mjs --key <KEY> \
 ```
 
 - `conclusion` 只能写最终业务结论：`通过` 或 `退回补充`；类型不是「故事」或产品归属不在清单内而提前结束时写 `不适用`。
-- `summary` 写清预演结论、设计准入结论与压缩包文件名，不超过 500 字；`blockingCount` 是最终阻断项数量（没有阻断项写 `0`）。
+- `summary` 写清预演结论、设计准入结论（有原型时写审核结论，无原型写「不适用：本单未上传原型」）与压缩包文件名，不超过 500 字；`blockingCount` 是最终阻断项数量（没有阻断项写 `0`）。
 - 打包失败等运营性失败不要伪造「通过」；无法形成业务结论时可以不写该文件。
 - 该文件只用于调用统计，不是交付物，也不放进压缩包；平台读取入库后会自动删除，不要放进 `work/jira-gate/<KEY>/` 或 `outputs/`。
-- 调用 `review-jira-req`、`review-jira-design` 时，必须在子任务指令里明确「不要写任务根目录 `.skill-result.json`」，避免把子技能误计为独立调用。
+- 调用 `review-jira-req`、`review-jira-design`（仅 `hasPrototype=true` 时）时，必须在子任务指令里明确「不要写任务根目录 `.skill-result.json`」，避免把子技能误计为独立调用。
 
 ### 13. 收尾：清理本次任务的工作区中间产物
 
@@ -522,7 +551,7 @@ h4. SHOULD（不阻断 G1，记录取舍）
 - 不因工作量或复杂度而放宽 `MUST` 与 `CONDITIONAL`。
 - **不写 Jira**：不写评论、不回写门禁字段、不上传附件、不流转状态、不指派经办人、不实际 `@` 人。
 - 不在需求单里留任何草稿或占位评论（草稿只落本地文件）。
-- 不生成额外的报告类文档作为交付物：交付物只有 §12 的压缩包（评论草稿 + 需求评审报告 + 原型设计准入报告）。
+- 不生成额外的报告类文档作为交付物：交付物只有 §12 的压缩包（评论草稿 + 需求评审报告；有原型时再加原型设计准入报告）。
 
 ## 令牌配置
 
@@ -541,8 +570,8 @@ h4. SHOULD（不阻断 G1，记录取舍）
 - **只处理类型为「故事」且产品归属属于 Bot/Call/See/Pal/Learn/Aiforce 之一的单子**；任一项不符时立即停止，不生成任何交付物，也不调用 `review-jira-req` / `review-jira-design`。
 - **对 Jira 严格只读**：不写评论、不写字段、不上传附件、不流转状态、不指派经办人、不实际 `@` 人。脚本层已不提供写入口，不要绕过或新增写能力。
 - 判定标准必须是 [references/checklist.md](references/checklist.md) 的 PRD 需求准入 Checklist：8 项 `MUST` + 命中的 `CONDITIONAL`；不使用任何旧版清单或自创标准。
-- 交付物只有 §12 的压缩包（评论草稿 + 需求评审报告 + 原型设计准入报告）；对话里给出摘要与压缩包绝对路径。
-- **必须依次调用 `review-jira-req` 与 `review-jira-design`**：两份报告都要真进压缩包；原型缺失或无法读取时，设计报告按「审核未完成」交付，不要跳过这一步、也不要自造结论。
+- 交付物只有 §12 的压缩包（评论草稿 + 需求评审报告；有原型时再加原型设计准入报告）；对话里给出摘要与压缩包绝对路径。
+- **必须先调用 `review-jira-req`；`review-jira-design` 只在单子已上传原型材料时调用**：有原型时两份报告都要真进压缩包；无原型时跳过设计审核，压缩包内没有设计报告，记「不适用」，不要生成「审核未完成」的占位报告。
 - 不编造需求未写明的内容，不把推测写成已确认事实。
 - 不把单据字段缺失、测试数据未准备、纯技术细节当作不达标理由。
 - 评论草稿必须用 Jira wiki 标记，且带「（预演）」字样，避免被误当成正式评论。

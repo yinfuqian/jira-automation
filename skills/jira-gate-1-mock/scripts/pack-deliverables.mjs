@@ -10,7 +10,7 @@
  * 交付物因此改为一个压缩包，内含：
  *   1. <KEY>-G1预检评论.txt          评论草稿（Jira wiki 标记，可直接粘贴到需求单评论区）
  *   2. <KEY>-需求评审报告-宋立志.md   评审报告（与 jira-gate-1 上传附件时使用的规范文件名一致）
- *   3. <KEY>-原型设计准入报告.html    PRD 与原型一致性审核报告（--design 指定来源，见 SKILL.md §11）
+ *   3. <KEY>-原型设计准入报告.html    可选：仅单子已上传原型时生成（--design 指定来源，见 SKILL.md §11）
  *   4. --extra 指定的附加文件（可选，保持原文件名）
  *
  * 输出：默认写到 <工作目录>/outputs/<KEY>-G1预检包-<时间戳>.zip，并在 stdout 打印 JSON 结果。
@@ -228,8 +228,8 @@ function pack(options) {
 
   const comment = readRequiredFile(options.comment, "评论草稿");
   const report = readRequiredFile(options.report, "评审报告");
-  // 设计准入报告是流程必需项（SKILL.md §11），但参数层保持可选：
-  // 该需求确实没有原型时，报告会以「审核未完成」结论交付，仍应进包。
+  // 设计准入报告是条件交付项（SKILL.md §3.1 / §11）：
+  // 只有单子已上传原型材料时才生成并进包；没有原型时不要传 --design。
   const design = options.design ? readRequiredFile(options.design, "原型设计准入报告") : null;
   const extras = [];
   for (const item of [].concat(options.extra || [])) {

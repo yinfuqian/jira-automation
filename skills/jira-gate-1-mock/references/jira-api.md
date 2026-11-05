@@ -2,7 +2,7 @@
 
 面向 `jira-gate-1-mock` skill 的实现说明。站点为 Jira 10.3.9 Server / Data Center（生产站点名"Jira-追一研发管理系统"）。
 
-**本技能对 Jira 只读**：本文档只保留取数、格式与排查相关内容；写评论、回写门禁字段、上传附件与状态流转的实操见 `jira-gate-1` 的 `references/jira-api.md`。本技能只处理类型为「故事」且产品归属属于 `Bot` / `Call` / `See` / `Pal` / `Learn` / `Aiforce` 之一的单子（口径与 `jira-gate-1` 一致，产品字段按 `产品归属` → `问题发现产品` → `发现产品` 依次匹配），交付物是压缩包（评论草稿 + 需求评审报告 + 原型设计准入报告），不在 Jira 上留痕。
+**本技能对 Jira 只读**：本文档只保留取数、格式与排查相关内容；写评论、回写门禁字段、上传附件与状态流转的实操见 `jira-gate-1` 的 `references/jira-api.md`。本技能只处理类型为「故事」且产品归属属于 `Bot` / `Call` / `See` / `Pal` / `Learn` / `Aiforce` 之一的单子（口径与 `jira-gate-1` 一致，产品字段按 `产品归属` → `问题发现产品` → `发现产品` 依次匹配），交付物是压缩包（评论草稿 + 需求评审报告；仅当单子已上传原型材料时再包含原型设计准入报告），不在 Jira 上留痕。
 
 **基础地址不要写死**，`jira.mjs` 按以下优先级解析 `baseUrl`：
 
@@ -141,6 +141,7 @@ Jira 错误响应形如 `{"errorMessages":["..."],"errors":{...}}`，`jira.mjs` 
 | 打包输出里 `warnings` 非空 | 评论草稿残留 Markdown 语法或缺检查项标记，或设计报告里还有 `{{...}}` 占位符；按 `SKILL.md` §7、§8、§11 修好再重新打包 |
 | 报告里出现 `{{需求名称}}` 之类的原文 | `review-jira-design` 的模板占位符没替换完；回到它的 `SKILL.md` §7 重新生成，不要手工改模板 |
 | `review-jira-design` 报告脚本报错 | 按它的 `SKILL.md` 核对 `--prd` / `--content` / `--out` 参数与内容 JSON 字段；该版本不采集截图，**不要安装浏览器、不要伪造截图** |
+| 单子没有原型却生成了设计报告 | 必须先跑 `scripts/detect-prototype.mjs --dir <附件目录> --json`；`hasPrototype=false` 且 `ambiguous` 为空时跳过 `review-jira-design`，不要生成「审核未完成」的占位报告，也不要把 `--design` 传给打包脚本 |
 | 设计报告缺失或落在技能目录里 | 报告必须写到 `<工作目录>/work/jira-gate/<KEY>/design/`（技能目录是只读挂载）；按 `SKILL.md` §11 的路径重跑 |
 | 压缩包里的中文文件名乱码 | 解压工具过旧；`pack-deliverables.mjs` 已置 UTF-8 标志位，建议用系统资源管理器或 `Expand-Archive` / `bsdtar` 解压 |
 | 单子上看不到评论/附件（预期如此） | 本技能不写 Jira：评论只在压缩包内的 `comment.txt`，报告只在压缩包内；要留痕请改用 `jira-gate-1` |

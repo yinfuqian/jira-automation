@@ -12,6 +12,7 @@ SKILL_DIR = PROJECT_ROOT / "skills" / "jira-gate-1"
 SKILL_PATH = SKILL_DIR / "SKILL.md"
 JIRA_SCRIPT_PATH = SKILL_DIR / "scripts" / "jira.mjs"
 CLI_PATH = SKILL_DIR / "scripts" / "jira-cli.mjs"
+PROTOTYPE_SCRIPT_PATH = SKILL_DIR / "scripts" / "detect-prototype.mjs"
 API_DOC_PATH = SKILL_DIR / "references" / "jira-api.md"
 CLEANUP_SCRIPT_PATH = SKILL_DIR / "scripts" / "workdir-cleanup.mjs"
 NODE = shutil.which("node")
@@ -64,7 +65,7 @@ class SkillJiraGateFlowTests(unittest.TestCase):
         self.assertIn("candidates", payload["prompt_template"])
         self.assertIn("REUSED", payload["prompt_template"])
         self.assertIn("--coverage-required", payload["prompt_template"])
-        self.assertIn("调用顺序固定为 review-jira-req → review-jira-design → review-jira-qa", payload["prompt_template"])
+        self.assertIn("调用顺序固定为 review-jira-req → review-jira-design（仅单子已上传原型时）→ review-jira-qa", payload["prompt_template"])
         self.assertIn("build-report.mjs", payload["prompt_template"])
         self.assertIn("只执行阶段一", payload["prompt_template"])
         self.assertIn("ok=false", payload["prompt_template"])
@@ -151,15 +152,34 @@ class SkillJiraGateFlowTests(unittest.TestCase):
         self.assertLess(req_pos, design_pos)
         self.assertLess(design_pos, qa_pos)
         self.assertIn("review-jira-design", payload["prompt_template"])
+        # 没有上传原型时必须跳过设计审核，不能把「缺原型」当业务阻断。
+        self.assertIn("detect-prototype.mjs", text)
+        self.assertIn("hasPrototype=true", text)
+        self.assertIn("不适用（本单未上传原型）", text)
+        self.assertIn("仅当单子已上传原型材料时", text)
+        self.assertIn("detect-prototype.mjs", payload["prompt_template"])
+        self.assertIn("hasPrototype=false", payload["prompt_template"])
+
+    def test_design_review_is_skipped_without_prototype(self):
+        """SKILL.md 必须写明无原型时跳过 review-jira-design，且不影响 QA 与后续交付。"""
+        text = SKILL_PATH.read_text(encoding="utf-8")
+
+        self.assertIn("### 3.1 原型材料判定（决定是否调用 review-jira-design）", text)
+        self.assertIn("`hasPrototype=false` 且 `ambiguous` 为空 → **跳过 §11.1**", text)
+        self.assertIn("不调用 `review-jira-design`", text)
+        self.assertIn("继续 §11.2", text)
+        self.assertIn("不适用（本单未上传原型）", text)
+        # 无原型时不能生成/上传设计报告，也不能算设计业务不通过。
+        self.assertIn("未上传原型记「不适用」不参与判定", text)
 
     def test_delivery_order_runs_three_review_skills_before_comment(self):
         """三个评审技能必须在 G1 评论前完成，QA 评论/HTML 由 QA 技能自身交付。"""
         text = SKILL_PATH.read_text(encoding="utf-8")
 
-        self.assertIn("review-jira-req` 五步流水线 → `review-jira-design` 原型设计准入 → `review-jira-qa` 阶段一", text)
+        self.assertIn("review-jira-req` 五步流水线 → `review-jira-design` 原型设计准入（仅单子已上传原型时）→ `review-jira-qa` 阶段一", text)
         self.assertIn("QA 自己的评论和 HTML 上传由 `review-jira-qa` 在其阶段一内完成", text)
         self.assertIn("不要把 QA 的 HTML 再上传一次", text)
-        self.assertIn("上传需求评审报告与设计准入报告", text)
+        self.assertIn("上传需求评审报告与已生成的设计准入报告附件", text)
 
     def test_child_skill_failures_never_interrupt_g1(self):
         """三个子技能的任何失败都只能记为「未完成」，不得中断 G1 后续交付。"""
@@ -327,6 +347,66 @@ class WorkdirCleanupTests(unittest.TestCase):
 
         self.assertIn("key-missing", result.stderr)
         self.assertTrue(self.target.exists())
+
+
+@unittest.skipUnless(NODE, "未安装 node，跳过原型材料判定测试")
+class PrototypeDetectionTests(unittest.TestCase):
+    """原型材料判定要能区分 PRD、原型图、原型 HTML 与未展开压缩包。"""
+
+    def detect(self, files):
+        """在临时目录里写入给定文件（支持子目录），返回脚本输出的 JSON。"""
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            for name, content in files.items():
+                target = root / name
+                target.parent.mkdir(parents=True, exist_ok=True)
+                target.write_text(content, encoding="utf-8")
+            result = subprocess.run(
+                [NODE, str(PROTOTYPE_SCRIPT_PATH), "--dir", str(root), "--json"],
+                capture_output=True,
+                encoding="utf-8",
+                errors="replace",
+                check=False,
+                timeout=60,
+            )
+        self.assertEqual(result.returncode, 0, result.stderr)
+        return json.loads(result.stdout)
+
+    def test_prd_only_is_not_prototype(self):
+        """只有 PRD（md/html）时判定为没有原型，不触发设计审核。"""
+        payload = self.detect({
+            "PRD_DELIVERY.md": "# PRD",
+            "PRD.html": "<html><title>PRD 需求说明</title></html>",
+        })
+
+        self.assertFalse(payload["hasPrototype"])
+        self.assertEqual(payload["hits"], [])
+
+    def test_image_counts_as_prototype(self):
+        """原型截图通常以图片附件上传，必须识别为原型材料。"""
+        payload = self.detect({"image-2026.png": "x"})
+
+        self.assertTrue(payload["hasPrototype"])
+        self.assertEqual(payload["hits"][0]["kind"], "image")
+
+    def test_html_keyword_in_name_or_content(self):
+        """原型 HTML 可能靠文件名或正文关键词识别（含解压后的子目录）。"""
+        by_name = self.detect({"Prototype.html": "<html></html>"})
+        by_content = self.detect({"page.html": "<html><title>交互原型</title></html>"})
+        by_nested_path = self.detect({"__unpacked/附件/原型/index.html": "<html></html>"})
+
+        for payload in (by_name, by_content, by_nested_path):
+            self.assertTrue(payload["hasPrototype"], payload)
+
+    def test_unlabeled_html_and_archive_need_manual_check(self):
+        """无关键词的 HTML 与未展开压缩包不能算命中，但要进入 ambiguous 提醒确认。"""
+        payload = self.detect({
+            "PRD.html": "<html><title>PRD</title></html>",
+            "bundle.zip": "x",
+        })
+
+        self.assertFalse(payload["hasPrototype"])
+        self.assertEqual([item["kind"] for item in payload["ambiguous"]], ["archive"])
 
 
 if __name__ == "__main__":
