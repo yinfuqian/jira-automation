@@ -11,7 +11,7 @@
  *
  * 用法：
  *   node scripts/jira-cli.mjs selftest                       # 令牌与连通性自检
- *   node scripts/jira-cli.mjs precheck <KEY|URL>             # 单据类型预检（只处理「故事」）
+ *   node scripts/jira-cli.mjs precheck <KEY|URL>             # 类型 + 产品归属预检（只处理「故事」且产品为 Bot/Call/See/Pal/Learn/Aiforce）
  *   node scripts/jira-cli.mjs get <KEY|URL>                  # 输出紧凑 Markdown 摘要
  *   node scripts/jira-cli.mjs json <KEY|URL>                 # 输出规范化 JSON
  *   node scripts/jira-cli.mjs attachments <KEY|URL> <目录>    # 下载附件
@@ -37,7 +37,7 @@ const TOKEN_FILE_NAMES = [".jira-token", ".jira-token.txt", "jira-token.txt"];
 
 const USAGE = `用法（只读预演版，不提供任何写 Jira 的命令）：
   node scripts/jira-cli.mjs selftest
-  node scripts/jira-cli.mjs precheck <KEY|URL>
+  node scripts/jira-cli.mjs precheck <KEY|URL>   # 类型=故事 且 产品归属属于 Bot/Call/See/Pal/Learn/Aiforce
   node scripts/jira-cli.mjs get <KEY|URL>
   node scripts/jira-cli.mjs json <KEY|URL>
   node scripts/jira-cli.mjs attachments <KEY|URL> <目录>
@@ -168,7 +168,7 @@ async function main() {
     }
     case "precheck": {
       requireArgs(positional, 1, "precheck <KEY|URL>");
-      // 只读类型预检：类型不是「故事」时由调用方立即停止，不产生任何 Jira 写操作。
+      // 只读门禁预检：类型不是「故事」或产品归属不在清单内时，由调用方立即停止，不产生任何 Jira 写操作。
       console.log(JSON.stringify(await jira.precheckIssueType(positional[0], callOptions), null, 2));
       return;
     }

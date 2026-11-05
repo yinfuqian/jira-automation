@@ -55,6 +55,8 @@ prepare.mjs --key <KEY> --stage 3
         ↓
 READY / BLOCKED / SKIPPED / ERROR
         ↓ READY
+（SKIPPED 且 errorCode=PRODUCT_NOT_SUPPORTED：产品归属不在 Bot/Call/See/Pal/Learn/Aiforce 内，直接结束）
+        ↓
 读 stage3-cases.md 刷新最终方案
         ↓
 extract-cases → cases.json

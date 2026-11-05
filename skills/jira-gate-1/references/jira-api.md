@@ -140,11 +140,11 @@ nodeRepl.write(last.id + " | " + last.author + " | " + last.body.slice(0, 120));
 - 结论「通过」：**不流转状态**，保持当前状态，允许进入技术方案设计；不 @ 人。
 - 结论「退回补充」：流转到 **需求设计**，并在评论里 @ 流转人。
 
-**先做类型预检**：只有问题类型为「故事」（英文站点 `Story` 视为同一类型）才执行本技能；类型不符时直接停止，不做任何写操作。命令行入口：
+**先做类型与产品归属预检**：只有问题类型为「故事」（英文站点 `Story` 视为同一类型），且产品归属（`产品归属`，旧单兼容 `问题发现产品` / `发现产品`）属于 `Bot`、`Call`、`See`、`Pal`、`Learn`、`Aiforce` 之一时才执行本技能；任一项不符时直接停止，不做任何写操作。命令行入口：
 
 ```bash
 node scripts/jira-cli.mjs precheck <KEY|URL>
-# {"ok":true,"key":"...","issueType":"故事","expected":"故事","supported":true,"status":"需求设计"}
+# {"ok":true,"key":"...","issueType":"故事","typeSupported":true,"product":"Call","productSupported":true,"supported":true,"status":"需求设计"}
 ```
 
 1. **流转人从哪来**：本站在 `/rest/api/2/field` 里没有名为「流转人」的字段（实测名字含「流转」的字段为 0 个），因此本技能已确认的口径是**取经办人 `assignee`**；仅在经办人为空时才按 `assignee → reporter → creator` 回退，回退取到时对话摘要里要写明实际来源（`resolveFlowOwner()` 返回的 `source` 字段会标明）。需要长期换口径时在技能目录的 `jira-config.json`（即仓库 `skills/jira-gate-1/jira-config.json`，随技能目录挂载进容器）里用 `flowOwnerField` 指定人员字段名，**不要改脚本**。

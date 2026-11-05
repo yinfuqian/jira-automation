@@ -1,6 +1,6 @@
 ---
 name: jira-qa-2
-description: 只执行 QA 阶段二的独立技能。读取 Jira 最新需求材料与阶段一需求准入门禁结论，生成测试方案与测试点 XMind，上传 Jira 并写结果评论，等待人工复核；最后把方案、XMind 与评论草稿打成 zip 供接口下载。
+description: 只执行 QA 阶段二的独立技能。读取 Jira 最新需求材料与阶段一需求准入门禁结论，生成测试方案与测试点 XMind，上传 Jira 并写结果评论，等待人工复核；最后把方案、XMind 与评论草稿打成 zip 供接口下载。只处理产品归属为 Bot / Call / See / Pal / Learn / Aiforce 之一的单子。
 ---
 
 # QA 阶段二（jira-qa-2）
@@ -13,6 +13,10 @@ description: 只执行 QA 阶段二的独立技能。读取 Jira 最新需求材
 
 - **只执行阶段二：测试方案与测试点 XMind。** 不执行阶段一需求准入门禁，
   也不执行阶段三 Excel/Xray CSV 用例生成。
+- **产品归属门禁**：只处理「产品归属」（旧单兼容「问题发现产品」/「发现产品」）为
+  `Bot`、`Call`、`See`、`Pal`、`Learn`、`Aiforce` 之一的单子（大小写不敏感，多值命中一个即可）。
+  字段缺失或不在清单内时 `prepare` 返回 `SKIPPED` / `errorCode=PRODUCT_NOT_SUPPORTED`，
+  不生成任何产物、不上传、不写评论。
 - 阶段一由 `review-jira-qa` 负责；本技能只把门禁结论当作准入输入读取，
   不重新判定、不修改门禁清单、不修改 QA 评论。
 - 阶段三由 `jira-qa-3` 负责；本技能**不生成 Excel、Xray CSV 或测试代码**。
@@ -47,7 +51,8 @@ node "$CLAUDE_SKILL_DIR/bin/prepare.mjs" --key <KEY> --stage 2
 - `REUSED`：材料未变化且上一版方案与 XMind 仍在 Jira，直接结束，不生成、不上传、不写评论。
 - `BLOCKED`：门禁未通过、已过期或找不到门禁结论。按第 4 步只发一条
   `QA-测试方案不满足执行条件` 评论后结束，不生成方案；`reason` 是原因。
-- `SKIPPED`：没有可用主需求材料，`prepare` 已写过说明评论，报告 `reason` 后结束。
+- `SKIPPED`：没有可用主需求材料，或产品归属不在 Bot/Call/See/Pal/Learn/Aiforce 内
+  （`errorCode=PRODUCT_NOT_SUPPORTED`，零写入）；报告 `reason` 后结束。
 - `status=ERROR` / `ok=false`：执行异常，停止本技能剩余步骤并记录原因。
 
 需要强制重出方案时加 `--force`。

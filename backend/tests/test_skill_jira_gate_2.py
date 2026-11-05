@@ -72,12 +72,13 @@ class Gate2DefinitionTests(unittest.TestCase):
         """类型门禁与 jira-gate-1 同口径：非「故事」时连 PDCA 判定与报告都不执行。"""
         text = (GATE2_DIR / "SKILL.md").read_text(encoding="utf-8")
 
-        self.assertIn("类型门禁先于全部判定与写操作", text)
+        self.assertIn("类型与产品门禁先于全部判定与写操作", text)
         self.assertIn("口径与 `jira-gate-1` 完全一致", text)
+        self.assertIn("Bot/Call/See/Pal/Learn/Aiforce", text)
         self.assertIn("不执行 G2 Checklist 判定，也不执行 PDCA RD 检查", text)
         self.assertIn("不生成 PDCA 报告、不上传附件", text)
         self.assertIn("`conclusion` 写为 `不适用`", text)
-        self.assertIn("前置条件：§1 类型预检必须已通过", text)
+        self.assertIn("前置条件：§1 类型与产品归属预检必须已通过", text)
         self.assertIn("不执行 G2 与 PDCA 判定、不生成或上传 PDCA 报告", text)
 
     def test_supported_issue_types_match_gate1(self):
@@ -199,7 +200,7 @@ class Gate2DefinitionTests(unittest.TestCase):
 
 @unittest.skipUnless(NODE, "未安装 node，跳过类型预检脚本测试")
 class IssueTypePrecheckTests(unittest.TestCase):
-    """类型门禁是确定性的：只有「故事」/ Story 放行。"""
+    """门禁是确定性的：类型必须是「故事」/ Story，且产品归属命中六个产品之一。"""
 
     def run_node(self, script: str) -> subprocess.CompletedProcess:
         return subprocess.run(
@@ -241,6 +242,50 @@ console.log(JSON.stringify([m.isSupportedIssueType("故事"), m.isSupportedIssue
             source = (skill_dir / "scripts" / "jira-cli.mjs").read_text(encoding="utf-8")
             self.assertIn('case "precheck"', source)
             self.assertIn("precheck <KEY|URL>", source)
+
+    def test_supported_products_match_requirement(self):
+        """产品清单固定为 Bot/Call/See/Pal/Learn/Aiforce，大小写与多值都要兼容。"""
+        jira_url = (GATE2_DIR / "scripts" / "jira.mjs").as_uri()
+        script = (
+            'const m = await import("%s");\n'
+            'const pick = (raw) => { const p = m.resolveProduct({ customFields: raw }); '
+            'return [p.value, m.isSupportedProduct(p.products)]; };\n'
+            'const cases = [\n'
+            '  { "产品归属": "Call" },\n'
+            '  { "产品归属": "bot、See" },\n'
+            '  { "问题发现产品": "Aiforce" },\n'
+            '  { "产品归属": "Eco" },\n'
+            '  {},\n'
+            '];\n'
+            'console.log(JSON.stringify({ products: m.SUPPORTED_PRODUCTS, cases: cases.map(pick) }));\n'
+        ) % jira_url
+        result = self.run_node(script)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        payload = json.loads(result.stdout)
+        self.assertEqual(payload["products"], ["Bot", "Call", "See", "Pal", "Learn", "Aiforce"])
+        self.assertEqual(
+            payload["cases"],
+            [["Call", True], ["bot、See", True], ["Aiforce", True], ["Eco", False], ["", False]],
+        )
+
+    def test_precheck_combines_type_and_product(self):
+        """supported 必须同时满足类型与产品；productField 要能说明取值来源。"""
+        for skill_dir in (GATE1_DIR, GATE2_DIR):
+            jira_url = (skill_dir / "scripts" / "jira.mjs").as_uri()
+            script = (
+                'const m = await import("%s");\n'
+                'const run = (issue) => m.precheckIssueType("X-1", { issue });\n'
+                'const ok = await run({ key: "X-1", issueType: "故事", status: "需求设计", summary: "s", customFields: { "产品归属": "Call" } });\n'
+                'const badType = await run({ key: "X-2", issueType: "任务", status: "", summary: "", customFields: { "产品归属": "Call" } });\n'
+                'const badProduct = await run({ key: "X-3", issueType: "故事", status: "", summary: "", customFields: { "产品归属": "Eco" } });\n'
+                'console.log(JSON.stringify([ok, badType, badProduct].map((r) => [r.typeSupported, r.productSupported, r.supported, r.productField])));\n'
+            ) % jira_url
+            result = self.run_node(script)
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertEqual(
+                json.loads(result.stdout),
+                [[True, True, True, "产品归属"], [False, True, False, "产品归属"], [True, False, False, "产品归属"]],
+            )
 
 
 if __name__ == "__main__":

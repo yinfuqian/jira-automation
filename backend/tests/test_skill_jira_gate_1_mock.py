@@ -101,7 +101,10 @@ class MockSkillReadOnlyTests(unittest.TestCase):
         source = (MOCK_SKILL_DIR / "scripts" / "jira.mjs").read_text(encoding="utf-8")
 
         self.assertIn('const SUPPORTED_ISSUE_TYPES = ["故事", "Story"]', source)
+        self.assertIn('export const SUPPORTED_PRODUCTS = ["Bot", "Call", "See", "Pal", "Learn", "Aiforce"]', source)
         self.assertIn("export function isSupportedIssueType", source)
+        self.assertIn("export function resolveProduct", source)
+        self.assertIn("export function isSupportedProduct", source)
         self.assertIn("export async function precheckIssueType", source)
 
         if NODE:
@@ -121,12 +124,58 @@ console.log(JSON.stringify([m.isSupportedIssueType("故事"), m.isSupportedIssue
             self.assertEqual(result.returncode, 0, result.stderr)
             self.assertEqual(json.loads(result.stdout), [True, True, False])
 
+    def test_product_gate_matches_gate1(self):
+        """预演版的产品门禁口径必须与正式版一致：六个产品、大小写不敏感、多值命中即可。"""
+        mock_source = (MOCK_SKILL_DIR / "scripts" / "jira.mjs").read_text(encoding="utf-8")
+        gate_source = (PROJECT_ROOT / "skills" / "jira-gate-1" / "scripts" / "jira.mjs").read_text(encoding="utf-8")
+        products = 'export const SUPPORTED_PRODUCTS = ["Bot", "Call", "See", "Pal", "Learn", "Aiforce"]'
+        fields = 'export const PRODUCT_FIELD_NAMES = ["产品归属", "问题发现产品", "发现产品"]'
+
+        self.assertIn(products, mock_source)
+        self.assertIn(products, gate_source)
+        self.assertIn(fields, mock_source)
+        self.assertIn(fields, gate_source)
+
+        if NODE:
+            jira_url = (MOCK_SKILL_DIR / "scripts" / "jira.mjs").as_uri()
+            script = f"""
+const m = await import("{jira_url}");
+const pick = (raw) => {{ const p = m.resolveProduct({{ customFields: raw }}); return [p.value, m.isSupportedProduct(p.products)]; }};
+const result = [
+  pick({{ "产品归属": "Call" }}),
+  pick({{ "产品归属": "bot、See" }}),
+  pick({{ "问题发现产品": "Aiforce" }}),
+  pick({{ "产品归属": "Eco" }}),
+  pick({{}}),
+];
+const ok = await m.precheckIssueType("X-1", {{ issue: {{ key: "X-1", issueType: "故事", status: "", summary: "", customFields: {{ "产品归属": "Learn" }} }} }});
+const badType = await m.precheckIssueType("X-2", {{ issue: {{ key: "X-2", issueType: "缺陷", status: "", summary: "", customFields: {{ "产品归属": "Learn" }} }} }});
+console.log(JSON.stringify({{ result, flags: [ok.supported, ok.productSupported, badType.supported] }}));
+"""
+            result = subprocess.run(
+                [NODE, "-e", script],
+                capture_output=True,
+                encoding="utf-8",
+                errors="replace",
+                check=False,
+                timeout=60,
+            )
+            self.assertEqual(result.returncode, 0, result.stderr)
+            payload = json.loads(result.stdout)
+            self.assertEqual(
+                payload["result"],
+                [["Call", True], ["bot、See", True], ["Aiforce", True], ["Eco", False], ["", False]],
+            )
+            self.assertEqual(payload["flags"], [True, True, False])
+
     def test_runtime_prompt_requires_precheck_and_packaging(self):
         """服务端调用时必须先做类型预检，并把结果打进压缩包。"""
         payload = json.loads((MOCK_SKILL_DIR / "runtime.json").read_text(encoding="utf-8"))
 
         self.assertEqual(payload["required_inputs"], ["jira_url"])
         self.assertIn("precheck", payload["prompt_template"])
+        self.assertIn("productSupported", payload["prompt_template"])
+        self.assertIn("Bot/Call/See/Pal/Learn/Aiforce", payload["prompt_template"])
         self.assertIn("review-jira-req", payload["prompt_template"])
         self.assertIn("review-jira-design", payload["prompt_template"])
         self.assertIn("pack-deliverables.mjs", payload["prompt_template"])
@@ -136,6 +185,9 @@ console.log(JSON.stringify([m.isSupportedIssueType("故事"), m.isSupportedIssue
         text = (MOCK_SKILL_DIR / "SKILL.md").read_text(encoding="utf-8")
 
         self.assertIn("只处理类型为「故事」", text)
+        self.assertIn("Bot/Call/See/Pal/Learn/Aiforce", text)
+        self.assertIn("typeSupported", text)
+        self.assertIn("productSupported", text)
         self.assertIn("precheck <KEY|URL>", text)
         self.assertIn("PRD 需求准入 Checklist", text)
         self.assertIn("### 5. 逐项判定", text)

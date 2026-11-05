@@ -13,6 +13,57 @@ import { EXIT, QaError, fail, log, maskSecret } from './env.mjs';
 
 const FIELDS = ['summary', 'description', 'status', 'components', 'labels', 'attachment', 'comment', 'issuetype', 'updated'];
 
+/** 产品归属字段候选名（与 jira-gate-1 / jira-gate-2 保持一致）。 */
+export const PRODUCT_FIELD_NAMES = ['产品归属', '问题发现产品', '发现产品'];
+
+/** 允许处理的产品归属（大小写不敏感）。 */
+export const SUPPORTED_PRODUCTS = ['Bot', 'Call', 'See', 'Pal', 'Learn', 'Aiforce'];
+
+/** 把产品归属字段拆成产品名列表；兼容中英文分隔符、换行与多值字段。 */
+export function parseProducts(value) {
+  return String(value || '')
+    .split(/[,，、;；/|\n\r]+/)
+    .map((item) => item.trim())
+    .filter(Boolean);
+}
+
+/** 把 Jira 字段值（字符串 / 数组 / { value | name | key } 对象）压平成文本。 */
+function plainValue(value) {
+  if (value === null || value === undefined) return '';
+  if (typeof value === 'string') return value.trim();
+  if (typeof value === 'number' || typeof value === 'boolean') return String(value);
+  if (Array.isArray(value)) return value.map(plainValue).filter(Boolean).join(',');
+  if (typeof value === 'object') {
+    if (value.value !== undefined) return plainValue(value.value);
+    if (value.name !== undefined) return plainValue(value.name);
+    if (value.key !== undefined) return plainValue(value.key);
+  }
+  return '';
+}
+
+/**
+ * 从 Jira 原始响应解析产品归属。
+ * 优先使用 expand=names 得到的「字段 id → 中文名」映射，同时兼容直接以中文名为 key 的情况。
+ */
+export function resolveProduct(issue) {
+  const names = (issue && issue.names) || {};
+  const fields = (issue && issue.fields) || {};
+  for (const expected of PRODUCT_FIELD_NAMES) {
+    const id = Object.keys(names).find((item) => names[item] === expected);
+    const value = plainValue(id ? fields[id] : fields[expected]);
+    if (value) return { field: expected, value, products: parseProducts(value) };
+  }
+  return { field: '', value: '', products: [] };
+}
+
+/** 判断产品归属是否命中支持清单（大小写不敏感）。 */
+export function isSupportedProduct(products) {
+  const list = Array.isArray(products) ? products : parseProducts(products);
+  return list.some((item) =>
+    SUPPORTED_PRODUCTS.some((expected) => expected.toLowerCase() === String(item).trim().toLowerCase()),
+  );
+}
+
 function sleep(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
@@ -95,9 +146,11 @@ export class JiraClient {
     throw lastError || new QaError('Jira 请求失败', EXIT.NETWORK);
   }
 
-  async getIssue(key, { comments = true } = {}) {
+  async getIssue(key, { comments = true, allFields = false } = {}) {
     const fields = comments ? FIELDS : FIELDS.filter((f) => f !== 'comment');
-    const data = await this.request(`/rest/api/2/issue/${encodeURIComponent(key)}?fields=${fields.join(',')}`);
+    // allFields 用于读取产品归属等自定义字段：Jira 必须先展开 names 才知道字段 id 对应的中文名。
+    const query = allFields ? 'fields=*all&expand=names' : `fields=${fields.join(',')}`;
+    const data = await this.request(`/rest/api/2/issue/${encodeURIComponent(key)}?${query}`);
     return data;
   }
 

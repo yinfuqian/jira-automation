@@ -1,6 +1,6 @@
 ---
 name: jira-gate-2
-description: 对 Jira 需求单做 G2 技术方案准出检查。当用户给出 Jira 需求链接或单号并要求"检查技术方案是否达标 / 能不能进入开发 / 做技术方案准出 / 技术方案写得全不全"时使用。只处理类型为「故事」的单子；同时执行两套判定——《技术方案准出 Checklist》（6 项 MUST：G2-M01~M06、命中 CONDITIONAL）与《通用团队交付物 PDCA 规范》的 RD 开发交付物检查（D-01~D-10）。G2 只在存在明确阻断时退回，评论只留结论与失败项；两套结论合并后写入 Jira 评论，并生成 `<需求名称>_RD_<YYYYMMDD>_<NN>_PDCA.md` 报告上传为附件；全部满足时不流转状态，任一不满足时把状态流转到「开发设计中」并 @ 流转人。
+description: 对 Jira 需求单做 G2 技术方案准出检查。当用户给出 Jira 需求链接或单号并要求"检查技术方案是否达标 / 能不能进入开发 / 做技术方案准出 / 技术方案写得全不全"时使用。只处理类型为「故事」且产品归属为 Bot / Call / See / Pal / Learn / Aiforce 之一的单子；同时执行两套判定——《技术方案准出 Checklist》（6 项 MUST：G2-M01~M06、命中 CONDITIONAL）与《通用团队交付物 PDCA 规范》的 RD 开发交付物检查（D-01~D-10）。G2 只在存在明确阻断时退回，评论只留结论与失败项；两套结论合并后写入 Jira 评论，并生成 `<需求名称>_RD_<YYYYMMDD>_<NN>_PDCA.md` 报告上传为附件；全部满足时不流转状态，任一不满足时把状态流转到「开发设计中」并 @ 流转人。
 metadata:
   short-description: Jira G2 技术方案准出检查
 ---
@@ -37,7 +37,7 @@ metadata:
 
 核心口径：
 
-- **类型门禁先于全部判定与写操作**：先做 §1 的 `precheck`，只处理 `issuetype` 为「故事」（英文站点 `Story`）的单子；类型不符时立即结束，G2 Checklist 与 PDCA 两套判定都不执行。
+- **类型与产品门禁先于全部判定与写操作**：先做 §1 的 `precheck`，只处理 `issuetype` 为「故事」（英文站点 `Story`）且产品归属属于 Bot/Call/See/Pal/Learn/Aiforce 之一的单子；任一项不符时立即结束，G2 Checklist 与 PDCA 两套判定都不执行。
 - **入口状态参考：开发设计中；通过不改变状态，退回补充时流转到「开发设计中」。**
 - 每次都执行全部 **6 项 `MUST`**（G2-M01 ~ G2-M06）与所有**命中的 `CONDITIONAL`**（G2-C01 ~ G2-C11），不抽样、不使用总分或平均分。
 - 单项结果只允许「满足 / 不满足 / N/A」；`N/A` 只用于未命中的场景项，**由 Agent 内部标记，不输出、不作为退回项**。
@@ -59,7 +59,7 @@ metadata:
   ```bash
   # 令牌与连通性自检；令牌来自 --token、JIRA_TOKEN 环境变量或技能目录下的 .jira-token
   node <技能目录>/scripts/jira-cli.mjs selftest
-  # 强制类型预检：只有类型为「故事」才继续（见 §1）
+  # 强制预检：类型为「故事」且产品归属在 Bot/Call/See/Pal/Learn/Aiforce 内才继续（见 §1）
   node <技能目录>/scripts/jira-cli.mjs precheck <KEY|URL>
   # 读取需求单并输出紧凑 Markdown 摘要（判定依据）
   node <技能目录>/scripts/jira-cli.mjs get <KEY|URL>
@@ -84,9 +84,14 @@ metadata:
 
   在该环境中不要尝试调用 `node_repl`，也不要因为缺少桌面工具而降低判定标准。
 
-### 1. 单据类型预检（强制，先做）
+### 1. 单据类型与产品归属预检（强制，先做）
 
-**只处理类型为「故事」的 Jira 单子。** 这是本技能的**第一道强制门禁**，口径与 `jira-gate-1` 完全一致：在读取附件、执行 G2 判定、执行 PDCA 判定、生成报告、写评论、回写字段或流转之前，先执行：
+**只处理同时满足以下两个条件的 Jira 单子：**
+
+1. 类型（`issuetype`）为「故事」；
+2. 产品归属（`产品归属`，旧单兼容 `问题发现产品` / `发现产品`）属于 `Bot`、`Call`、`See`、`Pal`、`Learn`、`Aiforce` 之一（大小写不敏感，多值字段只要命中一个即可）。
+
+这是本技能的**第一道强制门禁**，口径与 `jira-gate-1` 完全一致：在读取附件、执行 G2 判定、执行 PDCA 判定、生成报告、写评论、回写字段或流转之前，先执行：
 
 ```bash
 node <技能目录>/scripts/jira-cli.mjs precheck <KEY|URL>
@@ -100,21 +105,28 @@ node <技能目录>/scripts/jira-cli.mjs precheck <KEY|URL>
   "key": "CALL-1446",
   "issueType": "故事",
   "expected": "故事",
+  "typeSupported": true,
+  "product": "Call",
+  "productField": "产品归属",
+  "products": ["Call"],
+  "expectedProducts": ["Bot", "Call", "See", "Pal", "Learn", "Aiforce"],
+  "productSupported": true,
   "supported": true,
   "status": "开发设计中",
   "summary": "..."
 }
 ```
 
-- `supported: true`（类型为 `故事`；英文站点返回 `Story` 时视为同一种类型）→ 继续 §2。
-- `supported: false` 或类型为空 → **立即停止**，不做任何后续动作：
+- `supported: true`（`typeSupported=true` 且 `productSupported=true`）→ 继续 §2。
+- `supported: false` 或任一字段为空 → **立即停止**，不做任何后续动作：
   - 不执行 G2 Checklist 判定，也不执行 PDCA RD 检查；
   - 不生成 PDCA 报告、不上传附件；
   - 不写评论、不回写 G2 门禁字段、不流转状态；
   - 不 @ 任何人，也不清理（本次没有产生中间产物）。
 
-  只在对话里说明「该单类型为 X，不是『故事』，按规则跳过，未对 Jira 做任何写操作」，并在 `.skill-result.json` 里把 `conclusion` 写为 `不适用`。
-- 不要用概要、标签、模块或描述去猜测类型；只认 Jira 的 `issuetype` 字段。
+  只在对话里说明「该单类型为 X、产品归属为 Y，不在『故事 + Bot/Call/See/Pal/Learn/Aiforce』范围内，按规则跳过，未对 Jira 做任何写操作」，并在 `.skill-result.json` 里把 `conclusion` 写为 `不适用`。
+- 不要用概要、标签、模块或描述去猜测类型与产品归属；只认 Jira 的 `issuetype` 与产品归属字段。字段缺失一律视为不满足。
+- `productField` 用于说明值取自哪个候选字段（`产品归属` / `问题发现产品` / `发现产品`），便于排查取数异常。
 
 ### 2. 解析单号
 
@@ -134,7 +146,7 @@ nodeRepl.write(JSON.stringify(st, null, 1));
 自检通过后取数：
 
 ```javascript
-const check = await j.precheckIssueType("CALL-1446");   // 类型不是「故事」时必须立即停止
+const check = await j.precheckIssueType("CALL-1446");   // 类型不是「故事」或产品归属不在清单内时必须立即停止
 const issue = await j.getIssue("CALL-1446");            // 也接受完整 URL
 nodeRepl.write(j.renderIssueMarkdown(issue));           // 紧凑摘要，不要直接打印原始 JSON
 const files = await j.downloadAttachments(issue.key, "<工作目录>\\work\\jira-gate-2\\CALL-1446\\attachments", { issue });
@@ -166,7 +178,7 @@ const files = await j.downloadAttachments(issue.key, "<工作目录>\\work\\jira
 没有配置令牌时，用已登录的应用内浏览器打开需求单：
 
 1. `cua.createBrowserTab("iab", issueUrl)` 打开单子。
-2. 用 `tab.playwright.evaluate(() => document.body.innerText)` 取正文，可拿到概要与描述、附件列表、问题链接、子任务、评论；**同时确认页面上的「类型」字段是「故事」**，不是就立即停止。
+2. 用 `tab.playwright.evaluate(() => document.body.innerText)` 取正文，可拿到概要与描述、附件列表、问题链接、子任务、评论；**同时确认页面上的「类型」字段是「故事」、「产品归属」属于 Bot/Call/See/Pal/Learn/Aiforce 之一**，任一项不满足就立即停止。
 3. 附件：点击附件链接触发下载，再对下载目录跑 `extract.py`（压缩包会自动解压，见上一节）。
 4. 结论评论：在页面评论区输入并提交。
 
@@ -199,7 +211,7 @@ const files = await j.downloadAttachments(issue.key, "<工作目录>\\work\\jira
 
 在 G2 Checklist 判定的同时，按 [references/pdca-standard.md](references/pdca-standard.md) 执行 PDCA 的 `Check` 阶段，检查研发的技术方案是否偏离 PRD。**PDCA 是 G2 的补充判定维度，不替代 G2 主判定；两套结论都要写进同一条准出评论。**
 
-**前置条件：§1 类型预检必须已通过（`supported=true`）**。类型不是「故事」时，本节整体不执行，也不生成任何报告。
+**前置条件：§1 类型与产品归属预检必须已通过（`supported=true`）**。任一项不满足时，本节整体不执行，也不生成任何报告。
 
 **角色与范围**
 
@@ -364,7 +376,7 @@ const back = await j.getGateResult(key);        // 写入后读回确认
 }
 ```
 
-- `conclusion` 只能写最终业务结论：`通过` 或 `退回补充`；单据类型不是「故事」而提前结束时写 `不适用`。
+- `conclusion` 只能写最终业务结论：`通过` 或 `退回补充`；类型不是「故事」或产品归属不在清单内而提前结束时写 `不适用`。
 - `summary` 用一句话写清 G2 准出结论、PDCA 结论与状态流转结果，不超过 500 字；`blockingCount` 是最终阻断项数量（G2 与 PDCA 合并计数，没有阻断项写 `0`）。
 - 运营性失败（脚本非零退出、必需文件缺失）不要伪造「通过」；无法形成业务结论时可以不写该文件，平台会把结论记为未知。
 - 该文件只用于调用统计，不是交付物，不写入 Jira；平台读取入库后会自动删除，不要放进 `work/jira-gate-2/<KEY>/`。
@@ -496,7 +508,7 @@ h4. 不通过项
 
 ## 硬性约束
 
-- **只处理类型为「故事」的单子**（口径与 `jira-gate-1` 一致）；类型不符时立即停止，不执行 G2 与 PDCA 判定、不生成或上传 PDCA 报告，也不做任何 Jira 写操作。
+- **只处理类型为「故事」且产品归属属于 Bot/Call/See/Pal/Learn/Aiforce 之一的单子**（口径与 `jira-gate-1` 一致）；任一项不符时立即停止，不执行 G2 与 PDCA 判定、不生成或上传 PDCA 报告，也不做任何 Jira 写操作。
 - 状态流转规则：**通过不流转（保持当前状态）**；**退回补充 → 开发设计中**；不得流转到「开发中」「评审中」「待办」等其他状态。不指派经办人。
 - **必须同时执行两套判定**：G2 技术方案准出 Checklist 与 PDCA RD 开发交付物检查；任一不通过即退回补充，不得只跑一套。
 - **唯一允许写入的字段是 G2 门禁字段**（`setGateResult()` 写入的准出结论/预检时间），它是评论结论的机器可读副本，不是新的事实来源。

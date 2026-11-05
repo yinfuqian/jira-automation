@@ -104,6 +104,50 @@ class JiraQaSplitTests(unittest.TestCase):
         self.assertIn("jira-qa-3 只执行阶段三", stage3)
         self.assertIn("stage !== 'cases'", stage3)
 
+    def test_product_gate_skips_unsupported_products(self):
+        """阶段二/三都只处理六个产品之一；产品不符必须在下载材料前直接跳过。"""
+        for directory in (STAGE2_DIR, STAGE3_DIR):
+            lib = (directory / "bin" / "lib" / "jira.mjs").read_text(encoding="utf-8")
+            read = (directory / "bin" / "jira-read.mjs").read_text(encoding="utf-8")
+            prepare = (directory / "bin" / "prepare.mjs").read_text(encoding="utf-8")
+
+            self.assertIn("SUPPORTED_PRODUCTS", lib)
+            self.assertIn("export function resolveProduct", lib)
+            self.assertIn("expand=names", lib)
+            self.assertIn("allFields: true", read)
+            self.assertIn("PRODUCT_SUPPORTED=", read)
+            self.assertIn("PRODUCT_NOT_SUPPORTED", prepare)
+            self.assertIn("out.applicable = false", prepare)
+            # 产品门禁必须早于材料下载：否则会先落盘附件再判定跳过。
+            self.assertLess(prepare.index("PRODUCT_NOT_SUPPORTED"), prepare.index("jira-download.mjs"))
+
+    @unittest.skipUnless(__import__("shutil").which("node"), "未安装 node，跳过产品归属解析测试")
+    def test_resolve_product_from_jira_names(self):
+        """按 expand=names 的字段 id 映射取产品归属，并兼容多值字段。"""
+        import subprocess
+
+        node = __import__("shutil").which("node")
+        for directory in (STAGE2_DIR, STAGE3_DIR):
+            lib_url = (directory / "bin" / "lib" / "jira.mjs").as_uri()
+            script = (
+                'const m = await import("%s");\n'
+                'const pick = (issue) => { const p = m.resolveProduct(issue); return [p.field, m.isSupportedProduct(p.products)]; };\n'
+                'console.log(JSON.stringify([\n'
+                '  pick({ names: { customfield_1: "产品归属" }, fields: { customfield_1: { value: "Call" } } }),\n'
+                '  pick({ names: { customfield_1: "产品归属" }, fields: { customfield_1: [{ value: "Bot" }, { value: "Learn" }] } }),\n'
+                '  pick({ names: { customfield_1: "产品归属" }, fields: { customfield_1: "Eco" } }),\n'
+                '  pick({ names: {}, fields: {} }),\n'
+                ']));\n'
+            ) % lib_url
+            result = subprocess.run(
+                [node, "-e", script], capture_output=True, encoding="utf-8", errors="replace", check=False, timeout=60
+            )
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertEqual(
+                json.loads(result.stdout),
+                [["产品归属", True], ["产品归属", True], ["产品归属", False], ["", False]],
+            )
+
     def test_preflight_checks_own_command_file(self):
         """安装包完整性校验要指向各自命令入口，而不是已删除的 jira-qa.md。"""
         for directory, command in ((STAGE2_DIR, "command/jira-qa-2.md"), (STAGE3_DIR, "command/jira-qa-3.md")):

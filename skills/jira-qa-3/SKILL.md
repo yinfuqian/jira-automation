@@ -1,6 +1,6 @@
 ---
 name: jira-qa-3
-description: 只执行 QA 阶段三的独立技能。从 Jira 取回人工复核后的测试方案与测试点 XMind，刷新最终方案，生成 Excel 测试用例与 Xray CSV，完成机械一致性校验，并把交付物打成 zip 供接口下载。不写 Jira。
+description: 只执行 QA 阶段三的独立技能。从 Jira 取回人工复核后的测试方案与测试点 XMind，刷新最终方案，生成 Excel 测试用例与 Xray CSV，完成机械一致性校验，并把交付物打成 zip 供接口下载。不写 Jira。只处理产品归属为 Bot / Call / See / Pal / Learn / Aiforce 之一的单子。
 ---
 
 # QA 阶段三（jira-qa-3）
@@ -13,6 +13,10 @@ description: 只执行 QA 阶段三的独立技能。从 Jira 取回人工复核
 
 - **只执行阶段三：最终测试方案刷新 + Excel 测试用例 + Xray CSV。**
 - 不执行阶段一需求准入门禁，也不执行阶段二测试方案与 XMind 的生成。
+- **产品归属门禁**：只处理「产品归属」（旧单兼容「问题发现产品」/「发现产品」）为
+  `Bot`、`Call`、`See`、`Pal`、`Learn`、`Aiforce` 之一的单子（大小写不敏感，多值命中一个即可）。
+  字段缺失或不在清单内时 `prepare` 返回 `SKIPPED` / `errorCode=PRODUCT_NOT_SUPPORTED`，
+  不生成任何产物、不上传、不写评论。
 - 阶段二由 `jira-qa-2` 负责；本技能**不重新设计测试点**，只使用人工复核后的基线。
 - **不写 Jira**：不上传附件、不写评论、不改状态。交付物只落工作区并打 zip 供接口下载。
 - 缺人工复核证据、方案或 XMind 时返回 `BLOCKED`，不生成半成品。
@@ -55,7 +59,8 @@ node "$CLAUDE_SKILL_DIR/bin/prepare.mjs" --key <KEY> --stage 3
 - `READY`：继续。记下 `runId`、`plan`、`xmind`、`cases`（`locate-cases.json`）、`review`。
 - `BLOCKED`：方案/XMind 缺失、找不到复核证据或复核版本不一致。记录 `reason` 后停止，
   **不生成半成品**，并提示先由 `jira-qa-2` 出方案、人工复核后再执行本技能。
-- `SKIPPED`：没有可用主需求材料，记录后停止。
+- `SKIPPED`：没有可用主需求材料，或产品归属不在 Bot/Call/See/Pal/Learn/Aiforce 内
+  （`errorCode=PRODUCT_NOT_SUPPORTED`，零写入），记录后停止。
 - `status=ERROR` / `ok=false`：执行异常，记录后停止。
 
 ### 2. 刷新最终测试方案

@@ -37,7 +37,7 @@ const TOKEN_FILE_NAMES = [".jira-token", ".jira-token.txt", "jira-token.txt"];
 
 const USAGE = `用法：
   node scripts/jira-cli.mjs selftest
-  node scripts/jira-cli.mjs precheck <KEY|URL>
+  node scripts/jira-cli.mjs precheck <KEY|URL>   # 类型=故事 且 产品归属属于 Bot/Call/See/Pal/Learn/Aiforce
   node scripts/jira-cli.mjs get <KEY|URL>
   node scripts/jira-cli.mjs json <KEY|URL>
   node scripts/jira-cli.mjs attachments <KEY|URL> <目录>

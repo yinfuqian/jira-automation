@@ -46,6 +46,8 @@ prepare.mjs --key <KEY> --stage 2
         ↓
 READY / REUSED / BLOCKED / SKIPPED / ERROR
         ↓ READY
+（SKIPPED 且 errorCode=PRODUCT_NOT_SUPPORTED：产品归属不在 Bot/Call/See/Pal/Learn/Aiforce 内，直接结束）
+        ↓
 读 stage2-plan.md、stage2-xmind.md
         ↓
 写测试方案 + xmind.spec.json

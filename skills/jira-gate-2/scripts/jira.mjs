@@ -79,27 +79,74 @@ const DEFAULT_GATE_FIELD_NAMES = {
   checkedAt: ["G2预检时间", "G2技术方案准出预检时间", "技术方案准出预检时间"],
 };
 
-// 门禁技能只处理「故事」类型的单子；英文站点返回 Story 时视为同一种类型。
+// 准入门禁只处理「故事」类型的单子；英文站点返回 Story 时视为同一种类型。
 const SUPPORTED_ISSUE_TYPES = ["故事", "Story"];
 
-/** 判断 Jira 问题类型是否在 G2 的处理范围内（只认「故事」/ Story）。 */
+// 支持的产品归属（大小写不敏感；一个单子允许填写多个产品）。
+export const SUPPORTED_PRODUCTS = ["Bot", "Call", "See", "Pal", "Learn", "Aiforce"];
+
+// 产品归属字段的候选名称，按优先级匹配；旧单可能使用「问题发现产品 / 发现产品」。
+export const PRODUCT_FIELD_NAMES = ["产品归属", "问题发现产品", "发现产品"];
+
+/** 判断 Jira 问题类型是否在门禁处理范围内（只认「故事」/ Story）。 */
 export function isSupportedIssueType(issueType) {
   return SUPPORTED_ISSUE_TYPES.includes(String(issueType || "").trim());
 }
 
+/** 把产品归属字段拆成产品名列表；兼容中英文分隔符、换行与多值字段。 */
+export function parseProducts(value) {
+  return String(value || "")
+    .split(/[,，、;；/|\n\r]+/)
+    .map((item) => item.trim())
+    .filter(Boolean);
+}
+
 /**
- * 类型预检：在读取附件、调用其它技能或写 Jira 之前先确认单据类型。
+ * 从规范化后的 issue 中解析产品归属。
+ * 返回 { field, value, products }；字段缺失时 field 与 value 为空字符串。
+ */
+export function resolveProduct(issue) {
+  const customFields = (issue && issue.customFields) || {};
+  for (const name of PRODUCT_FIELD_NAMES) {
+    const raw = customFields[name];
+    if (raw === undefined || raw === null) continue;
+    const value = toPlainText(raw).trim();
+    if (!value) continue;
+    return { field: name, value, products: parseProducts(value) };
+  }
+  return { field: "", value: "", products: [] };
+}
+
+/** 判断产品归属是否命中支持清单（大小写不敏感）。 */
+export function isSupportedProduct(products) {
+  const list = Array.isArray(products) ? products : parseProducts(products);
+  return list.some((item) =>
+    SUPPORTED_PRODUCTS.some((expected) => expected.toLowerCase() === String(item).trim().toLowerCase()),
+  );
+}
+
+/**
+ * 门禁预检：在读取附件、调用其它技能或写 Jira 之前，先确认单据类型与产品归属。
  * 返回 supported=false 时调用方必须立即停止，不能继续做任何写操作。
  */
 export async function precheckIssueType(keyOrUrl, options = {}) {
   const issue = options.issue || await getIssue(keyOrUrl, options);
   const issueType = String(issue.issueType || "").trim();
+  const product = resolveProduct(issue);
+  const typeSupported = isSupportedIssueType(issueType);
+  const productSupported = isSupportedProduct(product.products);
   return {
     ok: true,
     key: issue.key,
     issueType,
     expected: "故事",
-    supported: isSupportedIssueType(issueType),
+    typeSupported,
+    product: product.value,
+    productField: product.field,
+    products: product.products,
+    expectedProducts: SUPPORTED_PRODUCTS.slice(),
+    productSupported,
+    supported: typeSupported && productSupported,
     status: issue.status,
     summary: issue.summary,
   };

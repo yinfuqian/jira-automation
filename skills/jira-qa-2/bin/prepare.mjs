@@ -17,6 +17,7 @@ import { EXIT, QaError, checkNode, parseArgs, parseIssueKey, resolveWorkspace, l
 import { readJson } from './lib/fs-safe.mjs';
 import { IGNORED_ROLES } from './lib/material-set.mjs';
 import { handleFatal } from './lib/fatal.mjs';
+import { writeResult } from './lib/result.mjs';
 
 const ROOT = skillDir();
 
@@ -104,7 +105,10 @@ async function main() {
     review: null,
     gate: null,
     pending: null,
+    product: '',
     reason: '',
+    errorCode: '',
+    applicable: true,
     steps: [],
     warnings: [],
   };
@@ -128,6 +132,37 @@ async function main() {
   mark('jira-read');
 
   const runDir = path.join(workspace, '.qa', 'runs', runId);
+
+  // 产品归属门禁：只处理 Bot / Call / See / Pal / Learn / Aiforce；跳过时不产生任何产物、不写 Jira。
+  const product = valueOf(read.stdout, 'PRODUCT');
+  const productSupported = valueOf(read.stdout, 'PRODUCT_SUPPORTED') === 'true';
+  out.product = product;
+  if (!productSupported) {
+    const reason = product
+      ? `产品归属为「${product}」，不在 Bot/Call/See/Pal/Learn/Aiforce 范围内`
+      : '产品归属为空，不在 Bot/Call/See/Pal/Learn/Aiforce 范围内';
+    out.ok = true;
+    out.status = 'SKIPPED';
+    out.applicable = false;
+    out.reason = reason;
+    out.errorCode = 'PRODUCT_NOT_SUPPORTED';
+    await writeResult(workspace, runId, {
+      schemaVersion: 1,
+      stage,
+      ok: true,
+      applicable: false,
+      status: 'SKIPPED',
+      jiraKey: key,
+      conclusion: '',
+      errorCode: 'PRODUCT_NOT_SUPPORTED',
+      reason,
+      warnings: [],
+    });
+    mark('product-gate');
+    process.stdout.write(`${JSON.stringify(out)}\n`);
+    return;
+  }
+
   const materialsPath = path.join(runDir, 'materials.json');
   const stageArgs = stage === 'design' ? ['--stage', '2'] : stage === 'cases' ? ['--stage', '3'] : [];
   const download = run('jira-download.mjs', [...common, '--run-id', runId, ...stageArgs]);

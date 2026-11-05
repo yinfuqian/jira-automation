@@ -56,6 +56,7 @@ node scripts/jira-cli.mjs attach-list <KEY|URL>
 `getIssue()` 返回的规范化字段：
 
 - `issueType`：问题类型，G2 **只处理「故事」**（英文站点 `Story` 视为同一类型）。
+- `product`：产品归属，取「产品归属 / 问题发现产品 / 发现产品」中第一个有值的字段；G2 只处理 `Bot`、`Call`、`See`、`Pal`、`Learn`、`Aiforce`（大小写不敏感，多值命中一个即可）。
 - `status`：当前状态，G2 的入口参考是「开发设计中」；通过不改变状态，退回补充时流转到「开发设计中」。
 - `summary` / `description` / `priority` / `assignee` / `reporter` / `creator`。
 - `attachments`：附件列表（`filename` / `size` / `mimeType` / `content`）。
@@ -69,7 +70,7 @@ node scripts/jira-cli.mjs attach-list <KEY|URL>
 
 1. `cua.createBrowserTab("iab", issueUrl)` 打开单子。
 2. `tab.playwright.evaluate(() => document.body.innerText)` 取正文。
-3. 确认页面「类型」是「故事」；不是就立即停止。
+3. 确认页面「类型」是「故事」、「产品归属」属于 Bot/Call/See/Pal/Learn/Aiforce 之一；任一项不符就立即停止。
 4. 附件通过点击链接触发下载，再对下载目录跑 `scripts/extract.py`。
 5. 评论在页面评论区输入并提交。
 
@@ -125,7 +126,7 @@ node scripts/jira-cli.mjs attach-list <KEY|URL>
 
 ```bash
 node scripts/jira-cli.mjs precheck <KEY|URL>
-# {"ok":true,"key":"...","issueType":"故事","expected":"故事","supported":true,"status":"开发设计中"}
+# {"ok":true,"key":"...","issueType":"故事","typeSupported":true,"product":"Call","productSupported":true,"supported":true,"status":"开发设计中"}
 ```
 
 `supported=false` 或类型为空时立即停止，不写评论、不回写字段、不流转。
@@ -210,7 +211,7 @@ const back = await j.transitionToStatus("ZYSQ-95", "开发设计中");  // 仅�
 
 | 现象 | 原因与处理 |
 |---|---|
-| `precheck` 返回 `supported:false` | 单据类型不是「故事」；立即停止，不做任何写操作 |
+| `precheck` 返回 `supported:false` | 单据类型不是「故事」，或产品归属不在 Bot/Call/See/Pal/Learn/Aiforce 内（看 `typeSupported` / `productSupported` / `productField`）；立即停止，不做任何写操作 |
 | 技术方案附件找不到 | 技术方案文件缺失；G2-M01 不满足，直接退回补充 |
 | PRD 不可定位或与方案版本不一致 | G2-M01 不满足；先补齐 PRD（业务冲突需回填 PRD 并重新走需求准入），不要继续准出 |
 | 评论里出现两条 G2 评论 | 只应发生在历史遗留数据上；以最新一条为准继续更新，不要删评论 |

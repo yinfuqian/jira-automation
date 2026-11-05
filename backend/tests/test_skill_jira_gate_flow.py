@@ -58,6 +58,8 @@ class SkillJiraGateFlowTests(unittest.TestCase):
         self.assertIn("review-jira-design", payload["prompt_template"])
         self.assertIn("review-jira-qa", payload["prompt_template"])
         self.assertIn("prepare.mjs", payload["prompt_template"])
+        self.assertIn("productSupported", payload["prompt_template"])
+        self.assertIn("Bot/Call/See/Pal/Learn/Aiforce", payload["prompt_template"])
         self.assertIn("scan.mjs", payload["prompt_template"])
         self.assertIn("candidates", payload["prompt_template"])
         self.assertIn("REUSED", payload["prompt_template"])
@@ -75,6 +77,24 @@ class SkillJiraGateFlowTests(unittest.TestCase):
         self.assertNotIn("--non-blocking", payload["prompt_template"])
         self.assertNotIn("failedStep", payload["prompt_template"])
         self.assertIn("继续写 G1 评论", payload["prompt_template"])
+
+    @unittest.skipUnless(NODE, "未安装 node，跳过产品门禁脚本测试")
+    def test_precheck_requires_supported_product(self):
+        """G1 只放行「故事 + 六个产品之一」，其余一律 supported=false。"""
+        jira_url = JIRA_SCRIPT_PATH.as_uri()
+        script = (
+            'const m = await import("%s");\n'
+            'const run = (issue) => m.precheckIssueType("X-1", { issue });\n'
+            'const ok = await run({ key: "X-1", issueType: "故事", status: "", summary: "", customFields: { "产品归属": "Learn" } });\n'
+            'const wrongProduct = await run({ key: "X-2", issueType: "故事", status: "", summary: "", customFields: { "产品归属": "Eco" } });\n'
+            'const missingProduct = await run({ key: "X-3", issueType: "故事", status: "", summary: "", customFields: {} });\n'
+            'console.log(JSON.stringify([ok.supported, wrongProduct.supported, missingProduct.supported]));\n'
+        ) % jira_url
+        result = subprocess.run(
+            [NODE, "-e", script], capture_output=True, encoding="utf-8", errors="replace", check=False, timeout=60
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(json.loads(result.stdout), [True, False, False])
 
     def test_skill_integrates_qa_gate_and_merges_conclusions(self):
         """G1 必须调用 review-jira-qa，并规定任一准出不通过即退回补充。"""

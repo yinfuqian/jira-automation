@@ -1,6 +1,6 @@
 ---
 name: jira-gate-1-mock
-description: 对 Jira 需求单做 G1 需求准入检查（PRD 准入）的只读预演版。取数范围、判定标准与结论口径和 jira-gate-1 一致，只处理类型为「故事」的单子；按 PRD 需求准入 Checklist 逐项判定，用绿勾 (/) / 红叉 (x) 生成评论草稿，再依次调用 review-jira-req 与 review-jira-design 产出需求质量评审报告和 PRD—原型一致性审核报告。全程不写 Jira——不写评论、不回写门禁字段、不上传附件、不流转状态、不实际 @ 人，而是把评论草稿与两份报告打成压缩包供下载。当用户要求“预演 / 演练 / 试跑 G1 准入检查”“检查需求是否达标但先不要在单子上留痕”，或给出 Jira 需求链接并要求做准入检查且不要写评论时使用。
+description: 对 Jira 需求单做 G1 需求准入检查（PRD 准入）的只读预演版。取数范围、判定标准与结论口径和 jira-gate-1 一致，只处理类型为「故事」且产品归属为 Bot / Call / See / Pal / Learn / Aiforce 之一的单子；按 PRD 需求准入 Checklist 逐项判定，用绿勾 (/) / 红叉 (x) 生成评论草稿，再依次调用 review-jira-req 与 review-jira-design 产出需求质量评审报告和 PRD—原型一致性审核报告。全程不写 Jira——不写评论、不回写门禁字段、不上传附件、不流转状态、不实际 @ 人，而是把评论草稿与两份报告打成压缩包供下载。当用户要求“预演 / 演练 / 试跑 G1 准入检查”“检查需求是否达标但先不要在单子上留痕”，或给出 Jira 需求链接并要求做准入检查且不要写评论时使用。
 metadata:
   short-description: G1 需求准入检查只读预演，结果打包下载
 ---
@@ -69,7 +69,7 @@ metadata:
   ```bash
   # 令牌与连通性自检；令牌来自 --token、JIRA_TOKEN 环境变量或技能目录下的 .jira-token
   node <技能目录>/scripts/jira-cli.mjs selftest
-  # 强制类型预检：只有类型为「故事」才继续（见 §1）
+  # 强制预检：类型为「故事」且产品归属在 Bot/Call/See/Pal/Learn/Aiforce 内才继续（见 §1）
   node <技能目录>/scripts/jira-cli.mjs precheck <KEY|URL>
   # 读取需求单并输出紧凑 Markdown 摘要（判定依据）
   node <技能目录>/scripts/jira-cli.mjs get <KEY|URL>
@@ -97,9 +97,14 @@ metadata:
 
   在该环境中不要尝试调用 `node_repl`，也不要因为缺少桌面工具而降低判定标准。
 
-### 1. 单据类型预检（强制，先做）
+### 1. 单据类型与产品归属预检（强制，先做）
 
-**只处理类型为「故事」的 Jira 单子。** 在读取附件、调用任何其他技能、写评论草稿或生成压缩包之前，先执行：
+**只处理同时满足以下两个条件的 Jira 单子：**
+
+1. 类型（`issuetype`）为「故事」；
+2. 产品归属（`产品归属`，旧单兼容 `问题发现产品` / `发现产品`）属于 `Bot`、`Call`、`See`、`Pal`、`Learn`、`Aiforce` 之一（大小写不敏感，多值字段只要命中一个即可）。
+
+在读取附件、调用任何其他技能、写评论草稿或生成压缩包之前，先执行：
 
 ```bash
 node <技能目录>/scripts/jira-cli.mjs precheck <KEY|URL>
@@ -113,15 +118,22 @@ node <技能目录>/scripts/jira-cli.mjs precheck <KEY|URL>
   "key": "CALL-1446",
   "issueType": "故事",
   "expected": "故事",
+  "typeSupported": true,
+  "product": "Call",
+  "productField": "产品归属",
+  "products": ["Call"],
+  "expectedProducts": ["Bot", "Call", "See", "Pal", "Learn", "Aiforce"],
+  "productSupported": true,
   "supported": true,
   "status": "需求设计",
   "summary": "..."
 }
 ```
 
-- `supported: true`（类型为 `故事`；英文站点返回 `Story` 时视为同一种类型）→ 继续 §2。
-- `supported: false` 或类型为空 → **立即停止**：不生成评论草稿、不调用 `review-jira-req`、不调用 `review-jira-design`、不打包、不写任何文件；只在对话里说明「该单类型为 X，不是『故事』，按规则跳过，未对 Jira 做任何操作」。
-- 不要用概要、标签、模块或描述去猜测类型；只认 Jira 的 `issuetype` 字段。
+- `supported: true`（`typeSupported=true` 且 `productSupported=true`）→ 继续 §2。
+- `supported: false` 或任一字段为空 → **立即停止**：不生成评论草稿、不调用 `review-jira-req`、不调用 `review-jira-design`、不打包、不写任何文件；只在对话里说明「该单类型为 X、产品归属为 Y，不在『故事 + Bot/Call/See/Pal/Learn/Aiforce』范围内，按规则跳过，未对 Jira 做任何操作」。
+- 不要用概要、标签、模块或描述去猜测类型与产品归属；只认 Jira 的 `issuetype` 与产品归属字段。字段缺失一律视为不满足。
+- `productField` 说明值取自哪个候选字段（`产品归属` / `问题发现产品` / `发现产品`），便于排查取数异常。
 
 ### 2. 解析单号
 
@@ -141,7 +153,7 @@ nodeRepl.write(JSON.stringify(st, null, 1));
 自检通过后取数：
 
 ```javascript
-const check = await j.precheckIssueType("CALL-1446");   // 类型不是「故事」时必须立即停止
+const check = await j.precheckIssueType("CALL-1446");   // 类型不是「故事」或产品归属不在清单内时必须立即停止
 const issue = await j.getIssue("CALL-1446");            // 也接受完整 URL
 nodeRepl.write(j.renderIssueMarkdown(issue));           // 紧凑摘要，不要直接打印原始 JSON
 const files = await j.downloadAttachments(issue.key, "<工作目录>\\work\\jira-gate\\CALL-1446\\attachments", { issue });
@@ -176,7 +188,7 @@ const owner = await j.resolveFlowOwner(issue);          // 只读：拿到建议
 没有配置令牌时，用已登录的应用内浏览器打开需求单：
 
 1. `cua.createBrowserTab("iab", issueUrl)` 打开单子。
-2. 用 `tab.playwright.evaluate(() => document.body.innerText)` 取正文，可拿到概要与描述、附件列表、问题链接、子任务、评论；**同时确认页面上的「类型」字段是「故事」**，不是就立即停止。
+2. 用 `tab.playwright.evaluate(() => document.body.innerText)` 取正文，可拿到概要与描述、附件列表、问题链接、子任务、评论；**同时确认页面上的「类型」字段是「故事」、「产品归属」属于 Bot/Call/See/Pal/Learn/Aiforce 之一**，任一项不满足就立即停止。
 3. 附件：点击附件链接触发下载，再对下载目录跑 `extract.py`（压缩包会自动解压，见上一节）。
 4. 预演版**不要在页面评论区输入或提交任何内容**；评论只落本地草稿文件。
 
@@ -362,7 +374,7 @@ node <技能目录>/scripts/pack-deliverables.mjs --key <KEY> \
 }
 ```
 
-- `conclusion` 只能写最终业务结论：`通过` 或 `退回补充`；单据类型不是「故事」而提前结束时写 `不适用`。
+- `conclusion` 只能写最终业务结论：`通过` 或 `退回补充`；类型不是「故事」或产品归属不在清单内而提前结束时写 `不适用`。
 - `summary` 写清预演结论、设计准入结论与压缩包文件名，不超过 500 字；`blockingCount` 是最终阻断项数量（没有阻断项写 `0`）。
 - 打包失败等运营性失败不要伪造「通过」；无法形成业务结论时可以不写该文件。
 - 该文件只用于调用统计，不是交付物，也不放进压缩包；平台读取入库后会自动删除，不要放进 `work/jira-gate/<KEY>/` 或 `outputs/`。
@@ -526,7 +538,7 @@ h4. SHOULD（不阻断 G1，记录取舍）
 
 ## 硬性约束
 
-- **只处理类型为「故事」的单子**；类型不符时立即停止，不生成任何交付物，也不调用 `review-jira-req` / `review-jira-design`。
+- **只处理类型为「故事」且产品归属属于 Bot/Call/See/Pal/Learn/Aiforce 之一的单子**；任一项不符时立即停止，不生成任何交付物，也不调用 `review-jira-req` / `review-jira-design`。
 - **对 Jira 严格只读**：不写评论、不写字段、不上传附件、不流转状态、不指派经办人、不实际 `@` 人。脚本层已不提供写入口，不要绕过或新增写能力。
 - 判定标准必须是 [references/checklist.md](references/checklist.md) 的 PRD 需求准入 Checklist：8 项 `MUST` + 命中的 `CONDITIONAL`；不使用任何旧版清单或自创标准。
 - 交付物只有 §12 的压缩包（评论草稿 + 需求评审报告 + 原型设计准入报告）；对话里给出摘要与压缩包绝对路径。
