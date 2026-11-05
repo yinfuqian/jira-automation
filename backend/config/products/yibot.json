@@ -1,0 +1,29 @@
+{
+  "key": "yibot",
+  "name": "YiBot",
+  "order": 50,
+  "description": "YiBot 产品线",
+  "aliases": ["yi bot"],
+  "repos": {
+    "adaptor-java": "https://code.in.wezhuiyi.com/yibot/adaptor-java.git",
+    "yibot-management": "https://code.in.wezhuiyi.com/yibot/yibot-management.git",
+    "yibot-server": "https://code.in.wezhuiyi.com/yibot/web/yibot-server.git",
+    "yibot-view": "https://code.in.wezhuiyi.com/yibot/web/yibot-view.git",
+    "zyzx-java": "https://code.in.wezhuiyi.com/yibot/zyzx-java.git"
+  },
+  "projects": [
+    {
+      "key": "yibot-main",
+      "name": "主线",
+      "description": "YiBot 产品主线",
+      "modules": {
+        "adaptor-java": "master",
+        "yibot-management": "master",
+        "yibot-server": "master",
+        "yibot-view": "master",
+        "zyzx-java": "master"
+      },
+      "aliases": ["yibot 主线"]
+    }
+  ]
+}

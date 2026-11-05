@@ -125,26 +125,49 @@ def group_message(content, msgid="m-1", userid="user-1", chatid="chat-1"):
 class SettingsTest(unittest.TestCase):
     """校验项目映射与序号选择。"""
 
-    def test_repository_config_matches_excel_mapping(self):
-        """仓库内配置应与 Excel 的 5 个项目、11 个模块口径一致。"""
+    def test_repository_config_uses_product_first_naming(self):
+        """每个产品独立配置，项目名称自动带产品前缀。"""
         settings = load_settings()
         names = [item.name for item in settings.projects]
         self.assertEqual(
-            names, ["call3.1主线", "call3.1招商证券", "call3.0兴业银行", "call3.0天宏基金", "call3.0富国基金"]
+            names,
+            [
+                "ChatCall 3.1 主线",
+                "ChatCall 3.1 招商证券",
+                "ChatCall 3.0 兴业银行",
+                "ChatCall 3.0 天弘基金",
+                "ChatCall 3.0 富国基金",
+                "ChatSee 主线",
+                "ChatPal 主线",
+                "Bot 主线",
+                "YiBot 主线",
+                "Eco 主线",
+                "Falcon 主线",
+                "AIFORCE 主线",
+            ],
         )
-        # 主线 10 个模块、招商 9 个、其余各 5 个（空单元格表示不使用该模块）。
-        self.assertEqual([len(p.module_items()) for p in settings.projects], [10, 9, 5, 5, 5])
-        main = settings.project_by_key("yicall-3.1-main")
+        self.assertEqual(
+            [len(p.module_items()) for p in settings.projects],
+            [10, 9, 5, 5, 5, 5, 4, 8, 5, 8, 4, 2],
+        )
+        self.assertEqual(
+            [product.name for product in settings.products],
+            ["ChatCall", "ChatSee", "ChatPal", "Bot", "YiBot", "Eco", "Falcon", "AIFORCE"],
+        )
+        self.assertNotIn("hxk", {product.key for product in settings.products})
+        main = settings.project_by_key("chatcall-3.1-main")
         self.assertEqual(main.modules["llm-management"], "release/3.2")
         self.assertNotIn("yicall-management-system", main.modules)
-        xyyh = settings.project_by_key("yicall-3.0-xyyh")
+        xyyh = settings.project_by_key("chatcall-3.0-xyyh")
         self.assertEqual(xyyh.modules["fe-yicall-web"], "release/3.1-xyyh")
 
     def test_project_by_index_and_out_of_range(self):
-        """序号按 1 起始解析，越界返回 None。"""
+        """产品和产品内项目都按 1 起始编号。"""
         settings = load_settings()
-        self.assertEqual(settings.project_by_index("2").key, "yicall-3.1-zszq")
-        self.assertIsNone(settings.project_by_index("9"))
+        self.assertEqual(settings.product_by_index("1").key, "chatcall")
+        self.assertEqual(settings.product_by_index("8").key, "aiforce")
+        self.assertEqual(settings.product_by_index("1").project_by_index("2").key, "chatcall-3.1-zszq")
+        self.assertIsNone(settings.product_by_index("9"))
         self.assertIsNone(settings.project_by_index("abc"))
 
     def test_every_configured_module_has_an_explicit_repo_url(self):
@@ -171,12 +194,19 @@ class SettingsTest(unittest.TestCase):
             "https://code.in.wezhuiyi.com/asr-tts-adaptor/asr-tts-adaptor.git",
         )
 
-    def test_menu_lists_every_project(self):
-        """菜单必须包含全部项目与切换提示。"""
+    def test_menu_lists_every_product_before_projects(self):
+        """第一步菜单只列产品，项目菜单只列当前产品下的项目。"""
         menu = load_settings().menu_text()
-        for name in ["call3.1主线", "call3.1招商证券", "call3.0兴业银行"]:
+        for name in ["ChatCall", "ChatSee", "ChatPal", "Bot", "YiBot", "Eco", "Falcon", "AIFORCE"]:
             self.assertIn(name, menu)
-        self.assertIn("切换项目", menu)
+        self.assertIn("第一步", menu)
+        self.assertIn("切换产品", menu)
+        self.assertNotIn("HXK", menu)
+        settings = load_settings()
+        project_menu = settings.project_menu_text(settings.product_by_key("chatcall"))
+        self.assertIn("第二步", project_menu)
+        self.assertIn("ChatCall 3.1 招商证券", project_menu)
+        self.assertNotIn("ChatSee", project_menu)
         # 群聊只有 @机器人 才会收到回调，菜单必须明确要求重新 @。
         self.assertIn("@我", menu)
 
@@ -195,8 +225,8 @@ class SettingsTest(unittest.TestCase):
         """默认从代码目录读取配置，镜像内即 /app/config/chatbot.json，不依赖挂载。"""
         settings = load_settings()
         self.assertIn("chatbot.json", settings.source)
-        resolved = Path(settings.source.split("（")[-1].rstrip("）"))
-        self.assertEqual(resolved, (BACKEND_DIR / "config" / "chatbot.json").resolve())
+        self.assertIn(str((BACKEND_DIR / "config" / "chatbot.json").resolve()), settings.source)
+        self.assertIn(str((BACKEND_DIR / "config" / "products").resolve()), settings.source)
 
     def test_answer_uses_container_isolated_sandbox(self):
         """容器已提供隔离，问答不能使用依赖 bwrap 的只读沙箱。"""
@@ -359,7 +389,7 @@ class PromptTest(unittest.TestCase):
                 )
             ],
         )
-        project = SimpleNamespace(name="call3.1主线")
+        project = SimpleNamespace(name="ChatCall 3.1 主线")
         return build_prompt("这个功能怎么实现的", project, workspace, max_answer_chars)
 
     def test_prompt_targets_product_readers_and_limits_evidence(self):
@@ -605,18 +635,18 @@ class SessionTest(unittest.TestCase):
 
     def test_project_roundtrip_and_clear(self):
         """选中项目后可读回，清除后为空。"""
-        self.store.set_project("chat-1", "user-1", "yicall-3.1-main")
-        self.assertEqual(self.store.get_project_key("chat-1", "user-1"), "yicall-3.1-main")
+        self.store.set_project("chat-1", "user-1", "chatcall-3.1-main")
+        self.assertEqual(self.store.get_project_key("chat-1", "user-1"), "chatcall-3.1-main")
         self.store.clear_project("chat-1", "user-1")
         self.assertEqual(self.store.get_project_key("chat-1", "user-1"), "")
 
     def test_pending_question_survives_project_selection(self):
         """待回答问题在选中项目后仍可取出，且只消费一次。"""
         self.store.set_pending_question("chat-1", "user-1", "回调入口在哪")
-        self.store.set_project("chat-1", "user-1", "yicall-3.1-main")
+        self.store.set_project("chat-1", "user-1", "chatcall-3.1-main")
         self.assertEqual(self.store.pop_pending_question("chat-1", "user-1"), "回调入口在哪")
         self.assertEqual(self.store.pop_pending_question("chat-1", "user-1"), "")
-        self.assertEqual(self.store.get_project_key("chat-1", "user-1"), "yicall-3.1-main")
+        self.assertEqual(self.store.get_project_key("chat-1", "user-1"), "chatcall-3.1-main")
 
     def test_clear_project_keeps_pending_question(self):
         """切换项目只清除选择，挂起的问题要保留到重新选完项目。"""
@@ -672,49 +702,101 @@ class GatewayTest(unittest.IsolatedAsyncioTestCase):
         self.assertIn("群里", self.conn.markdowns[0])
 
     async def test_question_without_project_shows_menu(self):
-        """未选项目时先返回菜单并暂存问题，不投递任务。"""
+        """未选产品时先返回产品菜单并暂存问题，不投递任务。"""
         gateway = self.build()
         await gateway._handle_message(group_message("@Bot 回调入口在哪"), "req-1")
         self.assertEqual(self.enqueued, [])
-        self.assertIn("请先选择", self.conn.markdowns[0])
+        self.assertIn("第一步", self.conn.markdowns[0])
+        self.assertIn("ChatCall", self.conn.markdowns[0])
         self.assertIn("回调入口在哪", self.conn.markdowns[0])
         self.assertEqual(self.store.pop_pending_question("chat-1", "user-1"), "回调入口在哪")
 
-    async def test_knowledge_question_without_project_enqueues_directly(self):
-        """知识库启用后，未选代码项目也必须立即投递，不能被项目菜单拦截。"""
+    async def test_knowledge_question_without_product_is_still_blocked_by_selection(self):
+        """即使知识库启用，也必须先完成产品和项目选择。"""
         gateway = self.build(knowledge_enabled=True)
         await gateway._handle_message(group_message("@Bot 回调入口在哪"), "req-1")
 
+        self.assertEqual(self.enqueued, [])
+        self.assertEqual(self.conn.streams, [])
+        self.assertIn("第一步", self.conn.markdowns[0])
+        self.assertEqual(self.store.pop_pending_question("chat-1", "user-1"), "回调入口在哪")
+
+    async def test_fault_question_requires_product_and_project_selection(self):
+        """故障问题也要严格先选产品、再选项目，不能跳过两级菜单。"""
+        gateway = self.build(knowledge_enabled=True)
+        await gateway._handle_message(
+            group_message("@Bot 招商证券登录一直报超时，帮我分析一下根因"),
+            "req-1",
+        )
+
+        self.assertEqual(self.enqueued, [])
+        self.assertIn("第一步", self.conn.markdowns[0])
+
+        await gateway._handle_message(group_message("@Bot 1", msgid="m-2"), "req-2")
+        self.assertEqual(self.enqueued, [])
+        self.assertIn("第二步", self.conn.markdowns[-1])
+
+        await gateway._handle_message(group_message("@Bot 2", msgid="m-3"), "req-3")
         self.assertEqual(len(self.enqueued), 1)
-        self.assertEqual(self.enqueued[0]["project_key"], "")
-        self.assertEqual(self.enqueued[0]["project_name"], "Confluence 知识库")
-        self.assertEqual(self.enqueued[0]["question"], "回调入口在哪")
-        self.assertEqual(self.conn.markdowns, [])
-        self.assertIn("Confluence 知识库", self.conn.streams[0]["content"])
-        self.assertEqual(self.store.pop_pending_question("chat-1", "user-1"), "")
+        payload = self.enqueued[0]
+        self.assertEqual(payload["project_key"], "chatcall-3.1-zszq")
+        self.assertEqual(payload["answer_mode"], "fault")
+        self.assertEqual(self.store.get_project_key("chat-1", "user-1"), "chatcall-3.1-zszq")
+        self.assertIn("故障分析", self.conn.streams[0]["content"])
+
+    async def test_selected_project_routes_normal_question_to_code_even_with_knowledge(self):
+        """已选项目后的普通代码问题不能被 Confluence 队列抢走。"""
+        gateway = self.build(knowledge_enabled=True)
+        self.store.set_project("chat-1", "user-1", "chatcall-3.1-main")
+        await gateway._handle_message(group_message("@Bot 回调入口在哪个模块"), "req-1")
+
+        self.assertEqual(len(self.enqueued), 1)
+        self.assertEqual(self.enqueued[0]["project_key"], "chatcall-3.1-main")
+        self.assertEqual(self.enqueued[0]["answer_mode"], "code")
+
+    async def test_select_product_and_project_after_fault_question_keeps_fault_mode(self):
+        """先提故障问题再完成两级选择时，仍要进入故障分析。"""
+        gateway = self.build(knowledge_enabled=True)
+        await gateway._handle_message(
+            group_message("@Bot aiforce2 登录一直报错，帮我分析根因", msgid="m-1"),
+            "req-1",
+        )
+        self.assertEqual(self.enqueued, [])
+        self.assertIn("第一步", self.conn.markdowns[0])
+
+        await gateway._handle_message(group_message("@Bot 1", msgid="m-2"), "req-2")
+        self.assertEqual(self.enqueued, [])
+        await gateway._handle_message(group_message("@Bot 1", msgid="m-3"), "req-3")
+
+        self.assertEqual(len(self.enqueued), 1)
+        self.assertEqual(self.enqueued[0]["answer_mode"], "fault")
+        self.assertEqual(self.enqueued[0]["question"], "aiforce2 登录一直报错，帮我分析根因")
 
     async def test_select_project_after_question_answers_pending_question(self):
-        """先提问再选项目时，直接沿用原问题发起分析，不再要求重复提问。"""
+        """先提问再完成产品和项目选择时，直接沿用原问题。"""
         gateway = self.build()
         await gateway._handle_message(group_message("@Bot 结果回调入口在哪", msgid="m-1"), "req-1")
         await gateway._handle_message(group_message("@Bot 1", msgid="m-2"), "req-2")
+        self.assertEqual(self.enqueued, [])
+        await gateway._handle_message(group_message("@Bot 1", msgid="m-3"), "req-3")
 
         self.assertEqual(len(self.enqueued), 1)
-        self.assertEqual(self.enqueued[0]["project_key"], "yicall-3.1-main")
+        self.assertEqual(self.enqueued[0]["project_key"], "chatcall-3.1-main")
         self.assertEqual(self.enqueued[0]["question"], "结果回调入口在哪")
-        self.assertEqual(self.store.get_project_key("chat-1", "user-1"), "yicall-3.1-main")
+        self.assertEqual(self.store.get_project_key("chat-1", "user-1"), "chatcall-3.1-main")
         self.assertEqual(self.store.pop_pending_question("chat-1", "user-1"), "")
 
     async def test_switch_project_keeps_pending_question(self):
-        """先提问再切换项目时，重新选完项目仍直接回答原问题。"""
+        """先提问再切换产品时，重新完成两级选择仍直接回答原问题。"""
         gateway = self.build()
         await gateway._handle_message(group_message("@Bot 结果回调入口在哪", msgid="m-1"), "req-1")
         await gateway._handle_message(group_message("@Bot 切换项目", msgid="m-2"), "req-2")
         self.assertIn("结果回调入口在哪", self.conn.markdowns[-1])
 
-        await gateway._handle_message(group_message("@Bot 2", msgid="m-3"), "req-3")
+        await gateway._handle_message(group_message("@Bot 1", msgid="m-3"), "req-3")
+        await gateway._handle_message(group_message("@Bot 2", msgid="m-4"), "req-4")
         self.assertEqual(len(self.enqueued), 1)
-        self.assertEqual(self.enqueued[0]["project_key"], "yicall-3.1-zszq")
+        self.assertEqual(self.enqueued[0]["project_key"], "chatcall-3.1-zszq")
         self.assertEqual(self.enqueued[0]["question"], "结果回调入口在哪")
 
     async def test_enqueue_failure_ends_stream_and_cleans_context(self):
@@ -722,7 +804,7 @@ class GatewayTest(unittest.IsolatedAsyncioTestCase):
         settings = build_settings()
         redis = FakeRedis()
         store = ChatSessionStore(redis, ttl_seconds=600)
-        store.set_project("chat-1", "user-1", "yicall-3.1-main")
+        store.set_project("chat-1", "user-1", "chatcall-3.1-main")
 
         def fail(_payload):
             """模拟 Celery Broker 不可用。"""
@@ -738,12 +820,15 @@ class GatewayTest(unittest.IsolatedAsyncioTestCase):
         self.assertFalse(any(key.startswith("chatbot:stream:") for key in redis.data))
 
     async def test_select_project_by_index(self):
-        """回复序号即可选中项目，并回显模块分支。"""
+        """第一次序号选产品，第二次序号选项目并回显模块分支。"""
         gateway = self.build()
         await gateway._handle_message(group_message("@Bot 1"), "req-1")
-        self.assertEqual(self.store.get_project_key("chat-1", "user-1"), "yicall-3.1-main")
-        self.assertIn("call3.1主线", self.conn.markdowns[0])
-        self.assertIn("release/3.1", self.conn.markdowns[0])
+        self.assertEqual(self.store.get_product_key("chat-1", "user-1"), "chatcall")
+        self.assertIn("第二步", self.conn.markdowns[0])
+        await gateway._handle_message(group_message("@Bot 1", msgid="m-2"), "req-2")
+        self.assertEqual(self.store.get_project_key("chat-1", "user-1"), "chatcall-3.1-main")
+        self.assertIn("ChatCall 3.1 主线", self.conn.markdowns[-1])
+        self.assertIn("release/3.1", self.conn.markdowns[-1])
 
     async def test_duplicate_msgid_is_ignored(self):
         """重复推送的 msgid 不再触发任何回复。"""
@@ -756,24 +841,27 @@ class GatewayTest(unittest.IsolatedAsyncioTestCase):
     async def test_question_enqueues_task_and_starts_stream(self):
         """选中项目后提问会先推流式占位，再投递 Celery。"""
         gateway = self.build()
-        self.store.set_project("chat-1", "user-1", "yicall-3.0-xyyh")
+        self.store.set_project("chat-1", "user-1", "chatcall-3.0-xyyh")
         await gateway._handle_message(group_message("@Bot 结果回调在哪"), "req-1")
 
         self.assertEqual(len(self.enqueued), 1)
         payload = self.enqueued[0]
-        self.assertEqual(payload["project_key"], "yicall-3.0-xyyh")
+        self.assertEqual(payload["project_key"], "chatcall-3.0-xyyh")
         self.assertEqual(payload["question"], "结果回调在哪")
         self.assertTrue(payload["task_id"].startswith("cb-"))
         self.assertEqual(self.conn.streams[0]["finish"], False)
-        self.assertIn("call3.0兴业银行", self.conn.streams[0]["content"])
+        self.assertIn("ChatCall 3.0 兴业银行", self.conn.streams[0]["content"])
 
     async def test_switch_project_clears_selection(self):
-        """「切换项目」清空选择并重新给菜单。"""
+        """「切换项目/产品」清空两级选择并重新给产品菜单。"""
         gateway = self.build()
-        self.store.set_project("chat-1", "user-1", "yicall-3.1-main")
+        self.store.set_project("chat-1", "user-1", "chatcall-3.1-main")
+        self.store.set_product("chat-1", "user-1", "chatcall")
+        self.store.set_project("chat-1", "user-1", "chatcall-3.1-main")
         await gateway._handle_message(group_message("@Bot 切换项目"), "req-1")
         self.assertEqual(self.store.get_project_key("chat-1", "user-1"), "")
-        self.assertIn("请先选择", self.conn.markdowns[0])
+        self.assertEqual(self.store.get_product_key("chat-1", "user-1"), "")
+        self.assertIn("第一步", self.conn.markdowns[0])
 
     async def test_enter_chat_sends_welcome(self):
         """进入单聊事件要提示用户去群里使用，不能展示项目菜单。"""
@@ -781,7 +869,7 @@ class GatewayTest(unittest.IsolatedAsyncioTestCase):
         await gateway._handle_event({"event": {"eventtype": "enter_chat"}}, "req-1")
         self.assertEqual(len(self.conn.welcomes), 1)
         self.assertIn("群里", self.conn.welcomes[0])
-        self.assertNotIn("call3.1主线", self.conn.welcomes[0])
+        self.assertNotIn("ChatCall 3.1 主线", self.conn.welcomes[0])
     async def test_deliver_typewriter_finishes_stream(self):
         """正常结果按分段刷新，最后一条 finish=True 且是完整内容。"""
         gateway = self.build(typewriter_chunk_chars=10, typewriter_interval_ms=500, typewriter_max_chunks=5)
@@ -930,14 +1018,18 @@ class RoutesTest(unittest.TestCase):
         cls.app = create_test_app()
 
     def test_projects_endpoint_returns_all_projects(self):
-        """接口应返回 Excel 里的 5 个项目及其模块分支。"""
+        """接口应按产品分组返回项目，同时保留扁平项目列表。"""
         response = self.app.test_client().get("/chatbot/projects")
         self.assertEqual(response.status_code, 200)
         payload = response.get_json()
         self.assertTrue(payload["ok"])
-        self.assertEqual(payload["total"], 5)
+        self.assertEqual(payload["product_total"], 8)
+        self.assertEqual(payload["total"], 12)
+        self.assertEqual(payload["products"][0]["name"], "ChatCall")
+        self.assertEqual(payload["products"][3]["name"], "Bot")
+        self.assertNotIn("hxk", [product["key"] for product in payload["products"]])
         first = payload["items"][0]
-        self.assertEqual(first["name"], "call3.1主线")
+        self.assertEqual(first["name"], "ChatCall 3.1 主线")
         self.assertEqual(len(first["modules"]), 10)
 
     def test_health_endpoint_reports_config_state(self):
@@ -945,7 +1037,8 @@ class RoutesTest(unittest.TestCase):
         response = self.app.test_client().get("/chatbot/health")
         self.assertEqual(response.status_code, 200)
         payload = response.get_json()
-        self.assertEqual(payload["project_count"], 5)
+        self.assertEqual(payload["product_count"], 8)
+        self.assertEqual(payload["project_count"], 12)
         self.assertIn("gateway", payload)
 
     def test_create_app_publishes_redis_client_to_extensions(self):

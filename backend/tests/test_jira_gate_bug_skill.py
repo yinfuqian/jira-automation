@@ -68,6 +68,11 @@ class DefectGateSkillDefinitionTests(unittest.TestCase):
         for required in (
             "完整性检查",
             "完整性检查必须同时检查可辨认图片",
+            "部署清单",
+            "模块与版本",
+            "持续存在",
+            "时间豁免判定",
+            "Jira 模块/组件字段为空不等于模块缺失",
             "模块映射丢失，已跳过检查",
             "scope-mapping-missing",
             "[~yinfuqian1193]",
@@ -79,7 +84,7 @@ class DefectGateSkillDefinitionTests(unittest.TestCase):
             "HTML",
             "gate-set",
             "attach",
-            "jira-cli.mjs assign",
+            "映射缺失分支只写评论",
             "ANALYSIS_API_TOKEN",
             "rejectTransitionName",
             "打回流转后经办人必须是提单人",
@@ -119,6 +124,10 @@ class DefectGateSkillDefinitionTests(unittest.TestCase):
             "明确缺陷不需要额外提供日志信息",
             "可辨认图片",
             "可辨认图片中的模块/组件",
+            "持续存在",
+            "部署清单",
+            "模块与版本",
+            "不允许上线",
             "不要求修复版本",
             "不要求环境入口或操作版本",
             "mappingOwner",
@@ -298,8 +307,8 @@ console.log(JSON.stringify(resolveConfiguredScope(
         self.assertEqual(payload["rule"], "version-map:6.1.15")
 
     @unittest.skipIf(NODE_BIN is None, "需要 node 运行时才能执行技能脚本")
-    def test_missing_scope_mapping_skips_check_and_mentions_mapping_owner(self):
-        """工单已有模块但配置缺映射时，必须通知维护人并跳过检查，不能按缺参打回。"""
+    def test_missing_scope_mapping_only_comments_without_assigning(self):
+        """工单已有模块但配置缺映射时，只评论通知维护人，不改状态或经办人。"""
         scope_url = (SKILL_DIR / "scripts" / "scope.mjs").as_uri()
         with tempfile.TemporaryDirectory() as temp_dir:
             config_path = Path(temp_dir) / "scope-mapping.json"
@@ -341,8 +350,10 @@ console.log(JSON.stringify(failure));
         self.assertIn("[~yinfuqian1193]", payload["comment"])
         self.assertIn("补齐映射内容", payload["comment"])
         self.assertIn("operation-task", payload["comment"])
-        self.assertIn("本单会转派给上述映射维护人", payload["comment"])
         self.assertIn("不改变工作流状态", payload["comment"])
+        self.assertIn("不修改当前经办人", payload["comment"])
+        self.assertNotIn("转派给", payload["comment"])
+        self.assertNotIn("jira-cli.mjs assign", payload["comment"])
         self.assertNotIn("打回", payload["comment"])
 
     @unittest.skipIf(NODE_BIN is None, "需要 node 运行时才能执行技能脚本")
@@ -1184,8 +1195,8 @@ console.log(JSON.stringify(resolved));
         }])
 
     @unittest.skipIf(NODE_BIN is None, "需要 node 运行时才能执行技能脚本")
-    def test_fault_scope_rejects_ambiguous_jira_values(self):
-        """Jira 模块或版本有多个候选时必须返回候选，不能猜第一个。"""
+    def test_fault_scope_keeps_multiple_jira_modules_and_rejects_ambiguous_versions(self):
+        """Jira 有多个模块时保留全部，第一条只作分析入口；多个版本仍不能猜测。"""
         jira_url = (SKILL_DIR / "scripts" / "jira.mjs").as_uri()
         driver = """
 const { normalizeIssue, extractFaultAnalysisScope } = await import("__JIRA__");
@@ -1209,11 +1220,15 @@ console.log(JSON.stringify(extractFaultAnalysisScope(issue)));
         payload = json.loads(output.strip().splitlines()[-1])
 
         self.assertEqual(payload["product"], "")
-        self.assertEqual(payload["module"], "")
+        self.assertEqual(payload["module"], "see-task")
         self.assertEqual(payload["version"], "")
-        self.assertEqual(payload["candidates"]["module"], ["see-task", "see-common"])
+        self.assertEqual(payload["relatedModules"], [{
+            "module": "see-common",
+            "version": "",
+            "source": "Jira:模块/组件",
+        }])
         self.assertEqual(payload["candidates"]["version"], ["3.2.1", "3.2.2"])
-        self.assertEqual(payload["missing"], ["product", "module", "version"])
+        self.assertEqual(payload["missing"], ["product", "version"])
 
     @unittest.skipIf(NODE_BIN is None, "需要 node 运行时才能执行技能脚本")
     def test_fault_scope_extracts_module_version_from_description(self):
@@ -1358,8 +1373,8 @@ console.log(JSON.stringify(extractFaultAnalysisScope(issue, { version: "3.2" }))
         self.assertEqual(payload["missing"], [])
 
     @unittest.skipIf(NODE_BIN is None, "需要 node 运行时才能执行技能脚本")
-    def test_fault_scope_accepts_agent_recognized_image_module_overrides(self):
-        """图片中的模块名、主 Tag 和关联模块应由 Agent 识别后写入调用方输入。"""
+    def test_fault_scope_accepts_agent_recognized_deployment_manifest_modules(self):
+        """部署清单截图中的仓库/模块:Tag 应成对转为分析入口与关联模块。"""
         jira_url = (SKILL_DIR / "scripts" / "jira.mjs").as_uri()
         driver = """
 const { normalizeIssue, extractFaultAnalysisScope } = await import("__JIRA__");
@@ -1376,11 +1391,11 @@ const issue = normalizeIssue({
   },
 });
 console.log(JSON.stringify(extractFaultAnalysisScope(issue, {
-  module: "operation-task",
-  version: "v2.3.73-update",
+  module: "bot-dialog",
+  version: "v0.5.0-ZYKJ20260089-rc1",
   relatedModules: [
-    { module: "operation-admin", version: "v2.3.68" },
-    { module: "dialogos", version: "v1.5.20" },
+    { module: "bot-gateway", version: "v0.2.0-ZYKJ20260089-rc12" },
+    { module: "bot-portal", version: "v0.4.0-ZYKJ20260089-rc2" },
   ],
 })));
 """.replace("__JIRA__", jira_url)
@@ -1388,13 +1403,13 @@ console.log(JSON.stringify(extractFaultAnalysisScope(issue, {
         output = self.run_node(driver)
         payload = json.loads(output.strip().splitlines()[-1])
 
-        self.assertEqual(payload["module"], "operation-task")
-        self.assertEqual(payload["version"], "v2.3.73-update")
+        self.assertEqual(payload["module"], "bot-dialog")
+        self.assertEqual(payload["version"], "v0.5.0-ZYKJ20260089-rc1")
         self.assertEqual(payload["sources"]["module"], "调用方输入")
         self.assertEqual(payload["sources"]["version"], "调用方输入")
         self.assertEqual(payload["relatedModules"], [
-            {"module": "operation-admin", "version": "v2.3.68", "source": "调用方输入:可辨认图片"},
-            {"module": "dialogos", "version": "v1.5.20", "source": "调用方输入:可辨认图片"},
+            {"module": "bot-gateway", "version": "v0.2.0-ZYKJ20260089-rc12", "source": "调用方输入:可辨认图片"},
+            {"module": "bot-portal", "version": "v0.4.0-ZYKJ20260089-rc2", "source": "调用方输入:可辨认图片"},
         ])
         self.assertEqual(payload["missing"], [])
 
@@ -1522,7 +1537,7 @@ console.log(JSON.stringify({ calls, result }));
 
     @unittest.skipIf(NODE_BIN is None, "需要 node 运行时才能执行技能脚本")
     def test_set_issue_assignee_uses_login_name(self):
-        """映射缺失转派时只能发送登录名，不能把中文展示名交给 Jira。"""
+        """显式转派工具只能发送登录名，不能把中文展示名交给 Jira。"""
         jira_url = (SKILL_DIR / "scripts" / "jira.mjs").as_uri()
         driver = """
 const { setIssueAssignee } = await import("__JIRA__");

@@ -18,7 +18,7 @@ from celery.signals import worker_ready
 import extensions
 from extensions import celery, db
 
-from . import answer, knowledge, knowledge_answer, repos
+from . import answer, fault_analysis, knowledge, knowledge_answer, repos
 from .models.knowledge import ChatbotAnswerSource, KnowledgeSyncRun
 from .models.model import ChatbotQuestion
 from .settings import DEFAULT_REPLY_CHANNEL, load_settings
@@ -359,6 +359,37 @@ def install_knowledge_startup_sync(app, celery_app):
     return True
 
 
+def _fault_background(question, project, settings):
+    """为故障分析检索少量 Confluence 背景资料；失败时降级为纯代码分析。"""
+    config = settings.fault_analysis
+    if not config.include_knowledge:
+        return ""
+    if not settings.knowledge.enabled or not settings.confluence.configured:
+        return ""
+    try:
+        hits = knowledge.retrieve_hits(
+            question,
+            project,
+            settings,
+            limit=config.knowledge_chunks,
+        )
+        if not hits:
+            document_ids = knowledge.direct_confluence_search(question, settings)
+            if document_ids:
+                hits = knowledge.retrieve_hits(
+                    question,
+                    project,
+                    settings,
+                    document_ids=document_ids,
+                    limit=config.knowledge_chunks,
+                )
+        return knowledge_answer.build_evidence(hits, max_total_chars=6000)
+    except Exception:  # noqa: BLE001 - 背景资料失败不能阻断代码分析
+        logger.warning("故障分析检索 Confluence 背景资料失败", exc_info=True)
+        db.session.rollback()
+        return ""
+
+
 @celery.task(bind=True, name="chatbot.answer")
 def answer_task(self, payload):
     """执行一次代码问答：检出代码 → Codex 分析 → 回写记录 → 通知网关。"""
@@ -412,13 +443,37 @@ def answer_task(self, payload):
         else:
             workspace_root = _workspace_root(config, task_id)
             lock_client = extensions.redis
-            workspace = answer.prepare_workspace(project, workspace_root, settings, lock_client)
+            mode = str(payload.get("answer_mode") or "code").strip().lower()
+            modules = None
+            background = ""
+            if mode == "fault":
+                modules = fault_analysis.select_modules(
+                    project,
+                    payload.get("question"),
+                    settings.fault_analysis.max_modules,
+                )
+                background = _fault_background(payload.get("question"), project, settings)
+                logger.info(
+                    "故障分析范围：task_id=%s project=%s modules=%s",
+                    task_id,
+                    project.key,
+                    ",".join(module for module, _branch in modules),
+                )
+            workspace = answer.prepare_workspace(
+                project,
+                workspace_root,
+                settings,
+                lock_client,
+                modules=modules,
+            )
             result = answer.run_answer(
                 payload.get("question"),
                 project,
                 workspace,
                 _codex_options(config, settings, task_id),
                 max_answer_chars=settings.answer.max_answer_chars,
+                mode=mode,
+                background=background,
             )
     except Exception as exc:  # noqa: BLE001 - 任务失败也要回推给用户
         logger.exception("机器人问答执行异常：task_id=%s", task_id)

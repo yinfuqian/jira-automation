@@ -8,7 +8,7 @@ MySQL 和 Redis 必须在 `.env.production` 中填写宿主机可访问的真实
 
 ## 首次部署
 
-1. 将 `docker-compose-prod.yaml`、`.env.production.example`、`users.example.csv`、`restart-master.sh` 和本说明放在同一目录；
+1. 将 `docker-compose-prod.yaml`、`.env.production.example`、`users.example.csv`、`start.sh`、`stop.sh`、`restart.sh`、`restart-master.sh` 和本说明放在同一目录；
    解压部署包时 `config/maven/settings.xml` 要保持 `config/` 相对路径不变（生产 Compose 按该路径挂载）。机器人项目与分支映射已随后端镜像发布，不需要额外配置文件。
 2. 将 `.env.production.example` 复制为 `.env.production`，填写镜像地址、MySQL、Redis、模型和第三方接口配置。
 3. 将 `users.example.csv` 复制为 `data/users.csv`（Compose 将它挂载到所有服务的 `/data/users.csv`），修改默认密码并由管理员持续维护。
@@ -17,15 +17,15 @@ MySQL 和 Redis 必须在 `.env.production` 中填写宿主机可访问的真实
 
 ```bash
 docker compose --env-file .env.production -f docker-compose-prod.yaml pull
-docker compose --env-file .env.production -f docker-compose-prod.yaml up -d
-docker compose --env-file .env.production -f docker-compose-prod.yaml ps -a
+DEPLOY_ENV=prod bash start.sh
+DEPLOY_ENV=prod bash start.sh api worker-chatbot chatbot-gateway   # 只启动指定服务时
 ```
 
 `migrate` 是一次性迁移容器，成功完成后显示为 `Exited (0)` 属于正常状态。`api`、`worker-analysis`、`worker-skill`、`beat` 以及启用后的 `worker-chatbot`、`chatbot-gateway` 应保持运行。
 
 ### 企业微信代码问答机器人（可选）
 
-1. 在 `.env.production` 中填写 `CHATBOT_BOT_ID`、`CHATBOT_BOT_SECRET`；项目与模块分支映射维护在源码 `backend/config/chatbot.json`，随镜像构建，调整后需重新构建并发布后端镜像。
+1. 在 `.env.production` 中填写 `CHATBOT_BOT_ID`、`CHATBOT_BOT_SECRET`。故障分析默认开启，可用 `FAULT_ANALYSIS_ENABLED` 和 `FAULT_ANALYSIS_MAX_MODULES` 调整；项目与模块分支映射维护在源码 `backend/config/chatbot.json`，随镜像构建，调整后需重新构建并发布后端镜像。
 2. 启动 API、专用 Worker 与长连接网关（三者共用镜像内置的 `/app/config/chatbot.json`）：
 
 ```bash
@@ -72,15 +72,24 @@ docker compose --env-file .env.production -f docker-compose-prod.yaml pull
 docker compose --env-file .env.production -f docker-compose-prod.yaml up -d
 ```
 
-## 重启服务
+## 启动、停止与重启
 
-仅更新挂载的 `skills/`、`.env.production` 或容器运行状态后，可执行：
+生产环境统一使用 `DEPLOY_ENV=prod`：
 
 ```bash
-bash restart-master.sh
+DEPLOY_ENV=prod bash start.sh      # 启动（等价于 docker compose up -d）
+DEPLOY_ENV=prod bash stop.sh       # 停止，保留容器和数据
+DEPLOY_ENV=prod bash restart.sh    # 强制重建并重新读取 .env.production
+DEPLOY_ENV=prod bash stop.sh --down  # 删除容器与网络，保留数据卷
 ```
 
-该脚本默认用 `docker compose up -d --force-recreate` 重建 `api`、`worker-analysis`、`worker-skill` 和 `beat`，会重新读取 `.env.production`，但不会重启或删除数据库。需要指定服务时，可传入 Compose 服务名，例如 `bash restart-master.sh worker-skill`。
+也可以只操作指定服务，例如 `DEPLOY_ENV=prod bash restart.sh worker-skill`。脚本默认处理 `api`、`worker-analysis`、`worker-skill`、`beat`；机器人凭证齐全时追加 `worker-chatbot`、`chatbot-gateway`，知识库启用时追加 `worker-knowledge`。
+
+### 重启行为
+
+仅更新挂载的 `skills/`、`.env.production` 或容器运行状态后，可执行 `DEPLOY_ENV=prod bash restart.sh`。脚本使用 `docker compose up -d --force-recreate` 重建服务，会重新读取 `.env.production`，但不会重启或删除数据库。
+
+兼容入口 `bash restart-master.sh` 等价于 `DEPLOY_ENV=prod bash restart.sh`，也支持传入服务名，例如 `bash restart-master.sh worker-skill`。
 
 GitLab 产品与模块会在 `worker-analysis` 启动时自动同步一次，Celery Beat 随后默认每 12 小时同步。Windows 客户端仍可通过 `POST /git/sync-projects` 手动触发同步。
 

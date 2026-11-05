@@ -46,7 +46,7 @@ const USAGE = `用法：
   node scripts/jira-cli.mjs gate-get <KEY|URL>
   node scripts/jira-cli.mjs gate-set <KEY|URL> --file <JSON文件>
   node scripts/jira-cli.mjs transitions <KEY|URL>
-  node scripts/jira-cli.mjs assign <KEY|URL> --user <登录名>  # 映射缺失时转派给 mappingOwner
+node scripts/jira-cli.mjs assign <KEY|URL> --user <登录名>  # 显式转派经办人，仅供手工调用
   node scripts/jira-cli.mjs transition <KEY|URL> --name <流转名>  # 打回后转派给提单人；无该流转时只转派`;
 
 

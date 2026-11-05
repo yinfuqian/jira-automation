@@ -28,9 +28,12 @@ def build_logging():
     )
 
 
-def select_answer_task(settings):
-    """按知识库开关选择问答任务；未配置 Confluence 时保持原代码问答链路。"""
-    if settings.knowledge.enabled and settings.confluence.configured:
+def select_answer_task(settings, answer_mode=""):
+    """按本次问题的模式选择队列；未指定模式时沿用知识库开关。"""
+    mode = str(answer_mode or "").strip().lower()
+    if mode == "knowledge" or (
+        not mode and settings.knowledge.enabled and settings.confluence.configured
+    ):
         return "chatbot.knowledge_answer", "chatbot-knowledge"
     return "chatbot.answer", "chatbot"
 
@@ -58,8 +61,8 @@ def main():
         session_store = ChatSessionStore(client, ttl_seconds=settings.session_ttl_seconds)
 
         def enqueue(payload):
-            """把问答任务投递到代码问答或 Confluence 知识问答队列。"""
-            task_name, queue = select_answer_task(settings)
+            """把问答任务投递到代码故障分析或 Confluence 知识问答队列。"""
+            task_name, queue = select_answer_task(settings, payload.get("answer_mode"))
             extensions.celery.send_task(task_name, args=[payload], queue=queue)
 
         gateway = ChatbotGateway(

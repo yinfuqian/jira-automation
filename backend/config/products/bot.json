@@ -1,0 +1,35 @@
+{
+  "key": "bot",
+  "name": "Bot",
+  "order": 40,
+  "description": "Bot 机器人产品线",
+  "aliases": ["chatbot", "机器人"],
+  "repos": {
+    "bot-common": "https://code.in.wezhuiyi.com/bot/bot-common.git",
+    "bot-dialog": "https://code.in.wezhuiyi.com/bot/bot-dialog.git",
+    "bot-gateway": "https://code.in.wezhuiyi.com/bot/bot-gateway.git",
+    "bot-management": "https://code.in.wezhuiyi.com/bot/bot-management.git",
+    "bot-operation": "https://code.in.wezhuiyi.com/bot/bot-operation.git",
+    "bot-operation-log": "https://code.in.wezhuiyi.com/bot/bot-operation-log.git",
+    "bot-portal": "https://code.in.wezhuiyi.com/bot/bot-portal.git",
+    "bot-stat": "https://code.in.wezhuiyi.com/bot/bot-stat.git"
+  },
+  "projects": [
+    {
+      "key": "bot-main",
+      "name": "主线",
+      "description": "Bot 产品主线",
+      "modules": {
+        "bot-common": "master",
+        "bot-dialog": "master",
+        "bot-gateway": "master",
+        "bot-management": "master",
+        "bot-operation": "master",
+        "bot-operation-log": "master",
+        "bot-portal": "master",
+        "bot-stat": "master"
+      },
+      "aliases": ["bot 主线"]
+    }
+  ]
+}

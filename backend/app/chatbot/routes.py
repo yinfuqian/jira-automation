@@ -47,6 +47,7 @@ def health():
             "ok": True,
             "config_source": settings.source,
             "bot_configured": settings.bot.configured,
+            "product_count": len(settings.products),
             "project_count": len(settings.projects),
             "gateway": {
                 # 网关每 30 秒写一次心跳，键 TTL 90 秒，超过 90 秒即视为离线。
@@ -59,17 +60,23 @@ def health():
 
 @chatbot_bp.route("/projects", methods=["GET"])
 def list_projects():
-    """返回可选项目及其模块分支，供人工核对配置是否正确。"""
+    """返回两级产品目录，并保留扁平项目列表供人工核对。"""
     try:
         settings = _settings()
     except ChatbotConfigError as exc:
         return jsonify({"ok": False, "error": str(exc)}), 503
 
     items = []
-    for index, project in settings.indexed_projects():
-        items.append(
-            {
-                "index": index,
+    products = []
+    for product_index, product in settings.indexed_products():
+        product_items = []
+        for project_index, project in product.indexed_projects():
+            item = {
+                "index": len(items) + 1,
+                "product_index": product_index,
+                "project_index": project_index,
+                "product_key": product.key,
+                "product_name": product.name,
                 "key": project.key,
                 "name": project.name,
                 "description": project.description,
@@ -77,8 +84,27 @@ def list_projects():
                     {"module": module, "branch": branch} for module, branch in project.module_items()
                 ],
             }
+            product_items.append(item)
+            items.append(item)
+        products.append(
+            {
+                "index": product_index,
+                "key": product.key,
+                "name": product.name,
+                "description": product.description,
+                "project_count": len(product_items),
+                "projects": product_items,
+            }
         )
-    return jsonify({"ok": True, "total": len(items), "items": items})
+    return jsonify(
+        {
+            "ok": True,
+            "product_total": len(products),
+            "total": len(items),
+            "products": products,
+            "items": items,
+        }
+    )
 
 
 @chatbot_bp.route("/questions", methods=["GET"])

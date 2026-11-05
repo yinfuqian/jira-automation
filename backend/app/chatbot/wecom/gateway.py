@@ -12,6 +12,7 @@ import logging
 import time
 import uuid
 
+from .. import fault_analysis
 from ..session import ChatSessionStore
 from ..settings import ChatbotConfigError
 from . import protocol
@@ -20,12 +21,12 @@ from .client import WeComConnectionError, WeComLongConnection
 
 logger = logging.getLogger(__name__)
 
-# 需要重新选择项目的口语化指令。
-SWITCH_COMMANDS = {"切换项目", "换项目", "重新选择", "重选", "切换", "重来"}
+# 需要回到第一步重新选择产品的口语化指令。
+SWITCH_COMMANDS = {"切换产品", "换产品", "切换项目", "换项目", "重新选择", "重选", "切换", "重来"}
 # 查看使用说明的指令。
 HELP_COMMANDS = {"帮助", "help", "怎么用", "使用说明", "/help"}
 # 单聊场景的提示语：本机器人只在群里工作。
-SINGLE_CHAT_NOTICE = "我目前只在群里提供代码问答，请在群里 @我 使用。"
+SINGLE_CHAT_NOTICE = "我目前只在群里提供代码问答和故障分析，请在群里 @我 使用。"
 
 
 class ChatbotGateway:
@@ -104,7 +105,7 @@ class ChatbotGateway:
         if event == protocol.EVENT_ENTER_CHAT:
             # 欢迎语必须在收到事件后 5 秒内发出，超时就无法再发。
             # enter_chat 只会出现在单聊；本机器人只在群里工作，直接引导用户去群里 @。
-            await self._send_welcome(req_id, "您好，我是代码问答助手。\n\n" + SINGLE_CHAT_NOTICE)
+            await self._send_welcome(req_id, "您好，我是代码问答与故障分析助手。\n\n" + SINGLE_CHAT_NOTICE)
             return
         if event == protocol.EVENT_DISCONNECTED:
             # 收到该事件说明有新的连接顶掉了自己，此时应退避而不是立刻抢回。
@@ -146,49 +147,96 @@ class ChatbotGateway:
             return
 
         lowered = question.strip().lower()
+        selected_product = settings.product_by_key(self._session.get_product_key(chatid, userid))
+        current = settings.project_by_key(self._session.get_project_key(chatid, userid))
+        if current is not None and selected_product is None:
+            # 兼容旧会话：历史版本只保存 project_key，后续直接补齐产品层级。
+            selected_product = settings.product_by_key(current.product_key)
+            if selected_product is not None:
+                self._session.set_product(chatid, userid, selected_product.key)
+                self._session.set_project(chatid, userid, current.key)
+
         if lowered in HELP_COMMANDS:
-            await self._reply(req_id, settings.menu_text())
+            menu = (
+                settings.project_menu_text(selected_product)
+                if selected_product is not None and current is None
+                else settings.product_menu_text()
+            )
+            await self._reply(req_id, menu)
             return
 
         if question.strip() in SWITCH_COMMANDS:
-            pending_question = self._session.clear_project(chatid, userid)
-            content = self._pending_menu_text(pending_question) if pending_question else settings.menu_text()
+            pending_question = self._session.clear_selection(chatid, userid)
+            content = (
+                self._pending_menu_text(pending_question, settings.product_menu_text())
+                if pending_question
+                else settings.product_menu_text()
+            )
             await self._reply(req_id, content)
             return
 
-        # 知识库问答不依赖代码项目选择，收到问题后直接投递知识队列。
-        if settings.knowledge.enabled and settings.confluence.configured:
-            await self._start_answer(None, question.strip(), body, req_id)
-            return
-
         if question.strip().isdigit():
-            project = settings.project_by_index(question)
+            if selected_product is None:
+                selected_product = settings.product_by_index(question)
+                if selected_product is None:
+                    await self._reply(req_id, "产品序号超出范围。\n\n" + settings.product_menu_text())
+                    return
+                self._session.set_product(chatid, userid, selected_product.key)
+                await self._reply(req_id, settings.project_menu_text(selected_product))
+                return
+
+            project = selected_product.project_by_index(question)
             if project is None:
-                await self._reply(req_id, "序号超出范围。\n\n" + settings.menu_text())
+                await self._reply(
+                    req_id,
+                    f"项目序号超出范围。\n\n{settings.project_menu_text(selected_product)}",
+                )
                 return
             self._session.set_project(chatid, userid, project.key)
             # 用户先提问、后选项目时，直接沿用刚才的问题发起分析，避免重复输入。
             pending_question = self._session.pop_pending_question(chatid, userid)
             if pending_question:
-                await self._start_answer(project, pending_question, body, req_id)
+                pending_mode = (
+                    "fault"
+                    if settings.fault_analysis.enabled
+                    and fault_analysis.is_fault_analysis_question(pending_question)
+                    else "code"
+                )
+                await self._start_answer(
+                    project,
+                    pending_question,
+                    body,
+                    req_id,
+                    mode=pending_mode,
+                )
                 return
             await self._reply(req_id, self._selected_text(project))
             return
 
-        current = settings.project_by_key(self._session.get_project_key(chatid, userid))
-        if current is None:
-            # 暂存原问题，选完项目后自动接着回答，用户不需要再问一遍。
-            self._session.set_pending_question(chatid, userid, question.strip())
-            await self._reply(req_id, self._pending_menu_text(question.strip()))
+        if current is not None:
+            mode = (
+                "fault"
+                if settings.fault_analysis.enabled
+                and fault_analysis.is_fault_analysis_question(question)
+                else "code"
+            )
+            await self._start_answer(current, question.strip(), body, req_id, mode=mode)
             return
 
-        await self._start_answer(current, question.strip(), body, req_id)
+        # 严格按「产品 → 项目 → 回答」推进；问题先暂存，选完后自动继续。
+        self._session.set_pending_question(chatid, userid, question.strip())
+        menu = (
+            settings.project_menu_text(selected_product)
+            if selected_product is not None
+            else settings.product_menu_text()
+        )
+        await self._reply(req_id, self._pending_menu_text(question.strip(), menu))
 
-    def _pending_menu_text(self, question) -> str:
-        """在项目菜单后附上待回答的问题，提示选完项目会自动开始分析。"""
+    def _pending_menu_text(self, question, menu) -> str:
+        """在两级菜单后附上待回答的问题，提示选完项目会自动开始分析。"""
         preview = question if len(question) <= 120 else question[:120] + "…"
         return (
-            f"{self._settings.menu_text()}\n\n"
+            f"{menu}\n\n"
             "选好项目后我会直接回答下面这个问题，无需重复提问：\n"
             f"> {preview}"
         )
@@ -205,12 +253,13 @@ class ChatbotGateway:
         lines.extend(
             [
                 "",
-                "现在可以直接 @我 提问，例如「结果回调的入口在哪个类？」",
+                "现在可以直接 @我 做代码问答。",
+                "如果遇到报错、超时、空白或崩溃，直接描述现象，我会进入故障分析。",
                 "发送「@我 切换项目」可重新选择。",
             ]
         )
         return "\n".join(lines)
-    async def _start_answer(self, project, question, body, req_id):
+    async def _start_answer(self, project, question, body, req_id, mode="code"):
         """投递一次问答任务，并先推一条「正在分析」的流式占位消息。"""
         chatid = str(body.get("chatid") or "")
         chattype = str(body.get("chattype") or "")
@@ -225,6 +274,13 @@ class ChatbotGateway:
             )
             project_key = ""
             project_name = "Confluence 知识库"
+        elif mode == "fault":
+            placeholder = (
+                f"正在对 **{project.name}** 做故障分析…\n\n"
+                "我会先定位相关模块，再结合代码和知识库资料给出原因与验证步骤。"
+            )
+            project_key = project.key
+            project_name = project.name
         else:
             modules = project.module_items()
             placeholder = (
@@ -248,6 +304,7 @@ class ChatbotGateway:
             "project_key": project_key,
             "project_name": project_name,
             "question": question,
+            "answer_mode": str(mode or "code"),
             "started_at": started_at,
         }
         self._session.save_stream(task_id, context)

@@ -1,0 +1,35 @@
+{
+  "key": "eco",
+  "name": "Eco",
+  "order": 60,
+  "description": "Eco 产品线",
+  "aliases": ["文本", "bi"],
+  "repos": {
+    "bi-web": "https://code.in.wezhuiyi.com/eco/bi-web.git",
+    "bot-query-monitor": "https://code.in.wezhuiyi.com/eco/bot-query-monitor.git",
+    "soft": "https://code.in.wezhuiyi.com/eco/soft.git",
+    "vision": "https://code.in.wezhuiyi.com/eco/vision.git",
+    "wenben-calc": "https://code.in.wezhuiyi.com/eco/wenben-calc.git",
+    "wenben-filebeat": "https://code.in.wezhuiyi.com/eco/wenben-filebeat.git",
+    "wenben-stat": "https://code.in.wezhuiyi.com/eco/wenben-stat.git",
+    "wenben-view": "https://code.in.wezhuiyi.com/eco/wenben-view.git"
+  },
+  "projects": [
+    {
+      "key": "eco-main",
+      "name": "主线",
+      "description": "Eco 产品主线",
+      "modules": {
+        "bi-web": "master",
+        "bot-query-monitor": "master",
+        "soft": "master",
+        "vision": "master",
+        "wenben-calc": "master",
+        "wenben-filebeat": "master",
+        "wenben-stat": "master",
+        "wenben-view": "master"
+      },
+      "aliases": ["eco 主线"]
+    }
+  ]
+}

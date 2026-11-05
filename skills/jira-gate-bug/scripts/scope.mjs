@@ -92,7 +92,7 @@ export function buildMappingOwnerComment(error, configPath) {
   } else {
     lines.push(`* 缺口：${reasonText}`);
   }
-  lines.push("* 处理方式：无需提单人重复补充模块；映射补齐后重新触发本技能即可自动检查，不要求额外确认。本单会转派给上述映射维护人，不改变工作流状态。");
+  lines.push("* 处理方式：无需提单人重复补充模块；映射补齐后重新触发本技能即可自动检查，不要求额外确认。本单仅评论提醒，不改变工作流状态，不修改当前经办人。");
   return lines.join("\n");
 }
 

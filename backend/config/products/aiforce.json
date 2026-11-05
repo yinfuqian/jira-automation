@@ -1,0 +1,23 @@
+{
+  "key": "aiforce",
+  "name": "AIFORCE",
+  "order": 80,
+  "description": "AIFORCE 产品线",
+  "aliases": ["aiforce2", "aiforce web"],
+  "repos": {
+    "aiforce2": "https://code.in.wezhuiyi.com/aiforce/aiforce2.git",
+    "aiforce-web": "https://code.in.wezhuiyi.com/aiforce/aiforce-web.git"
+  },
+  "projects": [
+    {
+      "key": "aiforce-main",
+      "name": "主线",
+      "description": "AIFORCE 产品主线",
+      "modules": {
+        "aiforce2": "master",
+        "aiforce-web": "master"
+      },
+      "aliases": ["aiforce 主线"]
+    }
+  ]
+}

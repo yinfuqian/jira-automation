@@ -436,6 +436,8 @@ function moduleTagPairsFromText(value) {
 
 /** 把 Agent 从图片识别的模块候选规范化为 { module, version, source }。 */
 function normalizeModulePairs(value, defaultSource) {
+  // Deployment manifests from screenshots should arrive as repo/module:tag pairs.
+  // The Agent must pair them before calling this helper; never reuse one business version across modules.
   const source = Array.isArray(value) ? value : [value];
   const result = [];
   for (const item of source) {
@@ -544,8 +546,8 @@ function versionsFromText(value, moduleHints = []) {
  * 从一张 Jira 缺陷单中提取故障分析定位信息。
  *
  * 产品：调用方覆盖 > Jira「问题发现产品」 > 评论固定块（兼容人工纠正）。
- * 模块：调用方覆盖 > 评论固定块 > Jira 组件（唯一值才自动采用）。
- * 版本：调用方覆盖 > 评论固定块 > 影响版本/概要/环境/描述/评论/附件名（多来源只接受唯一值）。
+ * 模块：调用方覆盖 > 评论固定块 > 描述/环境/概要中的模块声明 > Jira 组件。
+ * 版本：调用方覆盖 > 评论固定块 > 影响版本/概要/环境/描述/评论 > 附件名或 Agent 从附件图片识别的模块版本对。
  * 修复版本不作为完整性依据，也不参与自动分析版本来源。
  * 分支：调用方覆盖 > 评论固定块；仓库地址与分支规则仍由 scope-mapping.json 维护。
  */
@@ -623,20 +625,21 @@ export function extractFaultAnalysisScope(issue, overrides = {}) {
   const moduleCandidates = uniqueTextValues(issue && issue.components).filter((item) => !echoesProduct(item));
   const overrideModule = overrides.module;
   const declaredPrimary = declared[0] || null;
-  const module = pick(overrideModule, block.values.module, declaredPrimary && declaredPrimary.module);
+  const explicitModule = pick(overrideModule, block.values.module, declaredPrimary && declaredPrimary.module);
+  // 多组件缺陷允许直接采用 Jira 组件清单：第一条只是兼容接口的分析入口，
+  // 其余保留为关联模块。是否可分析仍由每个模块自己的精准 Tag 决定。
+  const implicitModule = moduleCandidates[0] || "";
+  const module = explicitModule || implicitModule;
   const declaredForModule = declared.find((item) => item.module === module) || null;
   if (module) {
     sources.module = overrideModule && module === String(overrideModule).trim()
       ? "调用方输入"
       : block.values.module && module === block.values.module
         ? `评论:${block.commentId || ""}`
-        : (declaredForModule && declaredForModule.source) || `评论:${block.commentId || ""}:${module}`;
-  } else if (moduleCandidates.length === 1) {
-    sources.module = "Jira:模块/组件";
-  } else if (moduleCandidates.length > 1) {
-    candidates.module = moduleCandidates;
+        : (declaredForModule && declaredForModule.source)
+          || (implicitModule && module === implicitModule ? "Jira:模块/组件" : `评论:${block.commentId || ""}:${module}`);
   }
-  const moduleValue = module || (moduleCandidates.length === 1 ? moduleCandidates[0] : "");
+  const moduleValue = module;
 
   const versionCandidates = [];
   const addVersionSource = (source, values) => {
@@ -687,6 +690,30 @@ export function extractFaultAnalysisScope(issue, overrides = {}) {
     if (relatedModules.some((item) => item.module === entry.module)) continue;
     relatedModules.push(entry);
   }
+  for (const name of moduleCandidates) {
+    if (!name || name === moduleValue || relatedModules.some((item) => item.module === name)) continue;
+    relatedModules.push({ module: name, version: "", source: "Jira:模块/组件" });
+  }
+
+  // 多模块缺陷不要求提单人指定责任主模块。兼容接口仍以第一条作为
+  // analysis entry，但对外输出完整模块清单，避免调用方误把它当责任归属。
+  const modules = [];
+  if (moduleValue) {
+    modules.push({
+      module: moduleValue,
+      version,
+      role: "analysis-entry",
+      source: sources.module || "",
+    });
+  }
+  for (const entry of relatedModules) {
+    modules.push({
+      module: entry.module,
+      version: entry.version || "",
+      role: "related",
+      source: entry.source || "",
+    });
+  }
 
   const missing = [];
   if (!product) missing.push("product");
@@ -699,6 +726,7 @@ export function extractFaultAnalysisScope(issue, overrides = {}) {
     version,
     branch,
     relatedModules,
+    modules,
     sources,
     candidates,
     missing,
@@ -903,6 +931,11 @@ export function renderIssueMarkdown(issue, options = {}) {
     lines.push("- 处理要求：如本单确为效果类缺陷，请补充固定声明；否则按普通缺陷补日志和复现步骤。");
     lines.push("- 豁免范围：即使后续豁免，也仅限日志与复现步骤，其它 MUST 和全部 REDLINE 不豁免。");
   }
+
+  lines.push("");
+  lines.push("## 时间豁免");
+  lines.push("- 仅在描述、评论或可辨认附件文字明确写明问题一直存在 / 长期存在 / 持续存在 / 每次必现或配置后始终如此时，才可豁免具体发生时间。");
+  lines.push("- 不能仅因未写时间就推定持续存在；偶现问题仍需发生频率和最近一次时间。");
 
   lines.push("");
   lines.push("## 评论（共 " + issue.comments.length + " 条，显示最近 " + Math.min(maxComments, issue.comments.length) + " 条）");

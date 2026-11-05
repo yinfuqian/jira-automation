@@ -1,0 +1,27 @@
+{
+  "key": "falcon",
+  "name": "Falcon",
+  "order": 70,
+  "description": "Falcon 产品线",
+  "aliases": ["猎鹰"],
+  "repos": {
+    "access": "https://code.in.wezhuiyi.com/falcon/access.git",
+    "custom": "https://code.in.wezhuiyi.com/falcon/custom.git",
+    "fep": "https://code.in.wezhuiyi.com/falcon/fep.git",
+    "miniconda": "https://code.in.wezhuiyi.com/falcon/miniconda.git"
+  },
+  "projects": [
+    {
+      "key": "falcon-main",
+      "name": "主线",
+      "description": "Falcon 产品主线",
+      "modules": {
+        "access": "master",
+        "custom": "master",
+        "fep": "master",
+        "miniconda": "master"
+      },
+      "aliases": ["falcon 主线"]
+    }
+  ]
+}

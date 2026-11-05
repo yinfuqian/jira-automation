@@ -28,6 +28,9 @@ New-Item -ItemType Directory -Path $staging | Out-Null
 
 # 白名单是生产部署包的安全边界，禁止改为复制整个仓库或任何业务源码目录。
 Copy-Item -LiteralPath (Join-Path $projectRoot "docker-compose-prod.yaml") -Destination $staging
+Copy-Item -LiteralPath (Join-Path $projectRoot "start.sh") -Destination $staging
+Copy-Item -LiteralPath (Join-Path $projectRoot "stop.sh") -Destination $staging
+Copy-Item -LiteralPath (Join-Path $projectRoot "restart.sh") -Destination $staging
 Copy-Item -LiteralPath (Join-Path $projectRoot "restart-master.sh") -Destination $staging
 Copy-Item -LiteralPath (Join-Path $projectRoot "deploy/.env.production.example") -Destination $staging
 Copy-Item -LiteralPath (Join-Path $projectRoot "deploy/users.example.csv") -Destination $staging

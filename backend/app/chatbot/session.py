@@ -60,6 +60,18 @@ class ChatSessionStore:
         """读取当前会话选中的项目标识，未选择时返回空串。"""
         return _text(self._load_session(chatid, userid).get("project_key"))
 
+    def get_product_key(self, chatid, userid):
+        """读取当前会话选中的产品标识，未选择时返回空串。"""
+        return _text(self._load_session(chatid, userid).get("product_key"))
+
+    def set_product(self, chatid, userid, product_key):
+        """记录当前产品；进入产品选择阶段时清掉旧项目。"""
+        payload = self._load_session(chatid, userid)
+        payload["product_key"] = _text(product_key)
+        payload.pop("project_key", None)
+        payload["updated_at"] = time.time()
+        self._save_session(chatid, userid, payload)
+
     def set_project(self, chatid, userid, project_key):
         """记录当前会话选中的项目，并保留尚未消费的待回答问题。"""
         payload = self._load_session(chatid, userid)
@@ -67,9 +79,10 @@ class ChatSessionStore:
         payload["updated_at"] = time.time()
         self._save_session(chatid, userid, payload)
 
-    def clear_project(self, chatid, userid):
-        """清除项目选择，但保留待回答问题，返回该问题供菜单提示。"""
+    def clear_selection(self, chatid, userid):
+        """清除产品与项目选择，但保留待回答问题供后续继续处理。"""
         payload = self._load_session(chatid, userid)
+        payload.pop("product_key", None)
         payload.pop("project_key", None)
         question = _text(payload.get("pending_question"))
         if question:
@@ -78,6 +91,10 @@ class ChatSessionStore:
         else:
             self._client.delete(self._session_key(chatid, userid))
         return question
+
+    def clear_project(self, chatid, userid):
+        """兼容旧调用：切换时清除产品与项目两级选择。"""
+        return self.clear_selection(chatid, userid)
 
     def set_pending_question(self, chatid, userid, question):
         """暂存用户尚未选择项目时提出的问题，选完项目后直接回答。"""

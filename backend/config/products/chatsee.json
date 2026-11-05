@@ -1,0 +1,29 @@
+{
+  "key": "chatsee",
+  "name": "ChatSee",
+  "order": 20,
+  "description": "SEE 产品线",
+  "aliases": ["see"],
+  "repos": {
+    "see-common": "https://code.in.wezhuiyi.com/see/see-common.git",
+    "see-dataset": "https://code.in.wezhuiyi.com/see/see-dataset.git",
+    "see-management": "https://code.in.wezhuiyi.com/see/see-management.git",
+    "see-portal": "https://code.in.wezhuiyi.com/see/see-portal.git",
+    "see-task": "https://code.in.wezhuiyi.com/see/see-task.git"
+  },
+  "projects": [
+    {
+      "key": "chatsee-main",
+      "name": "主线",
+      "description": "SEE 产品主线",
+      "modules": {
+        "see-common": "master",
+        "see-dataset": "master",
+        "see-management": "master",
+        "see-portal": "master",
+        "see-task": "master"
+      },
+      "aliases": ["see 主线"]
+    }
+  ]
+}
