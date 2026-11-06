@@ -5,7 +5,8 @@ param(
     [ValidateSet("all", "backend", "frontend")]
     [string]$Component = "all",
 
-    [string]$Version = (Get-Date -Format "yyyyMMdd-HHmmss"),
+    # 版本标签统一使用发布日期：backend-YYYY-MM-DD；同一天多次发布追加 -2、-3。
+    [string]$Version = ("backend-" + (Get-Date -Format "yyyy-MM-dd")),
 
     [string]$Registry = "",
 
@@ -24,7 +25,12 @@ if ($registryPrefix) {
 }
 
 $backendImage = "${registryPrefix}jira-automation/backend:$Version"
-$frontendImage = "${registryPrefix}jira-automation/frontend:$Version"
+$frontendVersion = if ($Version -match "^backend-") {
+    $Version -replace "^backend-", "frontend-"
+} else {
+    "frontend-$Version"
+}
+$frontendImage = "${registryPrefix}jira-automation/frontend:$frontendVersion"
 
 function Invoke-DockerCommand {
     param(

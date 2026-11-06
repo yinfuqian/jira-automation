@@ -159,7 +159,6 @@ RUN ln -sf /usr/local/lib/node_modules/npm/bin/npm-cli.js /usr/local/bin/npm \
 COPY --from=build /app/app /app/app
 # 机器人项目与分支映射随镜像发布，运行时不依赖宿主机目录挂载。
 COPY --from=build /app/config/chatbot.json /app/config/chatbot.json
-COPY --from=build /app/config/products /app/config/products
 COPY --from=build /app/migrations /app/migrations
 COPY --from=build /app/app.py /app/app.py
 COPY --from=build /app/celery_worker.py /app/celery_worker.py

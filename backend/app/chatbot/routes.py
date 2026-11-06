@@ -6,7 +6,7 @@ import time
 from flask import Blueprint, jsonify, request
 
 import extensions
-from . import knowledge, session as session_module
+from . import session as session_module
 from .models.model import ChatbotQuestion
 from .settings import ChatbotConfigError, load_settings
 # 显式导入任务模块：Celery worker 通过 create_app() 装配蓝图时才会注册 chatbot.answer。
@@ -47,7 +47,6 @@ def health():
             "ok": True,
             "config_source": settings.source,
             "bot_configured": settings.bot.configured,
-            "product_count": len(settings.products),
             "project_count": len(settings.projects),
             "gateway": {
                 # 网关每 30 秒写一次心跳，键 TTL 90 秒，超过 90 秒即视为离线。
@@ -60,23 +59,17 @@ def health():
 
 @chatbot_bp.route("/projects", methods=["GET"])
 def list_projects():
-    """返回两级产品目录，并保留扁平项目列表供人工核对。"""
+    """返回可选项目及其模块分支，供人工核对配置是否正确。"""
     try:
         settings = _settings()
     except ChatbotConfigError as exc:
         return jsonify({"ok": False, "error": str(exc)}), 503
 
     items = []
-    products = []
-    for product_index, product in settings.indexed_products():
-        product_items = []
-        for project_index, project in product.indexed_projects():
-            item = {
-                "index": len(items) + 1,
-                "product_index": product_index,
-                "project_index": project_index,
-                "product_key": product.key,
-                "product_name": product.name,
+    for index, project in settings.indexed_projects():
+        items.append(
+            {
+                "index": index,
                 "key": project.key,
                 "name": project.name,
                 "description": project.description,
@@ -84,27 +77,8 @@ def list_projects():
                     {"module": module, "branch": branch} for module, branch in project.module_items()
                 ],
             }
-            product_items.append(item)
-            items.append(item)
-        products.append(
-            {
-                "index": product_index,
-                "key": product.key,
-                "name": product.name,
-                "description": product.description,
-                "project_count": len(product_items),
-                "projects": product_items,
-            }
         )
-    return jsonify(
-        {
-            "ok": True,
-            "product_total": len(products),
-            "total": len(items),
-            "products": products,
-            "items": items,
-        }
-    )
+    return jsonify({"ok": True, "total": len(items), "items": items})
 
 
 @chatbot_bp.route("/questions", methods=["GET"])
@@ -138,45 +112,3 @@ def reload_settings():
             "bot_configured": settings.bot.configured,
         }
     )
-
-
-def _enqueue_knowledge_sync(page_id=None):
-    """把同步工作交给专用队列，避免 API 被 Confluence 网络请求阻塞。"""
-    payload = {"trigger_source": "page_manual" if page_id else "manual"}
-    if page_id:
-        payload["page_id"] = str(page_id)
-    result = tasks.knowledge_sync_task.apply_async(args=[payload], queue="knowledge-sync")
-    return str(result.id or "")
-
-
-@chatbot_bp.route("/knowledge/status", methods=["GET"])
-def knowledge_status():
-    """返回知识库配置、索引规模与最近一次同步结果。"""
-    try:
-        settings = _settings()
-    except ChatbotConfigError as exc:
-        return jsonify({"ok": False, "error": str(exc)}), 503
-    payload = knowledge.knowledge_status()
-    payload.update(
-        {
-            "ok": True,
-            "enabled": settings.knowledge.enabled,
-            "confluence_configured": settings.confluence.configured,
-            "sync_interval_seconds": settings.knowledge.sync_interval_seconds,
-        }
-    )
-    return jsonify(payload)
-
-
-@chatbot_bp.route("/knowledge/sync", methods=["POST"])
-def sync_knowledge():
-    """手动投递一次全量 Confluence 同步。"""
-    task_id = _enqueue_knowledge_sync()
-    return jsonify({"ok": True, "task_id": task_id, "status": "queued"}), 202
-
-
-@chatbot_bp.route("/knowledge/pages/<page_id>/sync", methods=["POST"])
-def sync_knowledge_page(page_id):
-    """手动投递单个 Confluence 页面刷新。"""
-    task_id = _enqueue_knowledge_sync(str(page_id))
-    return jsonify({"ok": True, "task_id": task_id, "status": "queued"}), 202

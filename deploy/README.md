@@ -25,7 +25,7 @@ DEPLOY_ENV=prod bash start.sh api worker-chatbot chatbot-gateway   # 只启动�
 
 ### 企业微信代码问答机器人（可选）
 
-1. 在 `.env.production` 中填写 `CHATBOT_BOT_ID`、`CHATBOT_BOT_SECRET`。故障分析默认开启，可用 `FAULT_ANALYSIS_ENABLED` 和 `FAULT_ANALYSIS_MAX_MODULES` 调整；项目与模块分支映射维护在源码 `backend/config/chatbot.json`，随镜像构建，调整后需重新构建并发布后端镜像。
+1. 在 `.env.production` 中填写 `CHATBOT_BOT_ID`、`CHATBOT_BOT_SECRET`；项目与模块分支映射维护在源码 `backend/config/chatbot.json`，随镜像构建，调整后需重新构建并发布后端镜像。
 2. 启动 API、专用 Worker 与长连接网关（三者共用镜像内置的 `/app/config/chatbot.json`）：
 
 ```bash
@@ -84,7 +84,7 @@ DEPLOY_ENV=prod bash restart.sh    # 强制重建并重新读取 .env.production
 DEPLOY_ENV=prod bash stop.sh --down  # 删除容器与网络，保留数据卷
 ```
 
-也可以只操作指定服务，例如 `DEPLOY_ENV=prod bash restart.sh worker-skill`。脚本默认处理 `api`、`worker-analysis`、`worker-skill`、`beat`；机器人凭证齐全时追加 `worker-chatbot`、`chatbot-gateway`，知识库启用时追加 `worker-knowledge`。
+也可以只操作指定服务，例如 `DEPLOY_ENV=prod bash restart.sh worker-skill`。脚本默认处理 `api`、`worker-analysis`、`worker-skill`、`beat`；机器人凭证齐全时追加 `worker-chatbot`、`chatbot-gateway`。
 
 ### 重启行为
 

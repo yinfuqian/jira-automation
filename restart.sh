@@ -89,10 +89,6 @@ resolve_services() {
     echo "提示：未配置 CHATBOT_BOT_ID/CHATBOT_BOT_SECRET，跳过机器人网关与 worker-chatbot。"
   fi
 
-  local knowledge_enabled="${KNOWLEDGE_ENABLED:-$(read_env_value KNOWLEDGE_ENABLED)}"
-  if env_truthy "${knowledge_enabled}" || [ -n "${bot_id}${bot_secret}" ]; then
-    SERVICES+=("worker-knowledge${SUFFIX}")
-  fi
 }
 
 echo "重启环境：${DEPLOY_ENV}；Compose：${COMPOSE_FILE}；环境文件：${ENV_FILE}"

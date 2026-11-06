@@ -89,7 +89,7 @@ services:
       - --hostname=worker-analysis@%h
       - -Q
       - analysis,maintenance
-      - --concurrency=${ANALYSIS_WORKER_CONCURRENCY:-12}
+      - --concurrency=2
     volumes:
       - ./data/users.csv:/data/users.csv:ro
       - ./data/upload:/data/upload
@@ -152,10 +152,7 @@ services:
       - --hostname=worker-skill@%h
       - -Q
       - skill
-      # Codex 任务会同时占用模型配额、JVM/Node 与工作区资源；默认只并行 2 个，避免触发上游 429。
-      - --concurrency=${SKILL_WORKER_CONCURRENCY:-2}
-      # 每个技能任务结束后回收执行子进程，避免异常退出后残留状态影响后续任务消费。
-      - --max-tasks-per-child=${SKILL_WORKER_MAX_TASKS_PER_CHILD:-1}
+      - --concurrency=2
     volumes:
       - ./data/users.csv:/data/users.csv:ro
       - ./data/upload:/data/upload
@@ -280,40 +277,10 @@ services:
       - --hostname=worker-chatbot@%h
       - -Q
       - chatbot
-      - --concurrency=${CHATBOT_WORKER_CONCURRENCY:-12}
+      - --concurrency=2
     volumes:
       - ./data/logs:/app/app/logs
       - ./data/repos:/tmp/jira-automation-repos
-      - ./data/users.csv:/data/users.csv:ro
-      - ./data/codex:/data/codex
-      - ./data/skill-workspace:/data/skill-workspace
-    restart: unless-stopped
-    depends_on:
-      - api
-
-  worker-knowledge:
-    image: ${BACKEND_IMAGE}
-    network_mode: "host"
-    env_file:
-      - ${ENV_FILE:-.env}
-    environment:
-      PYTHONUNBUFFERED: "1"
-      # 知识问答只使用 Confluence 只读证据，不检出业务仓库。
-      SKILL_WORKSPACE_DIR: /data/skill-workspace
-      CODEX_HOME: /data/codex
-      SKILL_RECOVER_ORPHANS: "false"
-    command:
-      - celery
-      - -A
-      - celery_worker.celery_app
-      - worker
-      - --loglevel=INFO
-      - --hostname=worker-knowledge@%h
-      - -Q
-      - chatbot-knowledge,knowledge-sync
-      - --concurrency=${KNOWLEDGE_WORKER_CONCURRENCY:-12}
-    volumes:
-      - ./data/logs:/app/app/logs
       - ./data/users.csv:/data/users.csv:ro
       - ./data/codex:/data/codex
       - ./data/skill-workspace:/data/skill-workspace

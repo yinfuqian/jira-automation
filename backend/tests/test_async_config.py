@@ -118,14 +118,6 @@ class AsyncConfigTests(unittest.TestCase):
         self.assertEqual(config.CELERY_BROKER_URL, config.REDIS_URL)
         self.assertEqual(config.CELERY_RESULT_BACKEND, config.REDIS_URL)
 
-    def test_celery_hard_time_limit_covers_longest_skill_runtime(self):
-        """Celery 硬超时应覆盖 jira-code 的 7200 秒运行上限并预留回写时间。"""
-        with patch.dict(os.environ, {}, clear=False):
-            os.environ.pop("CELERY_TASK_TIME_LIMIT_SECONDS", None)
-            config = load_config_module().Config
-
-        self.assertEqual(config.CELERY_TASK_TIME_LIMIT_SECONDS, 7800)
-
     def test_celery_redis_transport_enables_resilient_connections(self):
         config = load_config_module().Config
 
@@ -186,18 +178,8 @@ class AsyncConfigTests(unittest.TestCase):
                 "skillrun.expire_queued_tasks": {"queue": "maintenance"},
                 "git.sync_projects": {"queue": "maintenance"},
                 "chatbot.answer": {"queue": "chatbot"},
-                "chatbot.knowledge_answer": {"queue": "chatbot-knowledge"},
-                "knowledge.sync_confluence": {"queue": "knowledge-sync"},
             },
         )
-
-    def test_confluence_knowledge_sync_runs_every_six_hours(self):
-        """知识库由 Beat 每半天同步一次，在线问答使用独立队列。"""
-        config = load_config_module().Config
-
-        schedule = config.CELERY_BEAT_SCHEDULE["confluence-knowledge-sync"]
-        self.assertEqual(schedule["task"], "knowledge.sync_confluence")
-        self.assertEqual(schedule["schedule"].total_seconds(), 6 * 60 * 60)
 
     def test_celery_workers_do_not_prefetch_multiple_long_running_tasks(self):
         """Worker 异常退出时，单次预取一条可避免其余消息长期滞留在 unacked。"""

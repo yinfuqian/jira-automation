@@ -24,7 +24,6 @@
 | `worker-analysis-dev` | Celery 日志分析、图片识别与 GitLab 维护任务（开发环境） | 无宿主机端口 |
 | `worker-skill-dev` | Celery 技能（Codex Agent）执行（开发环境） | 无宿主机端口 |
 | `worker-chatbot-dev` | Celery 企业微信代码问答任务执行（开发环境） | 无宿主机端口 |
-| `worker-knowledge-dev` | Confluence 知识检索与半天同步任务（开发环境） | 无宿主机端口 |
 | `chatbot-gateway-dev` | 企业微信智能机器人长连接网关，必须单实例（开发环境） | 无宿主机端口 |
 | `beat-dev` | 开发环境定时任务调度：每分钟清理排队过期技能任务，并按配置周期同步 GitLab 产品与模块 | 无宿主机端口 |
 | `migrate` | 创建数据库并执行 `flask db upgrade` | 一次性容器 |
@@ -58,7 +57,7 @@ DEPLOY_ENV=prod bash stop.sh       # 停止生产
 DEPLOY_ENV=prod bash restart.sh    # 强制重建生产，重新读取 .env.production
 ```
 
-`restart.sh` 使用 `docker compose up -d --force-recreate`，修改 `.env` / `.env.production` 后会立即生效；`docker compose restart` 不会重新读取环境文件。默认重建 `api`、`worker-analysis`、`worker-skill` 和 `beat`，配置了机器人凭证时追加 `worker-chatbot`、`chatbot-gateway`，启用知识库时追加 `worker-knowledge`。也可以只操作指定服务：
+`restart.sh` 使用 `docker compose up -d --force-recreate`，修改 `.env` / `.env.production` 后会立即生效；`docker compose restart` 不会重新读取环境文件。默认重建 `api`、`worker-analysis`、`worker-skill` 和 `beat`，配置了机器人凭证时追加 `worker-chatbot`、`chatbot-gateway`。也可以只操作指定服务：
 
 ```bash
 bash restart.sh api-dev
@@ -68,7 +67,7 @@ DEPLOY_ENV=prod bash stop.sh worker-analysis
 
 `stop.sh --down` 会删除当前环境的容器与网络，但不会删除数据卷、外部 MySQL 和 Redis。兼容入口 `restart-dev.sh`、`restart-master.sh` 仍然可用，分别等价于 `DEPLOY_ENV=dev bash restart.sh` 和 `DEPLOY_ENV=prod bash restart.sh`。如确需临时覆盖配置文件，可使用 `COMPOSE_FILE`、`ENV_FILE` 环境变量。
 
-企业微信机器人是可选能力：配置 `CHATBOT_BOT_ID` / `CHATBOT_BOT_SECRET` 后脚本会自动带上 `worker-chatbot` 与 `chatbot-gateway`；`KNOWLEDGE_ENABLED=true` 时自动带上 `worker-knowledge`。
+企业微信机器人是可选能力：配置 `CHATBOT_BOT_ID` / `CHATBOT_BOT_SECRET` 后脚本会自动带上 `worker-chatbot` 与 `chatbot-gateway`。
 
 GitLab 产品与模块会在 `worker-analysis-dev` 启动时自动同步一次，beat-dev 随后按 `GITLAB_SYNC_INTERVAL_HOURS` 周期同步，默认 12 小时。`POST /git/sync-projects` 继续作为 Windows 客户端的手动同步入口。
 
@@ -249,18 +248,19 @@ docker compose --env-file .env -f docker-compose-dev.yaml up -d
 
 ### 构建并推送发布镜像
 
-在开发机或专用发布机执行，版本号应使用不可变版本，不要使用 `latest`：
+在开发机或专用发布机执行。版本标签统一使用发布日期 `backend-YYYY-MM-DD`（前端为 `frontend-YYYY-MM-DD`），
+月、日必须补零；同一天需要多次发布时追加序号 `-2`、`-3`。不要使用 `latest` 或 `2026-11-6` 这类不补零的写法：
 
 ```powershell
 # 同时构建后端和前端。
 powershell -ExecutionPolicy Bypass -File scripts\build_release_images.ps1 all `
-  -Version 2026.07.18-1 `
+  -Version backend-2026-11-06 `
   -Registry registry.example.com `
   -Push
 
 # 只更新后端时只构建后端镜像。
 powershell -ExecutionPolicy Bypass -File scripts\build_release_images.ps1 backend `
-  -Version 2026.07.18-2 `
+  -Version backend-2026-11-06-2 `
   -Registry registry.example.com `
   -Push
 ```
@@ -783,7 +783,7 @@ node ..\skills\jira-gate-bug\scripts\analysis-cli.mjs render --input <结果JSON
 
 ## 企业微信代码问答机器人
 
-在群里 @机器人 提问，机器人会自动识别普通代码问答或故障分析。故障问题会从项目中选出最多 4 个相关模块，检出对应分支代码，由 Codex 给出结论、可能原因、代码定位和验证建议；普通代码问题继续按完整项目做业务化解释。
+在群里 @机器人 提问，机器人先让人用序号选项目（如「call3.1主线」），再按该项目对应的多个仓库分支检出代码，由 Codex 分析后给出带 `文件:行号` 引用的回答。
 
 ### 组成
 
@@ -792,17 +792,14 @@ node ..\skills\jira-gate-bug\scripts\analysis-cli.mjs render --input <结果JSON
 | `backend/chatbot_gateway.py` | 常驻长连接进程，订阅 `wss://openws.work.weixin.qq.com`、收发消息 |
 | `backend/app/chatbot/` | 协议、会话、仓库检出、答案生成与审计 |
 | Celery 队列 `chatbot` | 执行代码检出与模型分析（`chatbot.answer`） |
-| Celery 队列 `chatbot-knowledge` / `knowledge-sync` | 单结论知识问答与 Confluence 定时同步 |
 | `backend/config/chatbot.json` | 项目、模块分支映射与问答阈值，随镜像构建到 `/app/config/chatbot.json`；`.env` 只保留 BotID/Secret |
 
 ### 交互流程
 
-1. 开启 `interaction.fault_dialog_enabled` 后，群内直接 @机器人 描述问题即可，不需要先选产品/项目；企业微信只在群聊 @ 时推送消息回调，后续补充信息需重新 @机器人。关闭该开关时仍保留原来的产品 → 项目两级菜单。单聊会提示改用群聊。
-2. 用户提问：网关先区分意图。包含“文档、方案、指引、操作步骤、怎么配置/迁移/部署”等资料请求，且没有报错、超时等现场证据时，直接查 Confluence；只有出现故障现象或明确要求查看代码实现时才进入代码链路。项目名、产品名和模块名只用于可选的仓库快捷映射，不再要求用户选择客户现场。
-3. 故障问题直接进入多轮信息确认：依次追问缺失的环境与时间、操作路径、模块/分支、报错日志，每轮只问一项；信息齐全或达到 `interaction.fault_dialog_max_turns` 后进入代码分析。代码定位只接受「模块 + 分支」，例如 `yicall-common release/3.1`，不会追问项目或客户现场。用户回复「直接分析」可跳过补充，「取消」可结束本次分析，「重置会话」会清空未完成的追问。若始终拿不到模块/分支，则退回 Confluence 资料给出排查建议，不阻塞对话。
-4. 非故障问题在知识库就绪时优先查 Confluence，无需先绑定项目；明确询问代码、接口、模块、SQL 等问题仍走原代码链路，而“如何配置回调地址”这类资料请求优先走知识库。知识库未启用或 Confluence 未配置时行为与旧版本一致。
-5. 故障分析按问题关键词选出最多 `FAULT_ANALYSIS_MAX_MODULES` 个模块；普通代码问答使用项目全部模块。worker 以 `git worktree` 检出独立目录，可选拼接少量 Confluence 背景资料，再调用 `codex exec` 做只读代码检索。
-6. 结果经 Redis 频道 `chatbot:reply` 回到网关，网关按覆盖式流式刷新做打字机效果，最后 `finish=true`。
+1. 群内首次 @机器人：返回项目菜单；因为企业微信只在群聊 @ 时推送消息回调，后续发送序号、提问、切换项目都要重新 @机器人。未选项目时直接提问会先暂存问题，回复序号选中项目后自动沿用原问题开始分析，无需重复输入。单聊会提示改用群聊。
+2. 用户提问：网关立刻建一条流式消息（「正在分析…」），再把任务投递给 Celery。
+3. worker 把该项目下各模块以 `git worktree` 检出到独立目录，调用 `codex exec` 分析；提示词要求严格只读，不修改文件、不执行构建与测试。
+4. 结果经 Redis 频道 `chatbot:reply` 回到网关，网关按覆盖式流式刷新做打字机效果，最后 `finish=true`。
 
 ### 关键约束
 
@@ -810,10 +807,7 @@ node ..\skills\jira-gate-bug\scripts\analysis-cli.mjs render --input <结果JSON
 - 只在群聊里被 @ 时触发；单聊直接提示改用群聊。回答范围包括代码、SQL、配置和接口文档。
 - 流式消息自首次发送起 10 分钟内必须 `finish=true`；超过配置的软截止时间会改为主动推送 `aibot_send_msg`。
 - 单会话 30 条/分钟；打字机分段数由 `backend/config/chatbot.json` 的 `gateway.typewriter_max_chunks` 控制，默认 12 段、间隔 2 秒。
-- 故障分析固定输出「结论 / 可能原因 / 代码定位 / 建议验证 / 影响与风险 / 背景资料」，并区分「已确认」和「待验证」；普通代码问答固定「结论 / 要点 / 影响与注意 / 依据」。回答不贴大段代码与检索过程，默认 1200 字。
-- 故障识别、最多模块数和背景资料开关位于 `backend/config/chatbot.json` 的 `fault_analysis`；也可用 `FAULT_ANALYSIS_ENABLED`、`FAULT_ANALYSIS_MAX_MODULES` 覆盖开关与模块上限。
-- 多轮故障追问与知识库优先路由位于 `interaction`：`fault_dialog_enabled`、`knowledge_first`、`fault_dialog_max_turns`；也可用 `CHATBOT_FAULT_DIALOG_ENABLED`、`CHATBOT_KNOWLEDGE_FIRST`、`CHATBOT_FAULT_DIALOG_MAX_TURNS` 覆盖。两个开关都设为 `false` 可恢复旧的一问一答链路。
-- 未配置 `interaction` 的旧部署默认保持原行为；仓库内置配置已显式开启。两个开关都设为 `false` 可完整恢复旧链路。
+- 回答面向产品经理：固定「结论 / 要点 / 影响与注意 / 依据」四段，代码依据最多 3 条且放在最后，不贴代码块、SQL 与检索过程；默认 1200 字，可用 `answer.max_answer_chars` 调整。
 - 仓库地址优先取 `repos.module_repo_urls`，其次 `repos.repo_url_template`，最后用 GitLab 搜索接口按模块名解析（凭据复用 `GIT_BASE_URL`/`GIT_USER`/`GIT_PASSWORD`/`GITLAB_PRIVATE_TOKEN`）。
 - 每个「模块 + 分支」在 `REPO_CACHE_DIR/chatbot/repos` 下维护一份缓存仓库。`repos.refresh_interval_seconds` 默认 3600 秒：窗口内问答直接复用缓存 ref，不再 fetch；超过窗口后由下一次问答同步最新提交。设为 `0` 表示每次都拉取。
 - `backend/config/chatbot.json` 已内置到镜像，无需挂载宿主机目录；修改后必须重新构建后端镜像并重启网关与 Worker，进程不会热加载。
@@ -825,16 +819,14 @@ node ..\skills\jira-gate-bug\scripts\analysis-cli.mjs render --input <结果JSON
 # 1. 在 .env 中只填写机器人凭证
 CHATBOT_BOT_ID=你的BotID
 CHATBOT_BOT_SECRET=你的Secret
-FAULT_ANALYSIS_ENABLED=true
-FAULT_ANALYSIS_MAX_MODULES=4
 
-# 2. 启动生产服务（自动包含 API、Worker 与已启用的机器人/知识库服务）
-DEPLOY_ENV=prod bash start.sh
+# 2. 启动 API、专用 worker 与网关（三者都要读取同一份映射文件）
+docker compose --env-file .env.production -f docker-compose-prod.yaml up -d api worker-chatbot chatbot-gateway
 ```
 
 生产 Compose 的 `worker-chatbot`、`chatbot-gateway` 通过 `${ENV_FILE:-.env}` 读取环境文件。
 使用 `--env-file .env.production` 启动时，请确保该文件里有 `ENV_FILE=.env.production`（部署示例已包含），
-否则容器内的机器人凭证和 GitLab 凭据会读不到。`bash start.sh` 在机器人凭证齐全时才会追加这两个服务，知识库启用时还会追加 `worker-knowledge`。
+否则容器内的机器人凭证和 GitLab 凭据会读不到。`bash start.sh` 在凭证齐全时才会追加这两个服务。
 首次部署或新增 `chatbot_questions` 表时，先执行一次
 `docker compose --env-file .env.production -f docker-compose-prod.yaml run --rm migrate`。
 
@@ -848,30 +840,6 @@ DEPLOY_ENV=prod bash start.sh
 | `GET /chatbot/projects` | 项目与模块分支清单，用于核对映射 |
 | `GET /chatbot/questions?limit=20` | 最近问答记录（问题、结论、耗时、状态） |
 | `POST /chatbot/reload` | 重新读取配置文件并校验；变更实际生效需重启网关与 Worker |
-
-## Confluence 只读知识问答
-
-启用后，机器人优先从 Confluence 检索证据并只返回一个结论。回答固定为「答案 / 依据 / 来源」，不会一次返回多个候选答案；证据不足时明确回答未找到依据，不凭模型记忆补写。普通问题从网关进入知识库时会强制校验引用编号必须来自本轮证据，无法核对时返回证据不足，而不是套用无关页面。页面按标题和长度切片后存入 MySQL，默认每 6 小时同步一次，首次启动自动同步；索引未命中时会在线补搜，问答前还会刷新命中的页面。
-
-```env
-KNOWLEDGE_ENABLED=true
-CONFLUENCE_URL=https://confluence.example.com
-CONFLUENCE_AUTH_MODE=bearer
-CONFLUENCE_TOKEN=只读访问令牌
-CONFLUENCE_USERNAME=
-CONFLUENCE_PASSWORD=
-KNOWLEDGE_SYNC_INTERVAL_SECONDS=21600
-```
-
-使用 Basic Auth 时可把鉴权模式改为 basic，并填写用户名和密码。知识库默认关闭。backend/config/chatbot.json 的 knowledge.space_keys、labels、root_page_ids 限定同步范围；范围为空表示只索引机器人账号有权访问的全部页面。系统只调用 Confluence 读取接口，不创建、修改或删除页面。向量模型是可选项，未配置 KNOWLEDGE_EMBEDDING_MODEL 时自动使用关键词检索。
-
-```text
-GET  /chatbot/knowledge/status
-POST /chatbot/knowledge/sync
-POST /chatbot/knowledge/pages/<page_id>/sync
-```
-
-手动同步接口只把任务投递到 knowledge-sync 队列，不在 API 请求内等待 Confluence。部署后先执行数据库迁移，再启动 worker-knowledge；生产与开发服务名分别为 worker-knowledge、worker-knowledge-dev。
 
 ## Git 与外部基础设施
 

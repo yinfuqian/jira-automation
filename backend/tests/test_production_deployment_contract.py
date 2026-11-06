@@ -24,17 +24,16 @@ class ProductionDeploymentContractTests(unittest.TestCase):
             "worker-analysis",
             "worker-skill",
             "worker-chatbot",
-            "worker-knowledge",
             "chatbot-gateway",
             "beat",
         ):
             self.assertRegex(source, rf"(?m)^  {re.escape(service)}:\s*$")
-        self.assertEqual(source.count("image: ${BACKEND_IMAGE}"), 8)
+        self.assertEqual(source.count("image: ${BACKEND_IMAGE}"), 7)
 
     def test_online_services_use_host_network(self):
         source = ONLINE_COMPOSE.read_text(encoding="utf-8")
 
-        self.assertEqual(source.count('network_mode: "host"'), 8)
+        self.assertEqual(source.count('network_mode: "host"'), 7)
         self.assertIn('"${API_PORT}:5000"', source)
         # host 网络下 ports 映射不生效，gunicorn 必须直接监听 API_PORT。
         self.assertIn("0.0.0.0:${API_PORT:-5000}", source)
@@ -49,14 +48,14 @@ class ProductionDeploymentContractTests(unittest.TestCase):
         """所有启动 Flask 应用的服务都必须把用户文件挂到 AUTH_USERS_FILE 指定位置。"""
         source = ONLINE_COMPOSE.read_text(encoding="utf-8")
 
-        self.assertEqual(source.count("./data/users.csv:/data/users.csv:ro"), 8)
+        self.assertEqual(source.count("./data/users.csv:/data/users.csv:ro"), 7)
         self.assertNotIn(":/users.csv", source)
 
     def test_production_chatbot_services_read_the_selected_env_file(self):
         """生产机器人服务必须跟随 --env-file 读取 .env.production，不能硬编码 .env。"""
         source = ONLINE_COMPOSE.read_text(encoding="utf-8")
 
-        self.assertEqual(source.count("env_file:\n      - ${ENV_FILE:-.env}"), 8)
+        self.assertEqual(source.count("env_file:\n      - ${ENV_FILE:-.env}"), 7)
         self.assertNotIn("env_file:\n      - .env\n", source)
 
     def test_frontend_image_supports_template_upstreams(self):
