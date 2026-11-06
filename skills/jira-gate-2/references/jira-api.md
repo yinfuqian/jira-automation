@@ -107,17 +107,18 @@ Jira 的 `/rest/...` 地址在浏览器里会被拦截（`ERR_BLOCKED_BY_CLIENT`
 - 评论用 Jira wiki 标记：`h3.` / `h4.` / `h5.` 标题、`*粗体*`、行首 `* ` 无序列表、行首 `# ` 有序列表、`(/)` 绿勾、`(x)` 红叉、`{{等宽}}`。
 - 不要提交 Markdown 表格；需要表格时用 `||表头||` + `|单元格|`。
 - 评论正文避免出现未转义的花括号组合（`{color}` 之类会被当作宏）。
-- G2 判定结论只以评论留痕；附件只上传 PDCA RD 角色报告一份（见 `SKILL.md` §5.2），其余报告文档不生成、不上传。
+- G2 判定结论只以评论留痕；附件只上传 PDCA RD 角色报告一份（见 `SKILL.md` §5.2），其余报告文档不生成、不上传。**PDCA 报告只保留最新一份，历史评论一律保留。**
 
 **PDCA 报告上传与读回**
 
 ```bash
 node scripts/jira-cli.mjs attach <KEY|URL> work/jira-gate-2/<KEY>/pdca/<报告文件名> --name <报告文件名>
+node scripts/jira-cli.mjs attach-prune <KEY|URL> --contains _RD_,_PDCA --suffix .md --keep <新附件ID>
 node scripts/jira-cli.mjs attach-list <KEY|URL>
 ```
 
-- 上传前先用 `attach-list` 检查同需求、同角色、同日期已有报告，`NN` 取最大序号 + 1，不覆盖历史快照。
-- 上传后必须 `attach-list` 读回确认文件名与大小；读回不到时在评论里写「未上传（原因）」，不要伪造附件名。
+- 上传前先用 `attach-list` 检查同需求、同角色、同日期已有报告，`NN` 取最大序号 + 1。文件名保留当轮序号便于追溯，但上传成功后用 `attach-prune` 清理同角色旧 PDCA 报告，附件区只保留最新一份；历史评论不删除、不改写。
+- 上传后必须 `attach-list` 读回确认文件名与大小，并确认同族只剩新附件；读回不到时在评论里写「未上传（原因）」，不要伪造附件名。上传失败时不要清理旧报告；清理失败（如 403 无删除权限）只记告警，不改变 PDCA 结论。
 - 附件名使用 `{{需求名称}}_RD_{{YYYYMMDD}}_{{NN}}_PDCA.md`，不要改名绕开上传失败。
 
 ## 9. 交付顺序、类型预检与状态流转

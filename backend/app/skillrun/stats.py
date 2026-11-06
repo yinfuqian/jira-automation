@@ -260,6 +260,32 @@ FROM combined
 ORDER BY row_type, call_count DESC, skill_id
 """
 
+# 按技能聚合技能自己写出的原始结论，供接口展示具体业务结果。
+# 这里不做通过/退回归一化：门禁类技能仍看 outcome，生成类技能则直接展示原文。
+SKILL_CONCLUSION_STATISTICS_SQL = """
+SELECT
+    c.skill_id,
+    COALESCE(NULLIF(TRIM(c.conclusion_text), ''), '') AS conclusion_text,
+    c.outcome,
+    COUNT(*) AS call_count
+FROM skill_call_records AS c
+INNER JOIN skill_run_records AS r
+    ON r.id = c.record_id
+   AND r.task_id = c.task_id
+WHERE (:start_utc IS NULL OR c.created_at >= :start_utc)
+  AND (:end_utc IS NULL OR c.created_at < :end_utc)
+  AND (:skill_id IS NULL OR c.skill_id = :skill_id)
+  AND c.outcome <> 'not_applicable'
+GROUP BY
+    c.skill_id,
+    COALESCE(NULLIF(TRIM(c.conclusion_text), ''), ''),
+    c.outcome
+ORDER BY
+    c.skill_id,
+    call_count DESC,
+    conclusion_text
+"""
+
 ISSUE_STATISTICS_SQL = """
 WITH base AS (
     SELECT
@@ -423,17 +449,26 @@ def parse_skill_id(raw_value) -> str | None:
 
 def query_skill_statistics(filters: StatsFilters) -> dict:
     """按技能聚合调用次数、技术状态、业务结论、耗时与阻断项。"""
-    rows = (
-        db.session.execute(text(SKILL_STATISTICS_SQL), _sql_params(filters))
+    params = _sql_params(filters)
+    rows = db.session.execute(text(SKILL_STATISTICS_SQL), params).mappings().all()
+    conclusion_rows = (
+        db.session.execute(text(SKILL_CONCLUSION_STATISTICS_SQL), params)
         .mappings()
         .all()
+    )
+    conclusions_by_skill, summary_conclusions = _build_conclusion_distribution(
+        conclusion_rows
     )
     items = []
     summary = None
     for row in rows:
         serialized = _serialize_skill_row(row)
+        serialized["conclusions"] = conclusions_by_skill.get(
+            row["skill_id"], []
+        )
         if int(row["row_type"]) == 1:
             serialized["label"] = "合计"
+            serialized["conclusions"] = summary_conclusions
             summary = serialized
         else:
             items.append(serialized)
@@ -467,6 +502,42 @@ def _sql_params(filters: StatsFilters) -> dict:
         "end_utc": filters.end_utc,
         "skill_id": filters.skill_id,
     }
+
+
+def _build_conclusion_distribution(rows):
+    """把结论分布行按技能归集，并汇总全量结论分布。"""
+    by_skill = {}
+    summary_totals = {}
+    for row in rows:
+        conclusion = _serialize_conclusion_row(row)
+        skill_id = row["skill_id"]
+        by_skill.setdefault(skill_id, []).append(conclusion)
+
+        key = (conclusion["conclusion_text"], conclusion["outcome"])
+        if key not in summary_totals:
+            summary_totals[key] = dict(conclusion)
+        else:
+            summary_totals[key]["call_count"] += conclusion["call_count"]
+
+    for conclusions in by_skill.values():
+        conclusions.sort(key=_conclusion_sort_key)
+    return by_skill, sorted(summary_totals.values(), key=_conclusion_sort_key)
+
+
+def _serialize_conclusion_row(row) -> dict:
+    """把单条结论分布转换为接口字段，保留技能写出的中文原文。"""
+    outcome = row["outcome"] or "unknown"
+    return {
+        "conclusion_text": row["conclusion_text"] or None,
+        "outcome": outcome,
+        "outcome_label": OUTCOME_LABELS.get(outcome, "无结论"),
+        "call_count": _as_int(row["call_count"]),
+    }
+
+
+def _conclusion_sort_key(item):
+    """结论按调用次数倒序排列，次数相同时按原文排序。"""
+    return (-item["call_count"], item["conclusion_text"] or "")
 
 
 def _serialize_skill_row(row) -> dict:

@@ -9,13 +9,16 @@
  * 记为「不适用」，不生成、不上传原型设计准入报告，也不参与综合结论。
  *
  * 判定口径（宁可多报候选、不可静默跳过）：
+ *   0. 先排除本流程与子技能自己回写的历史产物（设计准入报告、QA 门禁清单等），
+ *      否则「原型设计准入报告.html」会因文件名含「原型」被误当成业务原型，形成自我触发。
+ *      排除只依据本流程专属标记，业务主题词（测试用例 / PDCA 等）不参与，避免误伤真实原型。
  *   1. 文件名或相对路径含原型关键词（原型 / prototype / mockup / axure / figma / 蓝湖 / 墨刀 / 交互 等）→ 命中。
  *   2. 图片附件（png/jpg/jpeg/gif/webp/bmp/svg），只要文件名不像 PRD、评审报告、技术方案等文档 → 命中。
  *   3. HTML/HTM 附件：路径命中关键词，或前 64KB 内容里出现原型关键词 → 命中；
  *      否则记入 ambiguous（交由调用方打开确认），不直接当作原型。
  *   4. 未展开的压缩包（zip/rar/7z）在没有任何命中时记入 ambiguous，提示先解压再判定。
  *
- * 输出：单行 JSON，字段 hasPrototype / reason / hits / ambiguous；脚本始终 exit 0。
+ * 输出：单行 JSON，字段 hasPrototype / reason / hits / ambiguous / ignored；脚本始终 exit 0。
  */
 
 import { existsSync, readdirSync, readFileSync, statSync } from "node:fs";
@@ -54,6 +57,29 @@ const DOCUMENT_KEYWORDS = [
   "概览",
 ];
 
+/**
+ * 自生成产物专属标记：只有本流程与 review-jira-* / jira-qa-* 回写的报告、
+ * 门禁清单与评论草稿才会出现的特征词。它们即便文件名或正文含「原型」，
+ * 也不是可供审核的业务原型。
+ *
+ * 这里刻意不放「测试用例」「测试方案」「评审报告」「PDCA」「整改记录」等业务主题词：
+ * 真实原型完全可能以这些词为主题（例如「测试用例管理」「PDCA 看板」页面），
+ * 用它们做排除会把业务原型静默判成历史产物、漏掉设计审核。
+ */
+const SELF_ARTIFACT_MARKERS = [
+  "原型设计准入报告",
+  // 报告模板的实际标题是「原型设计准入审核 · <需求名>」，不含「报告」二字；
+  // 文件被重命名或用旧命名上传时，只能靠这一条识别，否则会被当成业务原型。
+  "原型设计准入",
+  "设计准入报告",
+  "需求评审报告",
+  "qa需求准入门禁清单",
+  "qa-需求准入门禁",
+  "准入门禁清单",
+  "g1预检评论",
+  "g1准入结论",
+];
+
 /** 图片扩展名：原型截图通常以图片附件形式上传递。 */
 const IMAGE_EXTS = new Set([".png", ".jpg", ".jpeg", ".gif", ".webp", ".bmp", ".svg"]);
 
@@ -66,7 +92,7 @@ const ARCHIVE_EXTS = new Set([".zip", ".rar", ".7z"]);
 /** 纯中间产物与文档格式，不参与原型判定。 */
 const SKIP_EXTS = new Set([".txt", ".json", ".log", ".md", ".doc", ".docx", ".xls", ".xlsx", ".ppt", ".pptx", ".csv"]);
 
-/** HTML 正文嗅探上限：只看开头，避免把大文件整份读进内存。 */
+/** HTML 正文嗅探上限：只把开头 64KB 送进关键词匹配，避免大页面全文参与判定。 */
 const SNIFF_BYTES = 64 * 1024;
 
 /** 递归遍历的深度与数量上限，防止异常目录拖垮任务。 */
@@ -80,13 +106,27 @@ function hasPrototypeKeyword(text) {
   return PROTOTYPE_KEYWORDS.some((keyword) => value.includes(keyword));
 }
 
-
 /** 判断文本是否像文档（PRD / 评审报告 / 技术方案等）。 */
 function looksLikeDocument(text) {
   const value = String(text || "").toLowerCase();
   return DOCUMENT_KEYWORDS.some((keyword) => value.includes(keyword));
 }
 
+/** 判断文本是否是本流程自己回写的历史产物（报告、门禁清单、评论草稿等）。 */
+function looksLikeSelfArtifact(text) {
+  const value = String(text || "").toLowerCase();
+  return SELF_ARTIFACT_MARKERS.some((keyword) => value.includes(keyword));
+}
+
+
+/** 提取 HTML 的 title（退化为首个 h1），用于区分业务原型页面与文档页面。 */
+function extractTitle(html) {
+  const text = String(html || "");
+  const title = text.match(/<title[^>]*>([\s\S]*?)<\/title>/i);
+  if (title && title[1].trim()) return title[1].replace(/<[^>]+>/g, " ").trim();
+  const heading = text.match(/<h1[^>]*>([\s\S]*?)<\/h1>/i);
+  return heading ? heading[1].replace(/<[^>]+>/g, " ").trim() : "";
+}
 
 /** 读取 HTML 开头内容用于关键词嗅探；读失败时返回空串，不影响其它文件判定。 */
 function sniffHtml(file) {
@@ -141,28 +181,40 @@ function parseArgs(argv) {
 }
 
 
-/** 主判定：返回命中列表与待人工确认列表。 */
+/** 主判定：返回命中列表、待人工确认列表与被排除的历史产物列表。 */
 function detect(dir) {
   const root = resolve(dir);
   if (!existsSync(root) || !statSync(root).isDirectory()) {
-    return { hasPrototype: false, reason: "附件目录不存在，无法判定是否上传原型", hits: [], ambiguous: [] };
+    return { hasPrototype: false, reason: "附件目录不存在，无法判定是否上传原型", hits: [], ambiguous: [], ignored: [] };
   }
 
   const hits = [];
   const ambiguous = [];
+  const ignored = [];
   for (const file of collectFiles(root)) {
     const ext = extname(file.rel).toLowerCase();
     const label = file.rel.toLowerCase();
     if (SKIP_EXTS.has(ext)) continue;
 
     const prototypeByPath = hasPrototypeKeyword(label);
+
+    // 0) 自生成产物优先排除：原型设计准入报告、需求评审报告、QA 门禁清单等，
+    //    即使文件名含「原型」也不能当作业务原型，否则每次回写都会触发下一轮设计审核。
+    if (looksLikeSelfArtifact(label)) {
+      ignored.push({ path: file.rel, kind: "self-artifact" });
+      continue;
+    }
+
     const documentByPath = looksLikeDocument(label) && !prototypeByPath;
 
     if (ARCHIVE_EXTS.has(ext)) {
       ambiguous.push({ path: file.rel, kind: "archive" });
       continue;
     }
-    if (documentByPath) continue;
+    if (documentByPath) {
+      ignored.push({ path: file.rel, kind: "document" });
+      continue;
+    }
 
     if (prototypeByPath) {
       hits.push({ path: file.rel, kind: "path-keyword" });
@@ -173,18 +225,34 @@ function detect(dir) {
       continue;
     }
     if (HTML_EXTS.has(ext)) {
-      if (hasPrototypeKeyword(sniffHtml(file.full))) hits.push({ path: file.rel, kind: "html-content" });
-      else ambiguous.push({ path: file.rel, kind: "html-unlabeled" });
+      const head = sniffHtml(file.full);
+      const title = extractTitle(head);
+      // 文件名看不出是报告时，再看标题与正文，避免历史报告/PRD 被重命名后再次误判。
+      if (looksLikeSelfArtifact(head)) {
+        ignored.push({ path: file.rel, kind: "self-artifact-html" });
+      } else if (looksLikeSelfArtifact(title)) {
+        ignored.push({ path: file.rel, kind: "self-artifact-html" });
+      } else if (hasPrototypeKeyword(title)) {
+        hits.push({ path: file.rel, kind: "html-title" });
+      } else if (looksLikeDocument(title)) {
+        ignored.push({ path: file.rel, kind: "document-html" });
+      } else if (hasPrototypeKeyword(head)) {
+        // 正文只是「提到」原型（如 PRD 的说明段落），不能直接当业务原型，交由调用方打开确认。
+        ambiguous.push({ path: file.rel, kind: "html-keyword" });
+      } else {
+        ambiguous.push({ path: file.rel, kind: "html-unlabeled" });
+      }
     }
   }
 
   const hasPrototype = hits.length > 0;
+  const ignoredNote = ignored.length ? `；已排除 ${ignored.length} 个历史报告/文档` : "";
   const reason = hasPrototype
     ? `命中 ${hits.length} 个原型材料：${hits.map((item) => item.path).slice(0, 5).join("、")}`
     : ambiguous.length
-      ? "未识别出原型材料，但存在需人工确认的 HTML/压缩包"
-      : "附件中没有原型材料";
-  return { hasPrototype, reason, hits, ambiguous };
+      ? `未识别出原型材料，但存在需人工确认的 HTML/压缩包${ignoredNote}`
+      : `附件中没有原型材料${ignoredNote}`;
+  return { hasPrototype, reason, hits, ambiguous, ignored };
 }
 
 

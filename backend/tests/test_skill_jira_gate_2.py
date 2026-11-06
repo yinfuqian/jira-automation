@@ -112,6 +112,26 @@ class Gate2DefinitionTests(unittest.TestCase):
         self.assertNotIn("检查未完成", text)
         self.assertIn("不生成空报告", text)
 
+    def test_attachment_pruning_keeps_latest_pdca_report(self):
+        """PDCA 报告上传成功后只保留最新一份，历史评论必须保留。"""
+        text = (GATE2_DIR / "SKILL.md").read_text(encoding="utf-8")
+        payload = json.loads((GATE2_DIR / "runtime.json").read_text(encoding="utf-8"))
+        jira_source = (GATE2_DIR / "scripts" / "jira.mjs").read_text(encoding="utf-8")
+        cli_source = (GATE2_DIR / "scripts" / "jira-cli.mjs").read_text(encoding="utf-8")
+
+        self.assertIn("attach-prune", text)
+        self.assertIn("--contains _RD_,_PDCA", text)
+        self.assertIn("只保留最新一份", text)
+        self.assertIn("历史评论一律保留", text)
+        self.assertIn("上传失败时不要清理", text)
+        self.assertIn("attach-prune", payload["prompt_template"])
+        self.assertIn("--contains _RD_,_PDCA", payload["prompt_template"])
+        self.assertIn("历史评论", payload["prompt_template"])
+        self.assertIn("export async function deleteAttachment", jira_source)
+        self.assertIn("export function selectStaleAttachments", jira_source)
+        self.assertIn("export async function pruneAttachments", jira_source)
+        self.assertIn('case "attach-prune"', cli_source)
+
     def test_skill_declares_g2_and_pdca_parallel_judgement(self):
         """最新 checklist 不再写 PDCA 交叉引用，并行判定由 SKILL.md 声明。"""
         checklist = (GATE2_DIR / "references" / "checklist.md").read_text(encoding="utf-8")

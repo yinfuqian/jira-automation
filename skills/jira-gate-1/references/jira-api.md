@@ -180,10 +180,11 @@ export JIRA_BASE_URL="${JIRA_BASE_URL:-https://jira.in.wezhuiyi.com}"
 
 ```bash
 node scripts/jira-cli.mjs attach <KEY|URL> "<报告路径>" --name "<KEY>-需求评审报告-宋立志.md"
+node scripts/jira-cli.mjs attach-prune <KEY|URL> --contains 需求评审报告 --suffix .md --keep <新附件ID>
 node scripts/jira-cli.mjs attach-list <KEY|URL>   # 读回确认：列表里出现目标文件名才算上传成功
 ```
 
-5. **成功判定看返回体不看退出码**：`attach` 成功返回 `{ok:true, id, filename, size}`；失败返回 `{ok:false, reason}` 并**置退出码 1** 且在 stderr 打 `[附件上传失败] ...`。上传完后**必须**用 `attach-list` 读回，确认 `fields.attachment` 里出现目标文件名——`ok:true` 只说明站点接受了这次 POST，读回才是"附件真的挂在该单上"的证据。注意附件的 `author` 是令牌账号，不是写评论的人，这一点不是异常。
+5. **成功判定看返回体不看退出码**：`attach` 成功返回 `{ok:true, id, filename, size}`；失败返回 `{ok:false, reason}` 并**置退出码 1** 且在 stderr 打 `[附件上传失败] ...`。上传完后**必须**用 `attach-list` 读回，确认 `fields.attachment` 里出现目标文件名——`ok:true` 只说明站点接受了这次 POST，读回才是"附件真的挂在该单上"的证据。注意附件的 `author` 是令牌账号，不是写评论的人，这一点不是异常。**读回确认拿到新附件 ID 后，用 `attach-prune` 删除同族旧报告，该族只保留最新一份；历史评论一律保留。上传失败时不要清理。**
 6. **降级**：本地文件缺失、403（缺 `CREATE_ATTACHMENTS`）、404（该单未启用附件）、网络错误都返回 `{ok:false, reason}` 而不抛错：**跳过上传并如实说明，不要重试、不要改文件名绕开**。
 7. **顺序与失败收口**：`review-jira-req` 流水线 → `review-jira-design`（仅单子已上传原型时）→ `review-jira-qa` 阶段一 → 评论 → 门禁字段 → 上传需求评审报告与已生成的设计准入报告 → 流转状态（仅退回补充，见 §9）。流转放最后，前序步骤的留痕不因流转失败而回滚。`review-jira-req` 五步中任一步失败、报告未生成或结论提取失败时，需求评审记为「未完成（阶段/原因）」并继续后续步骤，不得中断 G1。
 8. **评论末尾固定带附件行 + 评审结论**：评论里写 `* 报告附件：<KEY>-需求评审报告-宋立志.md（已上传 / 未上传（原因））｜评审结论：<不合格/需修改/合格/未完成（原因）>`。
@@ -193,7 +194,7 @@ node scripts/jira-cli.mjs attach-list <KEY|URL>   # 读回确认：列表里出�
 
 ## 10.1 原型设计准入报告（review-jira-design）
 
-需求质量评审报告生成后、QA 阶段一之前，先用 `node scripts/detect-prototype.mjs --dir work/jira-gate/<KEY>/attachments --json` 判定单子是否上传了原型材料；**只有 `hasPrototype=true`（或人工确认 `ambiguous` 中是原型）才调用 `/data/skills/review-jira-design`**。未上传原型时整节跳过：不调用技能、不生成也不上传设计报告，评论记「不适用（本单未上传原型）」，继续 QA 阶段一。该技能**对 Jira 只读**，输入只有本单已下载的 PRD 与产品原型文件；本技能负责把生成的 HTML 上传成需求单附件。
+需求质量评审报告生成后、QA 阶段一之前，先用 `node scripts/detect-prototype.mjs --dir work/jira-gate/<KEY>/attachments --json` 判定单子是否上传了原型材料；**只有 `hasPrototype=true`（或人工确认 `ambiguous` 中是原型）才调用 `/data/skills/review-jira-design`**。判定脚本会先排除 `*原型设计准入*.html`（含旧命名「原型设计准入审核」）、`*需求评审报告*`、`*QA需求准入门禁清单*` 等带本流程专属标记的历史产物（输出在 `ignored`），它们即使文件名或正文含「原型」也不是业务原型；历史报告不能反过来触发生成新报告。「测试用例」「测试方案」「评审报告」「PDCA」等业务主题词不作为排除依据，真实原型可能以这些词为主题，这类 HTML 会进 `ambiguous` 由调用方打开确认。未上传原型时整节跳过：不调用技能、不生成也不上传设计报告，评论记「不适用（本单未上传原型）」，继续 QA 阶段一。该技能**对 Jira 只读**，输入只有本单已下载的 PRD 与产品原型文件；本技能负责把生成的 HTML 上传成需求单附件。
 
 1. **输入**：§3 下载到 `work/jira-gate/<KEY>/attachments/` 的定稿 PRD 与原型 HTML（压缩包解压后在 `__unpacked/` 下）。多个候选时按需求单描述锁定唯一对象，不要按文件名相似度猜。
 2. **执行**：按它的 `SKILL.md` 建 PRD 编号索引、写 `work/jira-gate/<KEY>/design/content.json`，再由 `build-report.mjs` 生成 `work/jira-gate/<KEY>/design/<KEY>-原型设计准入报告.html`；不要手写 HTML，也不要改模板。
@@ -202,10 +203,11 @@ node scripts/jira-cli.mjs attach-list <KEY|URL>   # 读回确认：列表里出�
 
 ```bash
 node scripts/jira-cli.mjs attach <KEY|URL> "work/jira-gate/<KEY>/design/<KEY>-原型设计准入报告.html"   --name "<KEY>-原型设计准入报告.html"
+node scripts/jira-cli.mjs attach-prune <KEY|URL> --contains 原型设计准入报告 --suffix .html --keep <新附件ID>
 node scripts/jira-cli.mjs attach-list <KEY|URL>   # 与需求评审报告一起读回确认
 ```
 
-5. **降级**：已判定有原型时，PRD 或原型缺失、无法读取、对象无法唯一定位，设计结论写「审核未完成」（业务结论，仍使 G1 最终为「退回补充」），不得自造「通过」；连 `build-report.mjs --prd` 都无法执行时跳过设计附件并在评论里写明原因。权限不足或附件上传失败时，用 `comment-update` 把评论里的「设计报告附件」行改成「未上传（原因）」，不改变设计结论。脚本非零退出、内容 JSON 非法/缺失、报告未生成属于运营性失败，设计记为「未完成（原因）」，不改变 G1 自身结论，也不中断 G1 后续交付。
+5. **降级**：已判定有原型时，PRD 缺失/无法读取、原型不可读、对象无法唯一定位，设计结论写「审核未完成」（业务结论，仍使 G1 最终为「退回补充」），不得自造「通过」；**复核后发现命中的只是历史报告或非业务页面，说明本单实际没有业务原型，必须回到「不适用」分支，不得把「找不到业务原型」写成「审核未完成」**。连 `build-report.mjs --prd` 都无法执行时跳过设计附件并在评论里写明原因。权限不足或附件上传失败时，用 `comment-update` 把评论里的「设计报告附件」行改成「未上传（原因）」，不改变设计结论。脚本非零退出、内容 JSON 非法/缺失、报告未生成属于运营性失败，设计记为「未完成（原因）」，不改变 G1 自身结论，也不中断 G1 后续交付。
 
 ## 10.2 QA 需求准入门禁（review-jira-qa）
 

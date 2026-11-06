@@ -68,6 +68,8 @@ metadata:
 
   # 上传 PDCA RD 报告并读回确认（见 §5.2）
   node <技能目录>/scripts/jira-cli.mjs attach <KEY|URL> work/jira-gate-2/<KEY>/pdca/<报告文件名> --name <报告文件名>
+  # 保留刚上传的那一份，删掉同角色旧 PDCA 报告（历史结论仍保留在评论里）
+  node <技能目录>/scripts/jira-cli.mjs attach-prune <KEY|URL> --contains _RD_,_PDCA --suffix .md --keep <新附件ID>
   node <技能目录>/scripts/jira-cli.mjs attach-list <KEY|URL>
 
   # 写入评论：正文先落文件再提交，避免多行标记转义问题
@@ -277,11 +279,15 @@ PRD-DELIVERY：唯一业务事实源
 # 1) 生成报告（Jira 模式只保留 RD 章节；文件名按 需求名称_RD_YYYYMMDD_NN_PDCA.md）
 # 2) 上传为附件
 node <技能目录>/scripts/jira-cli.mjs attach <KEY|URL> work/jira-gate-2/<KEY>/pdca/<报告文件名> --name <报告文件名>
-# 3) 读回确认
+# 3) 保留刚上传的那一份，删除同角色旧 PDCA 报告（历史结论仍在评论里）
+node <技能目录>/scripts/jira-cli.mjs attach-prune <KEY|URL> \
+  --contains _RD_,_PDCA --suffix .md --keep <新附件ID>
+# 4) 读回确认：该族只剩最新一份
 node <技能目录>/scripts/jira-cli.mjs attach-list <KEY|URL>
 ```
 
-- 文件名：`{{需求名称}}_RD_{{YYYYMMDD}}_{{NN}}_PDCA.md`，`NN` 从 `01` 起递增。先用 `attach-list` 找同需求、同角色、同日期的已有报告，取最大 `NN + 1`；不得覆盖历史快照。
+- 文件名：`{{需求名称}}_RD_{{YYYYMMDD}}_{{NN}}_PDCA.md`，`NN` 从 `01` 起递增。先用 `attach-list` 找同需求、同角色、同日期的已有报告，取最大 `NN + 1`；文件名保留当轮序号便于追溯，但**上传成功后必须清理同角色旧 PDCA 报告，附件区只保留最新一份**。
+- **清理规则**：`attach` 返回新附件 ID 后执行 `attach-prune --contains _RD_,_PDCA --suffix .md --keep <新附件ID>`，把同族其他 PDCA 报告删掉；**历史评论一律保留，不删除也不改写**。只有新附件上传成功且 `attach-list` 读回确认后才清理；上传失败时不要清理，避免删掉唯一的历史附件。清理失败（如 403 无删除权限）只记告警，不改变 PDCA 结论。
 - 报告顶部按规范 §6 写**最小 front-matter**（`artifact_type: pdca`、`mode: jira`、`source_prd`、`source_prd_version`、`checked_deliverable`、`generated_at`、`pdca_template_version: "V1.1"`、`collab_checks_skill_version: "V1.0"`、`ui_check_source_version: "1.2"`、`jira_issue`、`report_name` 等）；字段与母版保持一致，不自行增删。
 - 章节按规范 §6.1.2 只保留 **一、PDCA 结论**、**二、开发侧方案检查结果与问题项**、**五、附录**（输入材料、必查项核对表、AC 追溯明细、未检查项、变更记录）；不生成 UI / 测试章节，也不把未触发的角色写成「未检查」。
 - 色标统一用 🟢 / 🔴 / ⚪；问题编号用 `D-` 前缀，每项一张卡：影响 → 怎么改 → 完成标准 → PRD 要求 vs 交付物实际。
@@ -513,6 +519,7 @@ h4. 不通过项
 - **必须同时执行两套判定**：G2 技术方案准出 Checklist 与 PDCA RD 开发交付物检查；任一不通过即退回补充，不得只跑一套。
 - **唯一允许写入的字段是 G2 门禁字段**（`setGateResult()` 写入的准出结论/预检时间），它是评论结论的机器可读副本，不是新的事实来源。
 - 只生成并上传 PDCA RD 角色报告（`<需求名称>_RD_<YYYYMMDD>_<NN>_PDCA.md`）；G2 判定本身仍只以 Jira 评论留痕。
+- **PDCA 报告只保留最新一份**：新报告上传成功后用 `attach-prune --contains _RD_,_PDCA --suffix .md --keep <新附件ID>` 清理同角色旧报告；**历史评论必须保留，不删除也不改写**。不要删除技术方案、PRD 等产品附件。
 - 不编造方案未写明的内容，不把推测写成已确认事实。
 - 不把单据字段缺失、OpenSpec tasks 未生成、纯代码风格差异当作不满足理由。
 - 不留下未完成的草稿评论。

@@ -20,7 +20,7 @@
  * 只警告不阻断，便于在交付前发现格式问题。
  */
 
-import { existsSync, mkdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { basename, join, resolve } from "node:path";
 import { deflateRawSync } from "node:zlib";
 
@@ -218,6 +218,32 @@ function timestampOf(date) {
 }
 
 
+/**
+ * 删除同一需求的历史预检包，只保留刚生成的这一份。
+ *
+ * 交付物只保留最新一份，避免多次预演后 outputs/ 里堆积大量压缩包，
+ * 也让 `/skill/task/<task_id>` 的 artifacts 里始终只有一个可下载文件。
+ * 只匹配 `<KEY>-G1预检包-*.zip`，不会误删其他需求或其他类型的交付物。
+ */
+function removePreviousPackages(outDir, key, keepPath) {
+  const keep = resolve(keepPath);
+  const pattern = new RegExp(`^${key}-G1预检包-.*\\.zip$`, "i");
+  const removed = [];
+  for (const name of readdirSync(outDir)) {
+    if (!pattern.test(name)) continue;
+    const full = join(outDir, name);
+    if (resolve(full) === keep) continue;
+    try {
+      rmSync(full, { force: true });
+      removed.push(name);
+    } catch {
+      // 删除失败不影响本次交付，保留旧包并在结果里如实返回。
+    }
+  }
+  return removed;
+}
+
+
 /** 执行打包，返回可直接打印为 JSON 的结果对象 */
 function pack(options) {
   const key = String(options.key || "").trim().toUpperCase();
@@ -250,6 +276,8 @@ function pack(options) {
   const zipPath = join(outDir, zipName);
   const zipBuffer = buildZip(entries, new Date());
   writeFileSync(zipPath, zipBuffer);
+  // 打包成功后清理同需求旧包，保证附件区/交付物目录只有最新一份。
+  const removedPrevious = removePreviousPackages(outDir, key, zipPath);
 
   const warnings = checkCommentWiki(comment.data.toString("utf8"));
   if (design) warnings.push(...checkDesignReport(design.data));
@@ -259,6 +287,7 @@ function pack(options) {
     key,
     zip: zipPath,
     zipBytes: zipBuffer.length,
+    removedPrevious,
     entries: entries.map((entry) => ({ name: entry.name, bytes: entry.data.length })),
     warnings,
   };

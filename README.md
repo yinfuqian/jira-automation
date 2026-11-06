@@ -583,7 +583,7 @@ LIMIT 100;
 
 | 接口 | 说明 |
 | --- | --- |
-| `GET /skill/stats/skills` | 按技能返回调用次数、需求单数、执行状态、业务结论、通过率、耗时、排队时长与阻断项；`summary` 为合计行 |
+| `GET /skill/stats/skills` | 按技能返回调用次数、需求单数、执行状态、业务结论、通过率、耗时、排队时长与阻断项；`conclusions` 展示该技能写出的具体结论及次数；`summary` 为合计行 |
 | `GET /skill/stats/issues` | 按“需求单 + 技能”返回首次结论、最终结论、调用次数、最近耗时与最近一次执行明细 |
 
 两个接口都支持以下可选查询参数：
@@ -594,6 +594,21 @@ LIMIT 100;
 
 时间支持 `YYYY-MM-DD`、`YYYY-MM-DD HH:MM:SS` 和 ISO 8601；不带时区时按北京时间解释，
 响应中的 `filters` 会回显北京时间。耗时、排队时长和通过率以保留两位小数的字符串返回。
+
+`GET /skill/stats/skills` 的 `items[]` 与 `summary` 都包含 `conclusions`，每项结构如下：
+
+```json
+{
+  "conclusion_text": "已生成",
+  "outcome": "unknown",
+  "outcome_label": "无结论",
+  "call_count": 3
+}
+```
+
+`conclusion_text` 是技能写出的原始业务结论。`jira-gate-1`、`jira-gate-2` 的“通过/退回补充”
+仍会分别聚合为 `outcome=passed/rejected`；`jira-qa-2`、`jira-qa-3` 等生成类技能则直接保留
+“已生成”等原文，不强行改写为通过或不通过。
 
 ```bash
 curl -H "X-API-Token: <SKILL_API_TOKEN>" \

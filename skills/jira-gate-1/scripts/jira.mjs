@@ -798,6 +798,92 @@ export async function uploadAttachment(keyOrUrl, filePath, options = {}) {
   }
 }
 
+/**
+ * 删除单个附件（DELETE /rest/api/2/attachment/{id}）。
+ *
+ * 403 表示当前账号没有 DELETE_ATTACHMENTS 权限；404 表示附件已不存在，
+ * 视为“已清理”，不当作失败，便于清理脚本幂等重跑。
+ */
+export async function deleteAttachment(attachmentId, options = {}) {
+  const id = String(attachmentId || "").trim();
+  if (!/^\d+$/.test(id)) {
+    return { ok: false, id, reason: "id-invalid" };
+  }
+  try {
+    await request("DELETE", `/rest/api/2/attachment/${encodeURIComponent(id)}`, options);
+    return { ok: true, id, deleted: true };
+  } catch (err) {
+    const status = err && err.status;
+    if (status === 404) return { ok: true, id, deleted: false, reason: "not-found" };
+    const reason = status === 403 ? "forbidden" : "http-error";
+    return { ok: false, id, reason, status: status || 0, message: String((err && err.message) || err) };
+  }
+}
+
+
+/**
+ * 从附件列表里挑出同族旧附件（纯函数，便于单测，不发起网络请求）。
+ *
+ * options.contains：子串列表，文件名必须**全部包含**（大小写不敏感），用于锁定附件族；
+ * options.suffix  ：可选的文件名后缀，例如 `.md`、`_PDCA.md`；
+ * options.keepIds ：要保留的附件 ID 列表（通常是刚上传成功的新附件）。
+ */
+export function selectStaleAttachments(attachments, options = {}) {
+  const contains = [].concat(options.contains || [])
+    .map((item) => String(item || "").trim().toLowerCase())
+    .filter(Boolean);
+  const suffix = String(options.suffix || "").trim().toLowerCase();
+  const keepIds = new Set(
+    [].concat(options.keepIds || options.keep || []).map((item) => String(item || "").trim()).filter(Boolean),
+  );
+  if (!contains.length) return [];
+  return [].concat(attachments || []).filter((item) => {
+    if (!item || item.id === undefined || item.id === null) return false;
+    const name = String(item.filename || "").toLowerCase();
+    if (!name) return false;
+    if (keepIds.has(String(item.id))) return false;
+    if (!contains.every((keyword) => name.includes(keyword))) return false;
+    if (suffix && !name.endsWith(suffix)) return false;
+    return true;
+  });
+}
+
+
+/**
+ * 清理同族旧附件，只保留 keepIds 指定的最新一份。
+ *
+ * 调用顺序必须是“先上传新附件、拿到新附件 ID，再调用本函数”：
+ * 上传失败时不要调用，否则可能把唯一的历史附件删光。
+ * options.dryRun 只列出将被删除的附件，不真正删除。
+ */
+export async function pruneAttachments(keyOrUrl, options = {}) {
+  const key = parseIssueKey(keyOrUrl);
+  assertLockedIssueInput(keyOrUrl);
+  if (!key) throw new Error(`无法从输入中解析 Jira 问题 Key：${keyOrUrl}`);
+  const issue = await getIssue(keyOrUrl, options);
+  const stale = selectStaleAttachments(issue.attachments, options);
+  const deleted = [];
+  const failed = [];
+  for (const item of stale) {
+    if (options.dryRun) {
+      deleted.push({ id: String(item.id), filename: item.filename, dryRun: true });
+      continue;
+    }
+    const result = await deleteAttachment(item.id, options);
+    if (result.ok) {
+      deleted.push({ id: String(item.id), filename: item.filename, removed: result.deleted !== false });
+    } else {
+      failed.push({
+        id: String(item.id),
+        filename: item.filename,
+        reason: result.reason,
+        status: result.status || 0,
+      });
+    }
+  }
+  return { ok: failed.length === 0, key, matched: stale.length, deleted, failed };
+}
+
 /** 定位门禁字段：按候选名精确匹配，返回 { fields, missing, configSource } */
 export async function resolveGateFields(options = {}) {
   const { config, source } = await loadConfig();

@@ -217,6 +217,14 @@ class SkillUsageRecordTests(unittest.TestCase):
             with self.subTest(conclusion=conclusion):
                 self.assertEqual(map_conclusion(conclusion), expected)
 
+    def test_gate_conclusions_are_aggregated_but_generated_is_not(self):
+        # 门禁结论聚合为通过/退回；生成类技能的原始结论不强行归入通过。
+        from app.skillrun.usage import map_conclusion
+
+        self.assertEqual(map_conclusion("通过"), "passed")
+        self.assertEqual(map_conclusion("退回补充"), "rejected")
+        self.assertIsNone(map_conclusion("已生成"))
+
     def test_timeout_sets_failure_kind(self):
         # 超时任务记录 timeout 与专用失败类型。
         from app.skillrun.codex_runner import CodexRunResult

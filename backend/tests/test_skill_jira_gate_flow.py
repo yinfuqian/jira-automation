@@ -79,6 +79,54 @@ class SkillJiraGateFlowTests(unittest.TestCase):
         self.assertNotIn("failedStep", payload["prompt_template"])
         self.assertIn("继续写 G1 评论", payload["prompt_template"])
 
+    def test_attachment_pruning_keeps_latest_and_preserves_comments(self):
+        """G1 自己生成的两族附件只留最新一份，历史评论与产品附件不能被清理。"""
+        text = SKILL_PATH.read_text(encoding="utf-8")
+        payload = json.loads((SKILL_DIR / "runtime.json").read_text(encoding="utf-8"))
+        jira_source = JIRA_SCRIPT_PATH.read_text(encoding="utf-8")
+        cli_source = CLI_PATH.read_text(encoding="utf-8")
+
+        self.assertIn("attach-prune", text)
+        self.assertIn("--keep <新附件ID>", text)
+        self.assertIn("历史评论一律保留、不删除也不改写", text)
+        self.assertIn("不得删除产品上传的 PRD、原型或 QA 自己的清单", text)
+        self.assertIn("attach-prune", payload["prompt_template"])
+        self.assertIn("只保留最新一份", payload["prompt_template"])
+        self.assertIn("历史评论必须保留", payload["prompt_template"])
+        for name in ("deleteAttachment", "pruneAttachments"):
+            self.assertIn(f"export async function {name}", jira_source)
+        self.assertIn("export function selectStaleAttachments", jira_source)
+        self.assertIn('case "attach-prune"', cli_source)
+
+    @unittest.skipUnless(NODE, "未安装 node，跳过附件清理纯函数测试")
+    def test_select_stale_attachments_keeps_latest_only(self):
+        """同族附件里排除 keepIds，且后缀与其他材料不应被误删。"""
+        jira_url = JIRA_SCRIPT_PATH.as_uri()
+        script = (
+            'const m = await import("%s");\n'
+            'const items = [\n'
+            '  { id: 1, filename: "BOT-1-需求评审报告-宋立志.md" },\n'
+            '  { id: 2, filename: "BOT-1-需求评审报告-20261001.md" },\n'
+            '  { id: 3, filename: "BOT-1-需求评审报告-宋立志.md" },\n'
+            '  { id: 4, filename: "BOT-1-需求评审报告.html" },\n'
+            '  { id: 5, filename: "BOT-1-PRD.md" },\n'
+            '  { id: 6, filename: "BOT-1-QA需求准入门禁清单.md" },\n'
+            '];\n'
+            'const picked = m.selectStaleAttachments(items, { contains: ["需求评审报告"], suffix: ".md", keepIds: ["3"] });\n'
+            'console.log(JSON.stringify(picked.map((item) => String(item.id))));\n'
+        ) % jira_url
+        result = subprocess.run(
+            [NODE, "-e", script],
+            capture_output=True,
+            encoding="utf-8",
+            errors="replace",
+            check=False,
+            timeout=60,
+        )
+
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(json.loads(result.stdout), ["1", "2"])
+
     @unittest.skipUnless(NODE, "未安装 node，跳过产品门禁脚本测试")
     def test_precheck_requires_supported_product(self):
         """G1 只放行「故事 + 六个产品之一」，其余一律 supported=false。"""
@@ -171,6 +219,9 @@ class SkillJiraGateFlowTests(unittest.TestCase):
         self.assertIn("不适用（本单未上传原型）", text)
         # 无原型时不能生成/上传设计报告，也不能算设计业务不通过。
         self.assertIn("未上传原型记「不适用」不参与判定", text)
+        # 历史回写的设计报告不能被当成业务原型，否则每轮都会自我触发设计审核。
+        self.assertIn("先排除自生成的历史产物", text)
+        self.assertIn("不得把「找不到业务原型」写成「审核未完成」", text)
 
     def test_delivery_order_runs_three_review_skills_before_comment(self):
         """三个评审技能必须在 G1 评论前完成，QA 评论/HTML 由 QA 技能自身交付。"""
@@ -407,6 +458,82 @@ class PrototypeDetectionTests(unittest.TestCase):
 
         self.assertFalse(payload["hasPrototype"])
         self.assertEqual([item["kind"] for item in payload["ambiguous"]], ["archive"])
+
+    def test_historical_design_and_qa_reports_are_not_prototypes(self):
+        """历史回写的设计报告/QA 清单即使文件名含「原型」也不能算业务原型。"""
+        payload = self.detect({
+            "BOT-39490-原型设计准入报告.html": "<html><title>原型设计准入报告</title></html>",
+            "BOT-39490-QA需求准入门禁清单.html": "<html><title>QA 准入门禁清单</title></html>",
+            "BOT-39490-需求评审报告-宋立志.md": "# 评审报告",
+        })
+
+        self.assertFalse(payload["hasPrototype"])
+        self.assertEqual(payload["hits"], [])
+        self.assertEqual(payload["ambiguous"], [])
+        self.assertEqual(
+            {item["kind"] for item in payload["ignored"]},
+            {"self-artifact"},
+        )
+
+    def test_renamed_historical_report_is_excluded_by_content(self):
+        """历史报告被重命名后，仍要按正文标题排除。"""
+        payload = self.detect({
+            "attachment-123.html": "<html><title>BOT-39490 原型设计准入报告</title></html>",
+        })
+
+        self.assertFalse(payload["hasPrototype"])
+        self.assertEqual(payload["hits"], [])
+        self.assertEqual([item["kind"] for item in payload["ignored"]], ["self-artifact-html"])
+
+    def test_renamed_design_report_with_audit_title_is_excluded(self):
+        """报告模板标题是「原型设计准入审核」，改名或旧命名上传后仍要排除。"""
+        report = (
+            "<!DOCTYPE html><html><head><title>原型设计准入审核 · 结果回调URL改造</title></head>"
+            "<body><div class=\"eyebrow\">G1 · 原型设计准入审核</div><h1>结果回调URL改造</h1></body></html>"
+        )
+
+        for name in ("attachment-998877.html", "BOT-39490-原型设计准入审核.html"):
+            with self.subTest(name=name):
+                payload = self.detect({name: report})
+                self.assertFalse(payload["hasPrototype"])
+                self.assertEqual(payload["hits"], [])
+                self.assertEqual(len(payload["ignored"]), 1)
+
+    def test_business_topic_words_do_not_hide_real_prototype(self):
+        """「评审报告」「PDCA」等业务主题词不能把真实原型判成历史产物。"""
+        hit = self.detect({"BOT-39490-评审报告原型页面.html": "<html><title>评审报告页面</title></html>"})
+        self.assertTrue(hit["hasPrototype"])
+        self.assertEqual([item["kind"] for item in hit["hits"]], ["path-keyword"])
+        self.assertEqual(hit["ignored"], [])
+
+        manual = self.detect({"BOT-39490-PDCA看板.html": "<html><title>PDCA 看板</title></html>"})
+        self.assertFalse(manual["hasPrototype"])
+        self.assertEqual(manual["ignored"], [])
+        self.assertEqual([item["kind"] for item in manual["ambiguous"]], ["html-unlabeled"])
+
+    def test_business_prototype_still_triggers_design_review(self):
+        """真实的业务原型（文件名或正文含原型）仍要触发设计审核。"""
+        self.assertTrue(self.detect({"BOT-39490-交互原型.html": "<html></html>"})["hasPrototype"])
+        self.assertTrue(self.detect({"attachment-9.html": "<html><title>页面交互原型</title></html>"})["hasPrototype"])
+
+    def test_prd_html_mentioning_prototype_is_not_prototype(self):
+        """PRD/需求说明正文提到「原型」时不能当成业务原型材料。"""
+        payload = self.detect({
+            "PRD.html": "<html><title>BOT-39490 需求说明</title><body>本次按交互原型实现</body></html>",
+        })
+
+        self.assertFalse(payload["hasPrototype"])
+        self.assertEqual(payload["hits"], [])
+        self.assertEqual(payload["ambiguous"], [])
+
+    def test_untitled_html_mentioning_prototype_needs_manual_check(self):
+        """标题无法判断、正文提到原型时进 ambiguous，交由调用方打开确认。"""
+        payload = self.detect({
+            "page.html": "<html><title>场景插件配置</title><body>本页为交互原型</body></html>",
+        })
+
+        self.assertFalse(payload["hasPrototype"])
+        self.assertEqual([item["kind"] for item in payload["ambiguous"]], ["html-keyword"])
 
 
 if __name__ == "__main__":

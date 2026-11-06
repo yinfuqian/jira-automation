@@ -184,6 +184,8 @@ console.log(JSON.stringify({{ result, flags: [ok.supported, ok.productSupported,
         self.assertIn("hasPrototype", payload["prompt_template"])
         self.assertIn("不适用", payload["prompt_template"])
         self.assertIn("pack-deliverables.mjs", payload["prompt_template"])
+        self.assertIn("removedPrevious", payload["prompt_template"])
+        self.assertIn("只剩本次这一个 zip", payload["prompt_template"])
 
     def test_skill_documents_read_only_and_package_delivery(self):
         """SKILL.md 要把「故事类型门禁」「PRD 清单」「不写 Jira」「压缩包交付」写清楚。"""
@@ -276,6 +278,42 @@ class PrototypeDetectionTests(unittest.TestCase):
         """原型图和原型 HTML 都要触发设计审核。"""
         self.assertTrue(self.detect({"image-2026.png": "x"})["hasPrototype"])
         self.assertTrue(self.detect({"Prototype.html": "<html></html>"})["hasPrototype"])
+
+    def test_historical_reports_are_excluded(self):
+        """历史设计报告/QA 清单不能因文件名含「原型」而触发设计审核。"""
+        payload = self.detect({
+            "BOT-39490-原型设计准入报告.html": "<html><title>原型设计准入报告</title></html>",
+            "BOT-39490-QA需求准入门禁清单.html": "<html><title>QA 准入门禁清单</title></html>",
+        })
+
+        self.assertFalse(payload["hasPrototype"])
+        self.assertEqual(payload["hits"], [])
+        self.assertEqual({item["kind"] for item in payload["ignored"]}, {"self-artifact"})
+
+    def test_renamed_design_report_with_audit_title_is_excluded(self):
+        """报告模板标题是「原型设计准入审核」，改名或旧命名上传后仍要排除。"""
+        report = (
+            "<!DOCTYPE html><html><head><title>原型设计准入审核 · 结果回调URL改造</title></head>"
+            "<body><div class=\"eyebrow\">G1 · 原型设计准入审核</div><h1>结果回调URL改造</h1></body></html>"
+        )
+
+        for name in ("attachment-998877.html", "BOT-39490-原型设计准入审核.html"):
+            with self.subTest(name=name):
+                payload = self.detect({name: report})
+                self.assertFalse(payload["hasPrototype"])
+                self.assertEqual(payload["hits"], [])
+                self.assertEqual(len(payload["ignored"]), 1)
+
+    def test_business_topic_words_do_not_hide_real_prototype(self):
+        """「评审报告」「PDCA」等业务主题词不能把真实原型判成历史产物。"""
+        hit = self.detect({"BOT-39490-评审报告原型页面.html": "<html><title>评审报告页面</title></html>"})
+        self.assertTrue(hit["hasPrototype"])
+        self.assertEqual(hit["ignored"], [])
+
+        manual = self.detect({"BOT-39490-PDCA看板.html": "<html><title>PDCA 看板</title></html>"})
+        self.assertFalse(manual["hasPrototype"])
+        self.assertEqual(manual["ignored"], [])
+        self.assertEqual([item["kind"] for item in manual["ambiguous"]], ["html-unlabeled"])
 
 
 @unittest.skipUnless(NODE, "未安装 node，跳过打包脚本测试")
@@ -373,6 +411,24 @@ class PackDeliverablesTests(unittest.TestCase):
         self.assertEqual(Path(payload["zip"]).parent.name, "custom-out")
         with zipfile.ZipFile(payload["zip"]) as archived:
             self.assertIn("issue.md", archived.namelist())
+
+    def test_removes_previous_package_for_same_key(self):
+        """同一需求重复打包时只留最新 zip，其他需求的包不能被误删。"""
+        out_dir = self.work / "outputs"
+        out_dir.mkdir(parents=True, exist_ok=True)
+        old = out_dir / "CALL-1941-G1预检包-20260101-000000.zip"
+        old.write_bytes(b"old")
+        other = out_dir / "CALL-1942-G1预检包-20260101-000000.zip"
+        other.write_bytes(b"other")
+
+        payload = json.loads(
+            self.run_pack("--key", "CALL-1941", "--comment", "comment.txt", "--report", "report.md").stdout
+        )
+
+        self.assertEqual(payload["removedPrevious"], ["CALL-1941-G1预检包-20260101-000000.zip"])
+        self.assertFalse(old.exists())
+        self.assertTrue(other.exists())
+        self.assertEqual(sorted(out_dir.glob("CALL-1941-G1预检包-*.zip")), [Path(payload["zip"])])
 
     def test_warns_on_markdown_syntax_in_comment(self):
         """评论草稿残留 Markdown 粗体时给出 warning，但不阻断打包。"""

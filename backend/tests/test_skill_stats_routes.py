@@ -72,6 +72,61 @@ class StatsFilterTests(unittest.TestCase):
         self.assertEqual(stats._as_decimal_text(Decimal("33.7")), "33.70")
         self.assertIsNone(stats._as_decimal_text(None))
 
+    def test_conclusion_distribution_keeps_raw_text_and_skill_scope(self):
+        """结论分布保留技能原文，并分别汇总到技能与全量。"""
+        from app.skillrun import stats
+
+        rows = [
+            {
+                "skill_id": "jira-qa-2",
+                "conclusion_text": "已生成",
+                "outcome": "unknown",
+                "call_count": 3,
+            },
+            {
+                "skill_id": "jira-gate-1",
+                "conclusion_text": "通过",
+                "outcome": "passed",
+                "call_count": 2,
+            },
+            {
+                "skill_id": "jira-gate-1",
+                "conclusion_text": "退回补充",
+                "outcome": "rejected",
+                "call_count": 1,
+            },
+            {
+                "skill_id": "jira-gate-2",
+                "conclusion_text": "通过",
+                "outcome": "passed",
+                "call_count": 1,
+            },
+        ]
+
+        by_skill, summary = stats._build_conclusion_distribution(rows)
+
+        self.assertEqual(
+            by_skill["jira-qa-2"],
+            [
+                {
+                    "conclusion_text": "已生成",
+                    "outcome": "unknown",
+                    "outcome_label": "无结论",
+                    "call_count": 3,
+                }
+            ],
+        )
+        self.assertEqual(
+            [item["conclusion_text"] for item in by_skill["jira-gate-1"]],
+            ["通过", "退回补充"],
+        )
+        # 跨技能重复结论只累加到 summary，不能污染单个技能的计数。
+        self.assertEqual(by_skill["jira-gate-1"][0]["call_count"], 2)
+        self.assertEqual(
+            [(item["conclusion_text"], item["call_count"]) for item in summary],
+            [("已生成", 3), ("通过", 3), ("退回补充", 1)],
+        )
+
 
 class SkillStatsRouteTests(unittest.TestCase):
     def setUp(self):

@@ -20,6 +20,7 @@
  *   node scripts/jira-cli.mjs transition <KEY|URL> --to <目标状态>
  *   node scripts/jira-cli.mjs attach <KEY|URL> <本地文件> [--name <附件名>]
  *   node scripts/jira-cli.mjs attach-list <KEY|URL>          # 读回该单现有附件，用于上传后确认
+ *   node scripts/jira-cli.mjs attach-prune <KEY|URL> --contains <子串> [--suffix <.md>] [--keep <附件ID>]
  *
  * 令牌来源：--token 参数、JIRA_TOKEN 环境变量，或 jira.mjs 默认查找的令牌文件。
  */
@@ -50,7 +51,8 @@ const USAGE = `用法：
   node scripts/jira-cli.mjs flow-owner <KEY|URL>
   node scripts/jira-cli.mjs transition <KEY|URL> --to <目标状态>
   node scripts/jira-cli.mjs attach <KEY|URL> <本地文件> [--name <附件名>]
-  node scripts/jira-cli.mjs attach-list <KEY|URL>`;
+  node scripts/jira-cli.mjs attach-list <KEY|URL>
+  node scripts/jira-cli.mjs attach-prune <KEY|URL> --contains <子串> [--suffix <.md>] [--keep <附件ID>] [--dry-run]`;
 
 
 /**
@@ -272,6 +274,27 @@ async function main() {
         );
         process.exitCode = 1;
       }
+      return;
+    }
+    case "attach-prune": {
+      requireArgs(positional, 1, "attach-prune <KEY|URL> --contains <子串[,子串]> [--suffix <.md>] [--keep <附件ID>] [--dry-run]");
+      // --contains 支持逗号分隔多个子串，文件名必须全部包含才算同族；
+      // --keep 指定刚上传成功的新附件 ID，避免把最新一份也删掉。
+      const contains = String(options.contains || "")
+        .split(",")
+        .map((item) => item.trim())
+        .filter(Boolean);
+      if (!contains.length) throw new Error("缺少附件族匹配条件：请使用 --contains <子串>");
+      const pruned = await jira.pruneAttachments(positional[0], {
+        ...callOptions,
+        contains,
+        suffix: options.suffix,
+        keepIds: options.keep ? [options.keep] : [],
+        dryRun: Boolean(options["dry-run"]),
+      });
+      console.log(JSON.stringify(pruned, null, 2));
+      // 有删除失败时用退出码 1 暴露，便于流程重试或至少记录告警。
+      if (!pruned.ok) process.exitCode = 1;
       return;
     }
     case "attach-list": {
