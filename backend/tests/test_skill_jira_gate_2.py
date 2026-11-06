@@ -108,7 +108,8 @@ class Gate2DefinitionTests(unittest.TestCase):
         self.assertIn("_RD_{{YYYYMMDD}}_{{NN}}_PDCA.md", text)
         self.assertIn("attach-list", text)
         self.assertIn("CREATE_ATTACHMENTS", text)
-        self.assertIn("检查未完成", text)
+        self.assertIn("执行异常", text)
+        self.assertNotIn("检查未完成", text)
         self.assertIn("不生成空报告", text)
 
     def test_skill_declares_g2_and_pdca_parallel_judgement(self):
@@ -126,6 +127,12 @@ class Gate2DefinitionTests(unittest.TestCase):
         text = (GATE2_DIR / "references" / "pdca-standard.md").read_text(encoding="utf-8")
 
         self.assertIn("GENERIC_TEAM_DELIVERABLE_PDCA_SKILLS", text)
+        self.assertIn("tools_version: V2.3.0", text)
+        self.assertIn("template_version: V1.1", text)
+        self.assertIn("collab_checks_skill_version: V1.0", text)
+        self.assertIn('ui_check_source_version: "1.2"', text)
+        self.assertIn("待产品确认", text)
+        self.assertIn("PDCA 执行异常｜<Issue Key>", text)
         self.assertIn("### 5.1 开发交付物", text)
         self.assertIn("### 5.2 测试交付物", text)
         self.assertIn("### 5.3 UI 交付物", text)
