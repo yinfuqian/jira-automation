@@ -215,6 +215,19 @@ class FaultAnalysisSettings:
 
 
 @dataclass(frozen=True)
+class InteractionSettings:
+    """多轮故障追问与普通问题优先查知识库的交互开关。"""
+
+    # 故障问题先追问环境、操作路径、版本和日志，信息齐全后再做代码分析。
+    # 默认关闭，避免未更新配置的旧部署被改变交互；仓库配置已显式开启。
+    fault_dialog_enabled: bool = False
+    # 非故障、非代码类问题优先使用 Confluence；默认关闭以保留旧配置行为。
+    knowledge_first: bool = False
+    # 最多追问几轮；达到上限后即使仍有空槽位也进入分析，避免对话无法结束。
+    fault_dialog_max_turns: int = 4
+
+
+@dataclass(frozen=True)
 class ConfluenceSettings:
     """Confluence 连接参数；敏感凭据只来自环境变量。"""
 
@@ -273,6 +286,7 @@ class ChatbotSettings:
     repos: RepoSettings = field(default_factory=RepoSettings)
     answer: AnswerSettings = field(default_factory=AnswerSettings)
     fault_analysis: FaultAnalysisSettings = field(default_factory=FaultAnalysisSettings)
+    interaction: InteractionSettings = field(default_factory=InteractionSettings)
     confluence: ConfluenceSettings = field(default_factory=ConfluenceSettings)
     knowledge: KnowledgeSettings = field(default_factory=KnowledgeSettings)
     products: tuple = ()
@@ -544,6 +558,7 @@ def load_settings(config_path=None) -> ChatbotSettings:
     repos = _section(document, "repos")
     answer = _section(document, "answer")
     fault_analysis = _section(document, "fault_analysis")
+    interaction = _section(document, "interaction")
     confluence = _section(document, "confluence")
     knowledge = _section(document, "knowledge")
 
@@ -640,6 +655,22 @@ def load_settings(config_path=None) -> ChatbotSettings:
                 fault_analysis.get("include_knowledge"), True
             ),
             knowledge_chunks=_as_int(fault_analysis.get("knowledge_chunks"), 2),
+        ),
+        interaction=InteractionSettings(
+            fault_dialog_enabled=_as_bool(
+                os.getenv("CHATBOT_FAULT_DIALOG_ENABLED"),
+                _as_bool(interaction.get("fault_dialog_enabled"), False),
+            ),
+            knowledge_first=_as_bool(
+                os.getenv("CHATBOT_KNOWLEDGE_FIRST"),
+                _as_bool(interaction.get("knowledge_first"), False),
+            ),
+            fault_dialog_max_turns=_as_int(
+                os.getenv("CHATBOT_FAULT_DIALOG_MAX_TURNS")
+                or interaction.get("fault_dialog_max_turns"),
+                4,
+                minimum=1,
+            ),
         ),
         confluence=ConfluenceSettings(
             base_url=os.getenv("CONFLUENCE_URL", "").strip().rstrip("/"),

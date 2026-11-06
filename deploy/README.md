@@ -63,7 +63,8 @@ docker compose --env-file .env.production -f docker-compose-prod.yaml pull migra
 docker compose --env-file .env.production -f docker-compose-prod.yaml up -d migrate api worker-analysis worker-skill beat
 ```
 
-迁移、API、三个 Worker 和 Beat 共用同一个后端镜像，更新后端时必须一起更新。三个 Worker 默认各并发 2 个任务。
+迁移、API、各 Worker 和 Beat 共用同一个后端镜像，更新后端时必须一起更新。各 Worker 使用独立的
+`*_WORKER_CONCURRENCY` 配置，其中技能 Worker 默认并发 2，避免多个 Codex 同时触发上游限流。
 
 ## 完整更新
 

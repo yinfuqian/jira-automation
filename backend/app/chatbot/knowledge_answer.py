@@ -137,7 +137,33 @@ def ensure_single_answer(answer, hits, max_answer_chars):
     return text
 
 
-def run_knowledge_answer(question, project, hits, options: CodexOptions, workspace_dir, max_answer_chars=800, max_total_chars=50000):
+def has_valid_citation(answer, hits):
+    """校验答案引用的 [Sx] 是否都来自本轮提供的证据。"""
+    indexes = {int(value) for value in re.findall(r"\[S(\d+)\]", str(answer or ""))}
+    if not indexes or not hits:
+        return False
+    return all(1 <= index <= len(hits) for index in indexes)
+
+
+def _is_insufficient_answer(answer):
+    """识别模型明确表示证据不足的回答，此时不强制补引用。"""
+    text = str(answer or "")
+    return any(
+        phrase in text
+        for phrase in ("未找到能够回答", "未找到依据", "证据不足", "无法确认", "没有找到")
+    )
+
+
+def run_knowledge_answer(
+    question,
+    project,
+    hits,
+    options: CodexOptions,
+    workspace_dir,
+    max_answer_chars=800,
+    max_total_chars=50000,
+    require_citation=False,
+):
     """调用 Codex 分析只读证据，返回一个最终答案。"""
     started_at = time.time()
     if not hits:
@@ -178,7 +204,14 @@ def run_knowledge_answer(question, project, hits, options: CodexOptions, workspa
         last_message_path=last_message_path,
         secrets=[options.api_key],
     )
-    answer = ensure_single_answer(result.last_message, hits, max_answer_chars)
+    raw_answer = str(result.last_message or "").strip()
+    citation_missing = bool(
+        require_citation
+        and raw_answer
+        and not _is_insufficient_answer(raw_answer)
+        and not has_valid_citation(raw_answer, hits)
+    )
+    answer = "" if citation_missing else ensure_single_answer(raw_answer, hits, max_answer_chars)
     error = ""
     if result.network_failed:
         error = result.error or "模型服务网络不可达"
@@ -187,7 +220,11 @@ def run_knowledge_answer(question, project, hits, options: CodexOptions, workspa
     elif result.exit_code != 0:
         error = result.error or f"Codex 退出码 {result.exit_code}"
     elif not answer:
-        error = result.error or "Codex 未返回结论"
+        error = (
+            "Confluence 证据不足，未生成可核对的答案"
+            if citation_missing
+            else result.error or "Codex 未返回结论"
+        )
     return KnowledgeAnswerResult(
         ok=not error,
         answer=answer,

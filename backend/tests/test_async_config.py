@@ -118,6 +118,14 @@ class AsyncConfigTests(unittest.TestCase):
         self.assertEqual(config.CELERY_BROKER_URL, config.REDIS_URL)
         self.assertEqual(config.CELERY_RESULT_BACKEND, config.REDIS_URL)
 
+    def test_celery_hard_time_limit_covers_longest_skill_runtime(self):
+        """Celery 硬超时应覆盖 jira-code 的 7200 秒运行上限并预留回写时间。"""
+        with patch.dict(os.environ, {}, clear=False):
+            os.environ.pop("CELERY_TASK_TIME_LIMIT_SECONDS", None)
+            config = load_config_module().Config
+
+        self.assertEqual(config.CELERY_TASK_TIME_LIMIT_SECONDS, 7800)
+
     def test_celery_redis_transport_enables_resilient_connections(self):
         config = load_config_module().Config
 

@@ -359,6 +359,11 @@ class Config:
     # 长耗时任务一次只预取一条，避免 worker 异常退出后多条消息滞留在 Redis unacked。
     CELERY_WORKER_PREFETCH_MULTIPLIER = 1
     CELERY_VISIBILITY_TIMEOUT = int(os.getenv("CELERY_VISIBILITY_TIMEOUT", "7200"))
+    # 兜底硬超时：技能自身最长允许 7200 秒，再预留 600 秒给结果回写与进程清理。
+    # runner 正常超时仍按 runtime.json 执行；这里用于防止 worker 卡死永久占用子进程。
+    CELERY_TASK_TIME_LIMIT_SECONDS = max(
+        60, int(os.getenv("CELERY_TASK_TIME_LIMIT_SECONDS", "7800"))
+    )
     # 不同任务进入独立队列，由 Compose 中对应的 Worker 消费，避免技能任务与日志分析互相排队。
     CELERY_TASK_DEFAULT_QUEUE = "analysis"
     CELERY_TASK_ROUTES = {

@@ -72,7 +72,8 @@ function renderWikiValue(value, fallback = "（未识别）") {
 }
 
 
-export function buildMappingOwnerComment(error, configPath) {
+/** 映射缺口正文（不含 h3 标题），用于追加到已有预检评论。 */
+export function buildMappingOwnerSection(error, configPath) {
   const owner = resolveMappingOwner(configPath);
   const details = (error && error.details) || {};
   const product = renderWikiValue(details.product);
@@ -81,8 +82,6 @@ export function buildMappingOwnerComment(error, configPath) {
   const missing = Array.isArray(details.missing) ? details.missing.filter(Boolean) : [];
   const reasonText = String((error && error.message) || "分析范围映射缺失").trim();
   const lines = [
-    "h3. 模块映射丢失，已跳过检查",
-    "",
     "* 结论：工单中的产品、模块或版本已识别，但 {{config/scope-mapping.json}} 缺少对应映射，本次门禁未检查。",
     `* 待处理：${owner.mention} 请补齐映射内容：产品、模块、仓库地址，以及版本转 Tag 规则。`,
     `* 当前识别：产品={{${product}}}；模块={{${moduleName}}}；版本={{${version}}}。`,
@@ -92,8 +91,13 @@ export function buildMappingOwnerComment(error, configPath) {
   } else {
     lines.push(`* 缺口：${reasonText}`);
   }
-  lines.push("* 处理方式：无需提单人重复补充模块；映射补齐后重新触发本技能即可自动检查，不要求额外确认。本单仅评论提醒，不改变工作流状态，不修改当前经办人。");
+  lines.push("* 处理方式：无需提单人重复补充模块；映射补齐后重新触发本技能即可自动检查，不要求额外确认。映射缺口本身不改变工作流状态，也不修改当前经办人。");
   return lines.join("\n");
+}
+
+
+export function buildMappingOwnerComment(error, configPath) {
+  return ["h3. 模块映射丢失，已跳过检查", "", buildMappingOwnerSection(error, configPath)].join("\n");
 }
 
 

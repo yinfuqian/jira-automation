@@ -152,7 +152,10 @@ services:
       - --hostname=worker-skill@%h
       - -Q
       - skill
-      - --concurrency=${SKILL_WORKER_CONCURRENCY:-12}
+      # Codex 任务会同时占用模型配额、JVM/Node 与工作区资源；默认只并行 2 个，避免触发上游 429。
+      - --concurrency=${SKILL_WORKER_CONCURRENCY:-2}
+      # 每个技能任务结束后回收执行子进程，避免异常退出后残留状态影响后续任务消费。
+      - --max-tasks-per-child=${SKILL_WORKER_MAX_TASKS_PER_CHILD:-1}
     volumes:
       - ./data/users.csv:/data/users.csv:ro
       - ./data/upload:/data/upload

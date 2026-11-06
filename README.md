@@ -78,8 +78,9 @@ Gunicorn 使用 `gthread` 和 300 秒超时的固定运行参数，不再通过�
 后到的请求会返回 `409 GIT_SYNC_IN_PROGRESS`。单次同步内部的 GitLab 分页拉取可并发，
 并发数由 `GITLAB_SYNC_FETCH_CONCURRENCY` 控制，默认 4；数据库写入仍按项目串行提交。
 
-日志分析与技能执行使用独立 Celery 队列和 Worker，两个 Worker 的并发均固定为 2；
-两类任务互不占槽。需要扩展时直接增加对应 Worker 实例，不再维护并发环境变量。
+日志分析与技能执行使用独立 Celery 队列和 Worker，两类任务互不占槽。技能 Worker 默认并发为 2，
+避免多个 Codex 同时触发上游限流，可通过 `SKILL_WORKER_CONCURRENCY` 调整；分析 Worker 的并发由
+`ANALYSIS_WORKER_CONCURRENCY` 控制。
 
 每个请求都会记录开始、结束、状态码、耗时、线程名和 `X-Request-ID`；GitLab 同步还会记录锁状态、
 分页进度、写库进度和重试原因。dev 日志位于 `./data/logs-dev/app.log`，并同时输出到容器标准输出。
@@ -527,7 +528,7 @@ curl -H "X-API-Token: <SKILL_API_TOKEN>" http://127.0.0.1:6000/skill/task/SKL-8F
 - `execution_status`：技术执行状态，取值 `queued` / `running` / `succeeded` / `failed` / `timeout` / `cancelled`。
 - `outcome`：业务结论，取值 `passed` / `rejected` / `needs_fix` / `unknown` / `not_applicable` / `aborted`。
 - `conclusion_source`：结论来源，取值 `file`（任务根目录 `.skill-result.json`）/ `marker`（最终消息里的 `SKILL_RESULT_JSON`）/ `none` / `invalid`。
-- `failure_kind`：技术失败归类，例如 `env_missing`、`timeout`、`network`、`non_zero_exit`、`cancelled`、`worker_restart`。
+- `failure_kind`：技术失败归类，例如 `env_missing`、`timeout`、`network`、`rate_limited`、`non_zero_exit`、`cancelled`、`worker_restart`。
 - `execution_status=succeeded` 只表示脚本正常结束，**不能当作业务通过**；是否通过看 `outcome`。
 
 按技能统计调用次数与结论（MySQL）：
@@ -671,7 +672,7 @@ docker compose -f docker-compose-dev.yaml exec worker-skill-dev sh -c 'for f in 
 - API 只负责提交任务，Codex 实际执行发生在 `worker-skill-dev` 容器，请确保该容器能访问 Jira 与模型中转。
 - 要走 `jira-code` 的热更新，`worker-skill-dev` 还需要能访问 `devops.ks1.wezhuiyi.com`（流水线 MCP）与
   `pkg.in.wezhuiyi.com`（热更新工具下载与制品上传）；只做代码推送不需要这两个域名。
-- 技能任务和日志分析分别由独立 Worker 消费，默认各并发 2 个任务，两者互不占用槽位。
+- 技能任务和日志分析分别由独立 Worker 消费。技能 Worker 默认并发 2，分析 Worker 默认并发 12，两者互不占用槽位。
 - dev 技能工作目录保留在 `./data/skill-workspace-dev`，便于排查，长期运行请按需清理。
 
 ### 本地验证（不使用 Docker）
@@ -754,6 +755,9 @@ Tag 真实存在。评论固定块只写主模块和需要独立分析、拉取�
 
 `scope-mapping.json` 中标记为 `"common": true` 的公共组件不单独写进评论固定块，也不要求发布或提供精准 Tag。主模块和普通关联模块的代码或日志确认引用公共组件后，分析服务会自动拉取该组件的默认分支参与排查；未命中的组件不拉取，拉取失败也不会阻断主分析。结论中需说明引用的公共组件功能和关键代码位置。
 
+同一轮任务只允许一条预检评论：已经写过打回/缺参评论后才发现模块映射缺口时，用
+`jira-cli.mjs comment-append <KEY> <评论ID> --file <映射段落>` 追加到原评论，禁止新增第二条。
+
 效果类缺陷如果不需要日志和复现步骤，必须在评论区明确写出 `明确缺陷不需要额外提供日志信息`。门禁确认缺陷属于效果类后，可跳过日志与复现检查；普通报错、异常、接口、性能、数据或资源问题不适用。
 
 只想看 HTML 报告的排版、不想真的跑一次分析时，可以用既有结果 JSON 直接渲染，不访问网络：
@@ -793,10 +797,12 @@ node ..\skills\jira-gate-bug\scripts\analysis-cli.mjs render --input <结果JSON
 
 ### 交互流程
 
-1. 群内首次 @机器人：返回项目菜单；因为企业微信只在群聊 @ 时推送消息回调，后续发送序号、提问、切换项目都要重新 @机器人。未选项目时直接提问会先暂存问题，回复序号选中项目后自动沿用原问题开始分析，故障问题也会保留故障模式。单聊会提示改用群聊。
-2. 用户提问：网关判断是否为故障问题，并优先沿用会话中已选项目；未选项目时再按项目名、别名和模块名自动识别，无法唯一识别时返回项目菜单。
-3. 故障分析按问题关键词选出最多 `FAULT_ANALYSIS_MAX_MODULES` 个模块；普通代码问答使用项目全部模块。worker 以 `git worktree` 检出独立目录，可选拼接少量 Confluence 背景资料，再调用 `codex exec` 做只读代码检索。
-4. 结果经 Redis 频道 `chatbot:reply` 回到网关，网关按覆盖式流式刷新做打字机效果，最后 `finish=true`。
+1. 开启 `interaction.fault_dialog_enabled` 后，群内直接 @机器人 描述问题即可，不需要先选产品/项目；企业微信只在群聊 @ 时推送消息回调，后续补充信息需重新 @机器人。关闭该开关时仍保留原来的产品 → 项目两级菜单。单聊会提示改用群聊。
+2. 用户提问：网关先区分意图。包含“文档、方案、指引、操作步骤、怎么配置/迁移/部署”等资料请求，且没有报错、超时等现场证据时，直接查 Confluence；只有出现故障现象或明确要求查看代码实现时才进入代码链路。项目名、产品名和模块名只用于可选的仓库快捷映射，不再要求用户选择客户现场。
+3. 故障问题直接进入多轮信息确认：依次追问缺失的环境与时间、操作路径、模块/分支、报错日志，每轮只问一项；信息齐全或达到 `interaction.fault_dialog_max_turns` 后进入代码分析。代码定位只接受「模块 + 分支」，例如 `yicall-common release/3.1`，不会追问项目或客户现场。用户回复「直接分析」可跳过补充，「取消」可结束本次分析，「重置会话」会清空未完成的追问。若始终拿不到模块/分支，则退回 Confluence 资料给出排查建议，不阻塞对话。
+4. 非故障问题在知识库就绪时优先查 Confluence，无需先绑定项目；明确询问代码、接口、模块、SQL 等问题仍走原代码链路，而“如何配置回调地址”这类资料请求优先走知识库。知识库未启用或 Confluence 未配置时行为与旧版本一致。
+5. 故障分析按问题关键词选出最多 `FAULT_ANALYSIS_MAX_MODULES` 个模块；普通代码问答使用项目全部模块。worker 以 `git worktree` 检出独立目录，可选拼接少量 Confluence 背景资料，再调用 `codex exec` 做只读代码检索。
+6. 结果经 Redis 频道 `chatbot:reply` 回到网关，网关按覆盖式流式刷新做打字机效果，最后 `finish=true`。
 
 ### 关键约束
 
@@ -806,6 +812,8 @@ node ..\skills\jira-gate-bug\scripts\analysis-cli.mjs render --input <结果JSON
 - 单会话 30 条/分钟；打字机分段数由 `backend/config/chatbot.json` 的 `gateway.typewriter_max_chunks` 控制，默认 12 段、间隔 2 秒。
 - 故障分析固定输出「结论 / 可能原因 / 代码定位 / 建议验证 / 影响与风险 / 背景资料」，并区分「已确认」和「待验证」；普通代码问答固定「结论 / 要点 / 影响与注意 / 依据」。回答不贴大段代码与检索过程，默认 1200 字。
 - 故障识别、最多模块数和背景资料开关位于 `backend/config/chatbot.json` 的 `fault_analysis`；也可用 `FAULT_ANALYSIS_ENABLED`、`FAULT_ANALYSIS_MAX_MODULES` 覆盖开关与模块上限。
+- 多轮故障追问与知识库优先路由位于 `interaction`：`fault_dialog_enabled`、`knowledge_first`、`fault_dialog_max_turns`；也可用 `CHATBOT_FAULT_DIALOG_ENABLED`、`CHATBOT_KNOWLEDGE_FIRST`、`CHATBOT_FAULT_DIALOG_MAX_TURNS` 覆盖。两个开关都设为 `false` 可恢复旧的一问一答链路。
+- 未配置 `interaction` 的旧部署默认保持原行为；仓库内置配置已显式开启。两个开关都设为 `false` 可完整恢复旧链路。
 - 仓库地址优先取 `repos.module_repo_urls`，其次 `repos.repo_url_template`，最后用 GitLab 搜索接口按模块名解析（凭据复用 `GIT_BASE_URL`/`GIT_USER`/`GIT_PASSWORD`/`GITLAB_PRIVATE_TOKEN`）。
 - 每个「模块 + 分支」在 `REPO_CACHE_DIR/chatbot/repos` 下维护一份缓存仓库。`repos.refresh_interval_seconds` 默认 3600 秒：窗口内问答直接复用缓存 ref，不再 fetch；超过窗口后由下一次问答同步最新提交。设为 `0` 表示每次都拉取。
 - `backend/config/chatbot.json` 已内置到镜像，无需挂载宿主机目录；修改后必须重新构建后端镜像并重启网关与 Worker，进程不会热加载。
@@ -843,7 +851,7 @@ DEPLOY_ENV=prod bash start.sh
 
 ## Confluence 只读知识问答
 
-启用后，机器人优先从 Confluence 检索证据并只返回一个结论。回答固定为「答案 / 依据 / 来源」，不会一次返回多个候选答案；证据不足时明确回答未找到依据，不凭模型记忆补写。页面按标题和长度切片后存入 MySQL，默认每 6 小时同步一次，首次启动自动同步；索引未命中时会在线补搜，问答前还会刷新命中的页面。
+启用后，机器人优先从 Confluence 检索证据并只返回一个结论。回答固定为「答案 / 依据 / 来源」，不会一次返回多个候选答案；证据不足时明确回答未找到依据，不凭模型记忆补写。普通问题从网关进入知识库时会强制校验引用编号必须来自本轮证据，无法核对时返回证据不足，而不是套用无关页面。页面按标题和长度切片后存入 MySQL，默认每 6 小时同步一次，首次启动自动同步；索引未命中时会在线补搜，问答前还会刷新命中的页面。
 
 ```env
 KNOWLEDGE_ENABLED=true
@@ -1012,11 +1020,16 @@ docker compose -f docker-compose-dev.yaml exec worker-skill-dev codex --version
 `CODEX_WIRE_API` 与中转服务的接口协议不匹配（`responses` 对应 `/v1/responses`，`chat` 对应 `/v1/chat/completions`）。
 任务的阶段、最近事件与错误信息可通过 `GET /skill/task/<task_id>` 或 `skill_run_records` 表查看。
 
-三类问题会自动识别，无需等满 `CODEX_SKILL_TIMEOUT`：
+四类问题会自动识别，无需等满 `CODEX_SKILL_TIMEOUT`：
 
 - **网络不可达**：Codex 反复输出 `Reconnecting... waiting for network` 时，连续达到 `CODEX_NETWORK_RETRY_LIMIT`
   （默认 10 次，按指数退避约 15 分钟）即提前终止，任务记为 `failed`，`stage=network_unreachable`，错误信息给出中转地址、
   出网与代理的排查方向。若该任务是从沙箱或离线环境启动的进程提交的，请改用正常网络环境重启 `worker-skill-dev`。
+- **上游限流**：Codex 出现 `429 Too Many Requests` 且重试耗尽时，任务记为 `failed`、`stage=rate_limited`，
+  并在错误信息中提示检查模型配额。`worker-skill` 默认并发为 2，避免多个 Codex 同时占满配额；需要提高并发时通过
+  `SKILL_WORKER_CONCURRENCY` 调整。
+- **执行子进程残留**：每个技能任务结束后由 Celery 回收执行子进程（`SKILL_WORKER_MAX_TASKS_PER_CHILD=1`）。
+  Codex 主进程正常或异常退出时都会清理整个进程组，防止 MCP、shell 或工具孙进程继续占用 worker 资源。
 - **worker 重启遗留**：`worker-skill` 启动时若 `SKILL_RECOVER_ORPHANS=true`（默认），会把上一次运行中残留的
   `running` 任务标记为 `failed`，`stage=worker_restarted`；仍被其它 worker 正常执行的任务不会被误改。
 - **排队长期未消费**：技能任务入队时带 60 分钟过期时间（`SKILL_QUEUE_TTL_SECONDS=3600`）。Celery Beat 每分钟

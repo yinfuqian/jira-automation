@@ -17,6 +17,8 @@ MSGID_KEY = "chatbot:msgid:{msgid}"
 STREAM_KEY = "chatbot:stream:{task_id}"
 # 网关存活标记：健康检查据此判断长连接进程是否还在。
 ALIVE_KEY = "chatbot:gateway:alive"
+# 故障多轮收集状态：槽位、已追问项和原始问题都在这里，worker 不直接读写。
+FAULT_DIALOG_FIELD = "fault_dialog"
 
 
 def _text(value):
@@ -69,6 +71,8 @@ class ChatSessionStore:
         payload = self._load_session(chatid, userid)
         payload["product_key"] = _text(product_key)
         payload.pop("project_key", None)
+        # 换产品后旧的故障现场不再适用，避免把信息带到新项目。
+        payload.pop(FAULT_DIALOG_FIELD, None)
         payload["updated_at"] = time.time()
         self._save_session(chatid, userid, payload)
 
@@ -76,14 +80,17 @@ class ChatSessionStore:
         """记录当前会话选中的项目，并保留尚未消费的待回答问题。"""
         payload = self._load_session(chatid, userid)
         payload["project_key"] = _text(project_key)
+        # 新项目必须重新收集故障环境与路径，不能沿用上一个项目的上下文。
+        payload.pop(FAULT_DIALOG_FIELD, None)
         payload["updated_at"] = time.time()
         self._save_session(chatid, userid, payload)
 
     def clear_selection(self, chatid, userid):
-        """清除产品与项目选择，但保留待回答问题供后续继续处理。"""
+        """清除产品、项目与故障上下文，但保留待回答问题供后续继续处理。"""
         payload = self._load_session(chatid, userid)
         payload.pop("product_key", None)
         payload.pop("project_key", None)
+        payload.pop(FAULT_DIALOG_FIELD, None)
         question = _text(payload.get("pending_question"))
         if question:
             payload["updated_at"] = time.time()
@@ -91,6 +98,10 @@ class ChatSessionStore:
         else:
             self._client.delete(self._session_key(chatid, userid))
         return question
+
+    def reset(self, chatid, userid):
+        """清空整个会话：项目、待回答问题、故障上下文与流式状态之外的缓存。"""
+        self._client.delete(self._session_key(chatid, userid))
 
     def clear_project(self, chatid, userid):
         """兼容旧调用：切换时清除产品与项目两级选择。"""
@@ -111,6 +122,38 @@ class ChatSessionStore:
             payload["updated_at"] = time.time()
             self._save_session(chatid, userid, payload)
         return question
+
+    def get_pending_question(self, chatid, userid):
+        """读取尚未消费的待回答问题；用于自动识别项目而不提前清除。"""
+        return _text(self._load_session(chatid, userid).get("pending_question"))
+
+    def get_fault_dialog(self, chatid, userid):
+        """读取当前故障收集上下文；没有或内容损坏时返回空字典。"""
+        value = self._load_session(chatid, userid).get(FAULT_DIALOG_FIELD)
+        return value if isinstance(value, dict) else {}
+
+    def set_fault_dialog(self, chatid, userid, dialog):
+        """保存故障收集上下文并刷新会话 TTL。"""
+        payload = self._load_session(chatid, userid)
+        if isinstance(dialog, dict) and dialog:
+            payload[FAULT_DIALOG_FIELD] = dialog
+        else:
+            payload.pop(FAULT_DIALOG_FIELD, None)
+        payload["updated_at"] = time.time()
+        self._save_session(chatid, userid, payload)
+
+    def clear_fault_dialog(self, chatid, userid):
+        """只清除故障收集上下文，不影响产品、项目和待回答问题。"""
+        payload = self._load_session(chatid, userid)
+        if FAULT_DIALOG_FIELD not in payload:
+            return
+        payload.pop(FAULT_DIALOG_FIELD, None)
+        remaining = {key for key in payload if key != "updated_at"}
+        if remaining:
+            payload["updated_at"] = time.time()
+            self._save_session(chatid, userid, payload)
+        else:
+            self._client.delete(self._session_key(chatid, userid))
 
     def claim_msgid(self, msgid):
         """抢占消息处理权；返回 True 表示首次处理，False 表示重复推送。"""

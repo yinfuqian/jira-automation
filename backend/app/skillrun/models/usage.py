@@ -43,6 +43,7 @@ class SkillCallRecord(db.Model):
     FAILURE_ENQUEUE_FAILED = "enqueue_failed"
     FAILURE_CODEX_EXCEPTION = "codex_exception"
     FAILURE_NETWORK = "network"
+    FAILURE_RATE_LIMITED = "rate_limited"
     FAILURE_TIMEOUT = "timeout"
     FAILURE_NON_ZERO_EXIT = "non_zero_exit"
     FAILURE_NO_FINAL_MESSAGE = "no_final_message"

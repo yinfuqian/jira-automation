@@ -31,6 +31,7 @@
 | 子任务兜底 | `GET /rest/api/2/search?jql=parent = {KEY}` |
 | 写评论 | `POST /rest/api/2/issue/{KEY}/comment`，Body `{"body":"..."}` |
 | 改评论 | `PUT /rest/api/2/issue/{KEY}/comment/{id}` |
+| 读单条评论 | `GET /rest/api/2/issue/{KEY}/comment/{id}` |
 | 附件下载 | `GET {attachment.content}`（带同一认证头） |
 | **附件上传** | `POST /rest/api/2/issue/{KEY}/attachments`，`multipart/form-data`，字段名 `file`，**必须带 `X-Atlassian-Token: no-check`** |
 | 可用流转 | `GET /rest/api/2/issue/{KEY}/transitions` |
@@ -38,6 +39,8 @@
 | 设置经办人 | `PUT /rest/api/2/issue/{KEY}/assignee`，Body `{"name":"<登录名>"}` |
 | 字段列表 | `GET /rest/api/2/field`（用于定位门禁字段） |
 | 写字段 | `PUT /rest/api/2/issue/{KEY}`，Body `{"fields":{...}}` |
+
+同一轮已经写过预检评论后才发现模块映射缺口时，用 `jira-cli.mjs comment-append <KEY> <id> --file <映射段落>`：脚本先读原评论，再把新段落追加到末尾，避免出现第二条评论。
 
 ## 4. 门禁字段（可选）
 

@@ -654,6 +654,28 @@ class SessionTest(unittest.TestCase):
         self.assertEqual(self.store.clear_project("chat-1", "user-1"), "回调入口在哪")
         self.assertEqual(self.store.pop_pending_question("chat-1", "user-1"), "回调入口在哪")
 
+    def test_fault_dialog_roundtrip_and_clear_selection(self):
+        """故障收集状态可读写，切换选择时必须一并清除。"""
+        dialog = {"conversation_id": "fd-1", "slots": {"environment": "生产"}}
+        self.store.set_fault_dialog("chat-1", "user-1", dialog)
+        self.assertEqual(self.store.get_fault_dialog("chat-1", "user-1")["conversation_id"], "fd-1")
+        self.store.clear_selection("chat-1", "user-1")
+        self.assertEqual(self.store.get_fault_dialog("chat-1", "user-1"), {})
+
+    def test_reset_clears_project_and_fault_dialog(self):
+        """重置会话必须清空项目、待回答问题与未完成的故障追问。"""
+        self.store.set_product("chat-1", "user-1", "chatcall")
+        self.store.set_project("chat-1", "user-1", "chatcall-3.1-main")
+        self.store.set_pending_question("chat-1", "user-1", "旧问题")
+        self.store.set_fault_dialog("chat-1", "user-1", {"conversation_id": "fd-1"})
+
+        self.store.reset("chat-1", "user-1")
+
+        self.assertEqual(self.store.get_project_key("chat-1", "user-1"), "")
+        self.assertEqual(self.store.get_product_key("chat-1", "user-1"), "")
+        self.assertEqual(self.store.get_pending_question("chat-1", "user-1"), "")
+        self.assertEqual(self.store.get_fault_dialog("chat-1", "user-1"), {})
+
     def test_msgid_is_deduplicated(self):
         """同一 msgid 只有第一次抢占成功。"""
         self.assertTrue(self.store.claim_msgid("m-1"))
@@ -671,7 +693,13 @@ class SessionTest(unittest.TestCase):
 class GatewayTest(unittest.IsolatedAsyncioTestCase):
     """校验群消息路由与结果推送。"""
 
-    def build(self, knowledge_enabled=False, **gateway_overrides):
+    def build(
+        self,
+        knowledge_enabled=False,
+        fault_dialog_enabled=None,
+        knowledge_first=None,
+        **gateway_overrides,
+    ):
         """构造网关并替换为假连接与假任务队列。"""
         settings = build_settings(**gateway_overrides)
         if knowledge_enabled:
@@ -684,6 +712,16 @@ class GatewayTest(unittest.IsolatedAsyncioTestCase):
                     token="read-only-token",
                 ),
             )
+        interaction = settings.interaction
+        if fault_dialog_enabled is not None:
+            interaction = dataclasses.replace(
+                interaction, fault_dialog_enabled=fault_dialog_enabled
+            )
+        if knowledge_first is not None:
+            interaction = dataclasses.replace(
+                interaction, knowledge_first=knowledge_first
+            )
+        settings = dataclasses.replace(settings, interaction=interaction)
         redis = FakeRedis()
         self.store = ChatSessionStore(redis, ttl_seconds=600)
         self.enqueued = []
@@ -703,7 +741,7 @@ class GatewayTest(unittest.IsolatedAsyncioTestCase):
 
     async def test_question_without_project_shows_menu(self):
         """未选产品时先返回产品菜单并暂存问题，不投递任务。"""
-        gateway = self.build()
+        gateway = self.build(fault_dialog_enabled=False, knowledge_first=False)
         await gateway._handle_message(group_message("@Bot 回调入口在哪"), "req-1")
         self.assertEqual(self.enqueued, [])
         self.assertIn("第一步", self.conn.markdowns[0])
@@ -711,9 +749,211 @@ class GatewayTest(unittest.IsolatedAsyncioTestCase):
         self.assertIn("回调入口在哪", self.conn.markdowns[0])
         self.assertEqual(self.store.pop_pending_question("chat-1", "user-1"), "回调入口在哪")
 
+    async def test_fault_question_without_project_starts_dialog_without_menu(self):
+        """交互模式下故障问题直接进入追问，不再先弹产品菜单。"""
+        gateway = self.build(knowledge_enabled=True)
+        await gateway._handle_message(
+            group_message("@Bot 华夏卡bot3.2 出现了生产故障"), "req-1"
+        )
+
+        self.assertEqual(self.enqueued, [])
+        self.assertNotIn("第一步", self.conn.markdowns[0])
+        self.assertIn("操作路径", self.conn.markdowns[0])
+        dialog = self.store.get_fault_dialog("chat-1", "user-1")
+        self.assertEqual(dialog["project_key"], "bot-main")
+        self.assertEqual(self.store.get_project_key("chat-1", "user-1"), "bot-main")
+
+        await gateway._handle_message(
+            group_message("@Bot 客户管理 -> 报表 -> 导出", msgid="m-2"), "req-2"
+        )
+        await gateway._handle_message(
+            group_message("@Bot bot-operation 3.2", msgid="m-3"), "req-3"
+        )
+        await gateway._handle_message(group_message("@Bot 没有", msgid="m-4"), "req-4")
+
+        self.assertEqual(len(self.enqueued), 1)
+        self.assertEqual(self.enqueued[0]["project_key"], "bot-main")
+        self.assertEqual(self.enqueued[0]["answer_mode"], "fault")
+
+    async def test_new_question_product_overrides_stale_session_project(self):
+        """旧会话残留其他项目时，问题中明确提到的产品应自动切换。"""
+        gateway = self.build(knowledge_enabled=True)
+        self.store.set_product("chat-1", "user-1", "chatcall")
+        self.store.set_project("chat-1", "user-1", "chatcall-3.1-main")
+
+        await gateway._handle_message(
+            group_message("@Bot 华夏卡bot3.2 出现了生产故障"), "req-1"
+        )
+
+        self.assertNotIn("第一步", self.conn.markdowns[0])
+        self.assertEqual(self.store.get_project_key("chat-1", "user-1"), "bot-main")
+        self.assertEqual(
+            self.store.get_fault_dialog("chat-1", "user-1")["project_key"],
+            "bot-main",
+        )
+
+    async def test_other_product_question_does_not_reuse_stale_project(self):
+        """旧会话是 Bot 时，问「光大卡call」不能继续用 Bot 主线。"""
+        gateway = self.build(knowledge_enabled=True)
+        self.store.set_product("chat-1", "user-1", "bot")
+        self.store.set_project("chat-1", "user-1", "bot-main")
+
+        await gateway._handle_message(
+            group_message("@Bot 光大卡call有生产问题", msgid="m-1"), "req-1"
+        )
+
+        self.assertEqual(self.enqueued, [])
+        self.assertIn("已识别产品：**ChatCall**", self.conn.markdowns[-1])
+        self.assertNotIn("Bot 主线", self.conn.markdowns[-1])
+        self.assertEqual(self.store.get_project_key("chat-1", "user-1"), "")
+        self.assertEqual(self.store.get_product_key("chat-1", "user-1"), "chatcall")
+        self.assertIn("操作路径", self.conn.markdowns[-1])
+        self.assertTrue(self.store.get_fault_dialog("chat-1", "user-1"))
+
+        await gateway._handle_message(
+            group_message("@Bot 客户管理 -> 导出", msgid="m-2"), "req-2"
+        )
+        await gateway._handle_message(
+            group_message("@Bot yicall-common release/3.1", msgid="m-3"), "req-3"
+        )
+        await gateway._handle_message(group_message("@Bot 没有", msgid="m-4"), "req-4")
+        self.assertEqual(len(self.enqueued), 1)
+        self.assertEqual(self.enqueued[0]["project_key"], "")
+        self.assertEqual(
+            self.enqueued[0]["code_targets"],
+            [{"module": "yicall-common", "branch": "release/3.1"}],
+        )
+
+    async def test_same_product_ambiguity_does_not_reuse_old_project(self):
+        """同产品有多个项目时，只写产品名不能默认沿用旧客户项目。"""
+        gateway = self.build(knowledge_enabled=True)
+        self.store.set_product("chat-1", "user-1", "chatcall")
+        self.store.set_project("chat-1", "user-1", "chatcall-3.1-zszq")
+
+        await gateway._handle_message(
+            group_message("@Bot call 登录一直报错", msgid="m-1"), "req-1"
+        )
+
+        self.assertEqual(self.store.get_project_key("chat-1", "user-1"), "")
+        self.assertIn("不需要你选择项目或客户现场", self.conn.markdowns[-1])
+        self.assertIn("哪个环境", self.conn.markdowns[-1])
+
+    async def test_reset_command_is_not_recorded_as_slot_answer(self):
+        """故障追问中发送「重置会话」应清空上下文，不能当成操作路径。"""
+        gateway = self.build(knowledge_enabled=True)
+        await gateway._handle_message(
+            group_message("@Bot 华夏卡bot3.2 出现了生产故障", msgid="m-1"), "req-1"
+        )
+        self.assertTrue(self.store.get_fault_dialog("chat-1", "user-1"))
+        self.assertIn("具体操作路径", self.conn.markdowns[-1])
+
+        await gateway._handle_message(
+            group_message("@Bot 重置会话", msgid="m-2"), "req-2"
+        )
+
+        self.assertEqual(self.store.get_fault_dialog("chat-1", "user-1"), {})
+        self.assertEqual(self.store.get_project_key("chat-1", "user-1"), "")
+        self.assertIn("已重置会话", self.conn.markdowns[-1])
+        self.assertNotIn("模块和版本", self.conn.markdowns[-1])
+
+    async def test_fault_without_branch_falls_back_to_knowledge(self):
+        """没有项目且用户给不出模块/分支时，退回知识库而不是追问项目。"""
+        gateway = self.build(knowledge_enabled=True)
+        await gateway._handle_message(
+            group_message("@Bot 页面一直卡死，帮我分析", msgid="m-1"), "req-1"
+        )
+        self.assertIn("哪个环境", self.conn.markdowns[-1])
+        self.assertNotIn("第一步", self.conn.markdowns[-1])
+
+        await gateway._handle_message(
+            group_message("@Bot 生产环境", msgid="m-2"), "req-2"
+        )
+        await gateway._handle_message(
+            group_message("@Bot 客户管理 -> 报表 -> 导出", msgid="m-3"), "req-3"
+        )
+        await gateway._handle_message(
+            group_message("@Bot 不知道", msgid="m-4"), "req-4"
+        )
+        await gateway._handle_message(group_message("@Bot 没有", msgid="m-5"), "req-5")
+
+        self.assertEqual(len(self.enqueued), 1)
+        self.assertEqual(self.enqueued[0]["answer_mode"], "knowledge")
+        self.assertEqual(self.enqueued[0]["project_key"], "")
+        self.assertNotIn("哪个产品", self.conn.markdowns[-1])
+        self.assertNotIn("第一步", self.conn.markdowns[-1])
+
+    async def test_ordinary_question_without_project_uses_knowledge(self):
+        """普通问题无需产品/项目，直接走 Confluence 知识问答。"""
+        gateway = self.build(knowledge_enabled=True)
+        await gateway._handle_message(
+            group_message("@Bot 最新部署文档在哪里", msgid="m-1"), "req-1"
+        )
+
+        self.assertEqual(len(self.enqueued), 1)
+        payload = self.enqueued[0]
+        self.assertEqual(payload["answer_mode"], "knowledge")
+        self.assertEqual(payload["project_key"], "")
+        self.assertTrue(payload["strict_citation"])
+        self.assertNotIn("第一步", "".join(self.conn.markdowns))
+
+    async def test_callback_configuration_question_uses_knowledge_not_fault(self):
+        """“如何配置回调地址”是资料请求，不能因为出现“回调”就进入故障追问。"""
+        gateway = self.build(knowledge_enabled=True)
+        await gateway._handle_message(
+            group_message("@Bot 如何配置回调地址", msgid="m-1"), "req-1"
+        )
+
+        self.assertEqual(len(self.enqueued), 1)
+        self.assertEqual(self.enqueued[0]["answer_mode"], "knowledge")
+        self.assertEqual(self.store.get_fault_dialog("chat-1", "user-1"), {})
+        self.assertNotIn("操作路径", "".join(self.conn.markdowns))
+
+    async def test_code_question_without_project_asks_module_branch(self):
+        """代码问题缺少项目时只追问模块/分支，补充后继续回答原问题。"""
+        gateway = self.build(knowledge_enabled=False)
+        await gateway._handle_message(
+            group_message("@Bot 结果回调入口在哪", msgid="m-1"), "req-1"
+        )
+        self.assertEqual(self.enqueued, [])
+        self.assertIn("模块名和分支", self.conn.markdowns[-1])
+        self.assertNotIn("第一步", self.conn.markdowns[-1])
+
+        await gateway._handle_message(
+            group_message("@Bot yicall-common release/3.1", msgid="m-2"), "req-2"
+        )
+        self.assertEqual(len(self.enqueued), 1)
+        self.assertEqual(self.enqueued[0]["project_key"], "")
+        self.assertEqual(self.enqueued[0]["answer_mode"], "code")
+        self.assertEqual(
+            self.enqueued[0]["code_targets"],
+            [{"module": "yicall-common", "branch": "release/3.1"}],
+        )
+        self.assertEqual(self.enqueued[0]["question"], "结果回调入口在哪")
+
+    async def test_active_fault_dialog_is_cancelled_by_document_request(self):
+        """故障追问期间要迁移方案，应清空故障上下文并直接查知识库。"""
+        gateway = self.build(knowledge_enabled=True)
+        await gateway._handle_message(
+            group_message("@Bot 华夏卡bot3.2 出现了生产故障", msgid="m-1"), "req-1"
+        )
+        self.assertTrue(self.store.get_fault_dialog("chat-1", "user-1"))
+
+        await gateway._handle_message(
+            group_message("@Bot 给我redis 的迁移方案", msgid="m-2"), "req-2"
+        )
+
+        self.assertEqual(self.store.get_fault_dialog("chat-1", "user-1"), {})
+        self.assertEqual(len(self.enqueued), 1)
+        self.assertEqual(self.enqueued[0]["answer_mode"], "knowledge")
+        self.assertEqual(self.enqueued[0]["question"], "给我redis 的迁移方案")
+
     async def test_knowledge_question_without_product_is_still_blocked_by_selection(self):
         """即使知识库启用，也必须先完成产品和项目选择。"""
-        gateway = self.build(knowledge_enabled=True)
+        gateway = self.build(
+            knowledge_enabled=True,
+            fault_dialog_enabled=False,
+            knowledge_first=False,
+        )
         await gateway._handle_message(group_message("@Bot 回调入口在哪"), "req-1")
 
         self.assertEqual(self.enqueued, [])
@@ -723,7 +963,7 @@ class GatewayTest(unittest.IsolatedAsyncioTestCase):
 
     async def test_fault_question_requires_product_and_project_selection(self):
         """故障问题也要严格先选产品、再选项目，不能跳过两级菜单。"""
-        gateway = self.build(knowledge_enabled=True)
+        gateway = self.build(knowledge_enabled=True, fault_dialog_enabled=False)
         await gateway._handle_message(
             group_message("@Bot 招商证券登录一直报超时，帮我分析一下根因"),
             "req-1",
@@ -755,8 +995,8 @@ class GatewayTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(self.enqueued[0]["answer_mode"], "code")
 
     async def test_select_product_and_project_after_fault_question_keeps_fault_mode(self):
-        """先提故障问题再完成两级选择时，仍要进入故障分析。"""
-        gateway = self.build(knowledge_enabled=True)
+        """先提故障问题再完成两级选择时，旧链路仍直接进入故障分析。"""
+        gateway = self.build(knowledge_enabled=True, fault_dialog_enabled=False)
         await gateway._handle_message(
             group_message("@Bot aiforce2 登录一直报错，帮我分析根因", msgid="m-1"),
             "req-1",
@@ -774,7 +1014,7 @@ class GatewayTest(unittest.IsolatedAsyncioTestCase):
 
     async def test_select_project_after_question_answers_pending_question(self):
         """先提问再完成产品和项目选择时，直接沿用原问题。"""
-        gateway = self.build()
+        gateway = self.build(fault_dialog_enabled=False, knowledge_first=False)
         await gateway._handle_message(group_message("@Bot 结果回调入口在哪", msgid="m-1"), "req-1")
         await gateway._handle_message(group_message("@Bot 1", msgid="m-2"), "req-2")
         self.assertEqual(self.enqueued, [])
@@ -788,7 +1028,7 @@ class GatewayTest(unittest.IsolatedAsyncioTestCase):
 
     async def test_switch_project_keeps_pending_question(self):
         """先提问再切换产品时，重新完成两级选择仍直接回答原问题。"""
-        gateway = self.build()
+        gateway = self.build(fault_dialog_enabled=False, knowledge_first=False)
         await gateway._handle_message(group_message("@Bot 结果回调入口在哪", msgid="m-1"), "req-1")
         await gateway._handle_message(group_message("@Bot 切换项目", msgid="m-2"), "req-2")
         self.assertIn("结果回调入口在哪", self.conn.markdowns[-1])
@@ -798,6 +1038,135 @@ class GatewayTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(len(self.enqueued), 1)
         self.assertEqual(self.enqueued[0]["project_key"], "chatcall-3.1-zszq")
         self.assertEqual(self.enqueued[0]["question"], "结果回调入口在哪")
+
+    async def test_fault_question_collects_slots_before_analysis(self):
+        """故障问题先逐轮确认环境、路径、版本和日志，再投递代码分析。"""
+        gateway = self.build(knowledge_enabled=True)
+        self.store.set_product("chat-1", "user-1", "chatcall")
+        self.store.set_project("chat-1", "user-1", "chatcall-3.1-zszq")
+
+        await gateway._handle_message(
+            group_message("@Bot 招商证券登录一直超时，帮我分析根因", msgid="m-1"),
+            "req-1",
+        )
+        self.assertEqual(self.enqueued, [])
+        self.assertIn("哪个环境", self.conn.markdowns[-1])
+        self.assertTrue(self.store.get_fault_dialog("chat-1", "user-1"))
+
+        await gateway._handle_message(
+            group_message("@Bot 生产环境，今天上午10点", msgid="m-2"), "req-2"
+        )
+        self.assertIn("操作路径", self.conn.markdowns[-1])
+
+        await gateway._handle_message(
+            group_message("@Bot 客户管理 -> 报表 -> 导出", msgid="m-3"), "req-3"
+        )
+        self.assertIn("模块名和分支", self.conn.markdowns[-1])
+
+        await gateway._handle_message(
+            group_message("@Bot aiforce-web release/2.7", msgid="m-4"), "req-4"
+        )
+        self.assertIn("报错日志", self.conn.markdowns[-1])
+
+        await gateway._handle_message(group_message("@Bot 没有", msgid="m-5"), "req-5")
+        self.assertEqual(len(self.enqueued), 1)
+        payload = self.enqueued[0]
+        self.assertEqual(payload["answer_mode"], "fault")
+        self.assertIn("生产", payload["fault_context"]["slots"]["environment"])
+        self.assertEqual(
+            payload["fault_context"]["slots"]["operation_path"],
+            "客户管理 -> 报表 -> 导出",
+        )
+        self.assertEqual(payload["fault_context"]["slots"]["module_version"], "aiforce-web release/2.7")
+        self.assertEqual(payload["fault_context"]["slots"]["error_evidence"], "用户未提供")
+        self.assertIn("指定模块代码", self.conn.streams[0]["content"])
+        self.assertEqual(self.store.get_fault_dialog("chat-1", "user-1"), {})
+
+    async def test_fault_dialog_skip_command_analyzes_immediately(self):
+        """追问阶段回复「直接分析」时不再继续收集，直接进入代码分析。"""
+        gateway = self.build()
+        self.store.set_product("chat-1", "user-1", "chatcall")
+        self.store.set_project("chat-1", "user-1", "chatcall-3.1-main")
+
+        await gateway._handle_message(
+            group_message("@Bot 回调接口一直超时，帮我排查", msgid="m-1"), "req-1"
+        )
+        self.assertEqual(self.enqueued, [])
+        await gateway._handle_message(group_message("@Bot 直接分析", msgid="m-2"), "req-2")
+
+        self.assertEqual(len(self.enqueued), 1)
+        self.assertEqual(self.enqueued[0]["answer_mode"], "fault")
+        self.assertEqual(self.enqueued[0]["fault_context"]["turns"], 0)
+
+    async def test_fault_dialog_cancel_stops_collection(self):
+        """用户取消故障分析时清除上下文，不投递任何分析任务。"""
+        gateway = self.build()
+        self.store.set_product("chat-1", "user-1", "chatcall")
+        self.store.set_project("chat-1", "user-1", "chatcall-3.1-main")
+
+        await gateway._handle_message(
+            group_message("@Bot 页面卡死，帮我分析", msgid="m-1"), "req-1"
+        )
+        await gateway._handle_message(group_message("@Bot 取消", msgid="m-2"), "req-2")
+
+        self.assertEqual(self.enqueued, [])
+        self.assertEqual(self.store.get_fault_dialog("chat-1", "user-1"), {})
+        self.assertIn("已取消", self.conn.markdowns[-1])
+
+    async def test_switch_project_clears_fault_dialog(self):
+        """切换项目必须清除旧项目的故障收集状态。"""
+        gateway = self.build()
+        self.store.set_product("chat-1", "user-1", "chatcall")
+        self.store.set_project("chat-1", "user-1", "chatcall-3.1-main")
+
+        await gateway._handle_message(
+            group_message("@Bot 登录报错，帮我分析", msgid="m-1"), "req-1"
+        )
+        self.assertTrue(self.store.get_fault_dialog("chat-1", "user-1"))
+        await gateway._handle_message(group_message("@Bot 切换项目", msgid="m-2"), "req-2")
+        self.assertEqual(self.store.get_fault_dialog("chat-1", "user-1"), {})
+
+    async def test_knowledge_first_routes_ordinary_question_to_confluence(self):
+        """知识库就绪时，普通业务问题优先投递知识问答并要求引用校验。"""
+        gateway = self.build(knowledge_enabled=True)
+        self.store.set_product("chat-1", "user-1", "chatcall")
+        self.store.set_project("chat-1", "user-1", "chatcall-3.1-main")
+
+        await gateway._handle_message(
+            group_message("@Bot 最新部署文档在哪里", msgid="m-1"), "req-1"
+        )
+
+        self.assertEqual(len(self.enqueued), 1)
+        payload = self.enqueued[0]
+        self.assertEqual(payload["answer_mode"], "knowledge")
+        self.assertTrue(payload["strict_citation"])
+        self.assertIn("Confluence", self.conn.streams[0]["content"])
+
+    async def test_knowledge_first_disabled_keeps_legacy_code_routing(self):
+        """关闭知识库优先时，即使知识库可用也恢复原来的代码问答路由。"""
+        gateway = self.build(knowledge_enabled=True, knowledge_first=False)
+        self.store.set_product("chat-1", "user-1", "chatcall")
+        self.store.set_project("chat-1", "user-1", "chatcall-3.1-main")
+
+        await gateway._handle_message(
+            group_message("@Bot 最新部署文档在哪里", msgid="m-1"), "req-1"
+        )
+
+        self.assertEqual(len(self.enqueued), 1)
+        self.assertEqual(self.enqueued[0]["answer_mode"], "code")
+
+    async def test_knowledge_first_keeps_explicit_code_questions_on_code_path(self):
+        """明确问代码实现时不能被知识库抢走。"""
+        gateway = self.build(knowledge_enabled=True)
+        self.store.set_product("chat-1", "user-1", "chatcall")
+        self.store.set_project("chat-1", "user-1", "chatcall-3.1-main")
+
+        await gateway._handle_message(
+            group_message("@Bot 回调接口在哪个模块实现", msgid="m-1"), "req-1"
+        )
+
+        self.assertEqual(len(self.enqueued), 1)
+        self.assertEqual(self.enqueued[0]["answer_mode"], "code")
 
     async def test_enqueue_failure_ends_stream_and_cleans_context(self):
         """任务投递失败时要结束流式消息，并清掉不再有用的上下文。"""
@@ -821,7 +1190,7 @@ class GatewayTest(unittest.IsolatedAsyncioTestCase):
 
     async def test_select_project_by_index(self):
         """第一次序号选产品，第二次序号选项目并回显模块分支。"""
-        gateway = self.build()
+        gateway = self.build(fault_dialog_enabled=False, knowledge_first=False)
         await gateway._handle_message(group_message("@Bot 1"), "req-1")
         self.assertEqual(self.store.get_product_key("chat-1", "user-1"), "chatcall")
         self.assertIn("第二步", self.conn.markdowns[0])
@@ -854,7 +1223,7 @@ class GatewayTest(unittest.IsolatedAsyncioTestCase):
 
     async def test_switch_project_clears_selection(self):
         """「切换项目/产品」清空两级选择并重新给产品菜单。"""
-        gateway = self.build()
+        gateway = self.build(fault_dialog_enabled=False, knowledge_first=False)
         self.store.set_project("chat-1", "user-1", "chatcall-3.1-main")
         self.store.set_product("chat-1", "user-1", "chatcall")
         self.store.set_project("chat-1", "user-1", "chatcall-3.1-main")

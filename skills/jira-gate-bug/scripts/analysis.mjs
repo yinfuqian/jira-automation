@@ -433,7 +433,7 @@ function selectPrimaryInputForProduct(input, product, options) {
 
 /**
  * 校验主模块与关联模块使用的都是远端真实存在的精准 Tag。
- * 该检查在提交分析前完成，找不到 Tag 时由门禁按缺参打回。
+ * 该检查在提交分析前完成，找不到 Tag 时由门禁说明自动分析条件不足并跳过，不打回。
  */
 export async function validateScopeTags(scope, options = {}) {
   if (!scope) throw new Error("缺少分析范围，无法校验精准 Tag");

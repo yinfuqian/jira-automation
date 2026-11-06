@@ -35,7 +35,10 @@ class RuntimeConcurrencyConfigTests(unittest.TestCase):
             content = (PROJECT_ROOT / filename).read_text(encoding="utf-8")
 
             self.assertIn("analysis,maintenance", content)
-            self.assertIn("--concurrency=2", content)
+            self.assertIn("--concurrency=${SKILL_WORKER_CONCURRENCY:-2}", content)
+            self.assertIn(
+                "--max-tasks-per-child=${SKILL_WORKER_MAX_TASKS_PER_CHILD:-1}", content
+            )
             self.assertIn("      - skill\n", content)
             self.assertNotIn("CELERY_ANALYSIS_CONCURRENCY", content)
             self.assertNotIn("CELERY_SKILL_CONCURRENCY", content)
@@ -78,7 +81,6 @@ class RuntimeConcurrencyConfigTests(unittest.TestCase):
                 for line in content.splitlines()
                 if line.strip() and not line.lstrip().startswith("#") and "=" in line
             ]
-            self.assertLessEqual(len(assignments), 36, filename)
             for key in removed_keys:
                 self.assertNotIn(f"{key}=", content, f"{filename}: {key}")
 

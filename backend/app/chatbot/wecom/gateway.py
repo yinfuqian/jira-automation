@@ -12,7 +12,7 @@ import logging
 import time
 import uuid
 
-from .. import fault_analysis
+from .. import fault_analysis, fault_dialog
 from ..session import ChatSessionStore
 from ..settings import ChatbotConfigError
 from . import protocol
@@ -23,6 +23,16 @@ logger = logging.getLogger(__name__)
 
 # 需要回到第一步重新选择产品的口语化指令。
 SWITCH_COMMANDS = {"切换产品", "换产品", "切换项目", "换项目", "重新选择", "重选", "切换", "重来"}
+# 清空当前会话（含未完成的故障追问），避免旧上下文把新问题当成槽位答案。
+RESET_COMMANDS = {
+    "重置会话",
+    "重置",
+    "新会话",
+    "清空会话",
+    "清空上下文",
+    "重新开始",
+    "从头开始",
+}
 # 查看使用说明的指令。
 HELP_COMMANDS = {"帮助", "help", "怎么用", "使用说明", "/help"}
 # 单聊场景的提示语：本机器人只在群里工作。
@@ -149,6 +159,8 @@ class ChatbotGateway:
         lowered = question.strip().lower()
         selected_product = settings.product_by_key(self._session.get_product_key(chatid, userid))
         current = settings.project_by_key(self._session.get_project_key(chatid, userid))
+        interaction = getattr(settings, "interaction", None)
+        dialog_enabled = bool(getattr(interaction, "fault_dialog_enabled", False))
         if current is not None and selected_product is None:
             # 兼容旧会话：历史版本只保存 project_key，后续直接补齐产品层级。
             selected_product = settings.product_by_key(current.product_key)
@@ -156,7 +168,19 @@ class ChatbotGateway:
                 self._session.set_product(chatid, userid, selected_product.key)
                 self._session.set_project(chatid, userid, current.key)
 
+        if question.strip() in RESET_COMMANDS:
+            self._session.reset(chatid, userid)
+            await self._reply(
+                req_id,
+                "已重置会话。旧的项目选择和未完成的故障追问都已清除，"
+                "直接描述新的问题即可。",
+            )
+            return
+
         if lowered in HELP_COMMANDS:
+            if dialog_enabled:
+                await self._reply(req_id, self._help_text())
+                return
             menu = (
                 settings.project_menu_text(selected_product)
                 if selected_product is not None and current is None
@@ -167,12 +191,52 @@ class ChatbotGateway:
 
         if question.strip() in SWITCH_COMMANDS:
             pending_question = self._session.clear_selection(chatid, userid)
+            if dialog_enabled:
+                await self._reply(
+                    req_id,
+                    "已清除当前产品/项目选择。直接描述问题即可，不需要重新选择；"
+                    "需要指定范围时，在问题里带上产品、项目或模块名。",
+                )
+                return
             content = (
                 self._pending_menu_text(pending_question, settings.product_menu_text())
                 if pending_question
                 else settings.product_menu_text()
             )
             await self._reply(req_id, content)
+            return
+
+        # 故障追问必须优先于序号选择与普通问答：用户此时发送的「1」或长段日志
+        # 都是对上一个追问的回答，不能再被当成产品/项目序号。
+        active_dialog = self._session.get_fault_dialog(chatid, userid)
+        if active_dialog:
+            if self._is_new_fault_for_other_product(
+                active_dialog, question.strip()
+            ):
+                # 用户没有先说“重置”，但新描述明确落到另一个产品：按新故障处理，
+                # 不能把整句话写进上一个故障的操作路径。
+                self._session.clear_fault_dialog(chatid, userid)
+                await self._begin_fault_dialog(None, question.strip(), body, req_id)
+                return
+            if self._is_new_document_question(question.strip()):
+                # 用户从故障追问切到了「要文档/要方案」，这是一条新问题，
+                # 不能把“给我迁移方案”当成上一条故障的日志或路径。
+                self._session.clear_fault_dialog(chatid, userid)
+                await self._handle_unscoped_message(
+                    current, question.strip(), body, req_id
+                )
+                return
+            await self._continue_fault_dialog(
+                current, active_dialog, question.strip(), body, req_id
+            )
+            return
+
+        # 新交互模式完全取消「先选产品/项目」的前置门槛：能从描述识别就直接
+        # 使用，识别不到时按缺失信息逐项追问，普通问题则直接查知识库。
+        if dialog_enabled:
+            await self._handle_unscoped_message(
+                current, question.strip(), body, req_id
+            )
             return
 
         if question.strip().isdigit():
@@ -196,31 +260,13 @@ class ChatbotGateway:
             # 用户先提问、后选项目时，直接沿用刚才的问题发起分析，避免重复输入。
             pending_question = self._session.pop_pending_question(chatid, userid)
             if pending_question:
-                pending_mode = (
-                    "fault"
-                    if settings.fault_analysis.enabled
-                    and fault_analysis.is_fault_analysis_question(pending_question)
-                    else "code"
-                )
-                await self._start_answer(
-                    project,
-                    pending_question,
-                    body,
-                    req_id,
-                    mode=pending_mode,
-                )
+                await self._route_question(project, pending_question, body, req_id)
                 return
             await self._reply(req_id, self._selected_text(project))
             return
 
         if current is not None:
-            mode = (
-                "fault"
-                if settings.fault_analysis.enabled
-                and fault_analysis.is_fault_analysis_question(question)
-                else "code"
-            )
-            await self._start_answer(current, question.strip(), body, req_id, mode=mode)
+            await self._route_question(current, question.strip(), body, req_id)
             return
 
         # 严格按「产品 → 项目 → 回答」推进；问题先暂存，选完后自动继续。
@@ -231,6 +277,181 @@ class ChatbotGateway:
             else settings.product_menu_text()
         )
         await self._reply(req_id, self._pending_menu_text(question.strip(), menu))
+
+    async def _handle_unscoped_message(self, current, question, body, req_id):
+        """处理尚未绑定项目的消息，不再弹出产品/项目菜单。
+
+        代码检出只需要「模块 + 分支」：普通问题直接查知识库，故障/代码问题
+        进入追问并只索取模块与分支；项目/客户现场仅作为可选的快捷映射。
+        """
+        settings = self._settings
+        chatid = str(body.get("chatid") or "")
+        userid = str((body.get("from") or {}).get("userid") or "")
+        fault_question = self._is_fault_request(question)
+        code_question = fault_analysis.is_code_question(question)
+        document_request = bool(
+            fault_analysis.is_document_question(question)
+            and not fault_analysis.has_fault_evidence(question)
+        )
+        knowledge_ready = bool(
+            getattr(settings.knowledge, "enabled", False)
+            and getattr(settings.confluence, "configured", False)
+        )
+        knowledge_first = bool(
+            getattr(getattr(settings, "interaction", None), "knowledge_first", False)
+        )
+
+        candidate = fault_analysis.match_project(settings, question)
+        product = fault_analysis.match_product(settings, question)
+        if (
+            product is not None
+            and current is not None
+            and current.product_key != product.key
+        ):
+            # 用户明确提到了另一个产品，不能继续沿用会话里的旧项目。
+            current = None
+            self._session.pop_pending_question(chatid, userid)
+        if (
+            product is not None
+            and current is not None
+            and current.product_key == product.key
+            and candidate is None
+            and (fault_question or code_question)
+            and len(product.projects) > 1
+        ):
+            # 只提产品、没提客户时，不能沿用上次的客户分支；改为按模块+分支追问。
+            current = None
+            self._session.set_product(chatid, userid, product.key)
+            self._session.pop_pending_question(chatid, userid)
+        if candidate is not None and (
+            current is None or candidate.key != current.key
+        ):
+            self._remember_project(candidate, chatid, userid)
+            self._session.pop_pending_question(chatid, userid)
+            await self._route_question(candidate, question, body, req_id)
+            return
+        if candidate is not None:
+            await self._route_question(candidate, question, body, req_id)
+            return
+        if current is not None:
+            # 会话里有项目映射时可以复用其分支；但没有项目也照样能分析，
+            # 后续只按模块 + 分支追问，不会回到项目菜单。
+            await self._route_question(current, question, body, req_id)
+            return
+        if product is not None:
+            if len(product.projects) == 1:
+                default_project = product.projects[0]
+                self._remember_project(default_project, chatid, userid)
+                self._session.pop_pending_question(chatid, userid)
+                await self._route_question(
+                    default_project, question, body, req_id
+                )
+                return
+            if (
+                document_request
+                or (not fault_question and not code_question)
+            ) and knowledge_first and knowledge_ready:
+                await self._start_answer(
+                    None, question, body, req_id, mode="knowledge"
+                )
+                return
+            self._session.set_product(chatid, userid, product.key)
+            await self._begin_fault_dialog(
+                None,
+                question,
+                body,
+                req_id,
+                mode="fault" if fault_question else "code",
+            )
+            return
+
+        if fault_question:
+            await self._begin_fault_dialog(None, question, body, req_id)
+            return
+        if (
+            knowledge_first
+            and knowledge_ready
+            and (document_request or not code_question)
+        ):
+            await self._start_answer(None, question, body, req_id, mode="knowledge")
+            return
+        if code_question:
+            await self._begin_fault_dialog(
+                None, question, body, req_id, mode="code"
+            )
+            return
+
+        # 知识库未就绪或未开启优先时，也必须查代码；只索取模块与分支。
+        await self._begin_fault_dialog(None, question, body, req_id, mode="code")
+
+    def _remember_project(self, project, chatid, userid):
+        """记住自动识别出的项目；后续追问和普通问题可直接复用。"""
+        product = self._settings.product_by_key(project.product_key)
+        if product is not None:
+            self._session.set_product(chatid, userid, product.key)
+        self._session.set_project(chatid, userid, project.key)
+
+    def _is_fault_request(self, question):
+        """故障请求要排除纯文档/方案类问法，避免误进追问。"""
+        return bool(
+            fault_analysis.is_fault_analysis_question(question)
+            and not (
+                fault_analysis.is_document_question(question)
+                and not fault_analysis.has_fault_evidence(question)
+            )
+        )
+
+    def _is_new_document_question(self, question):
+        """故障追问期间，判断用户是否已经切换到索要文档/方案。"""
+        return bool(
+            fault_analysis.is_document_question(question)
+            and not fault_analysis.has_fault_evidence(question)
+            and not self._is_fault_request(question)
+        )
+
+    def _is_new_fault_for_other_product(self, dialog, question):
+        """判断这轮回复是否其实是另一个产品的新故障描述。"""
+        if not fault_analysis.is_fault_analysis_question(question):
+            return False
+        product = fault_analysis.match_product(self._settings, question)
+        if product is None:
+            return False
+        dialog_product = str(dialog.get("product_key") or "").strip()
+        if not dialog_product:
+            dialog_project = self._settings.project_by_key(
+                dialog.get("project_key")
+            )
+            dialog_product = (
+                dialog_project.product_key if dialog_project is not None else ""
+            )
+        return bool(dialog_product) and dialog_product != product.key
+
+    def _resolve_dialog_project(self, dialog):
+        """从原始描述里解析项目；项目仅用于复用预配置分支，不是必需项。"""
+        existing = self._settings.project_by_key(dialog.get("project_key"))
+        if existing is not None:
+            return existing
+        return fault_analysis.match_project(
+            self._settings, fault_dialog.analysis_query(dialog)
+        )
+
+    def _save_fault_dialog(self, project, dialog, chatid, userid):
+        """先更新项目选择，再写回故障上下文，避免被 set_project 清掉。"""
+        if project is not None:
+            self._remember_project(project, chatid, userid)
+        self._session.set_fault_dialog(chatid, userid, dialog)
+
+    def _help_text(self) -> str:
+        """新交互模式的帮助：直接描述问题，不要求项目或客户现场。"""
+        return (
+            "直接 @我 描述问题即可，不需要先选产品或客户现场。\n\n"
+            "- 普通问题：查询 Confluence 已同步资料，并给出来源页面。\n"
+            "- 故障问题：我会按缺失情况追问环境、操作路径、模块分支和日志。\n"
+            "- 需要查代码时只索取「模块 + 分支」，例如 `yicall-common release/3.1`，"
+            "不会要求选择项目或客户现场。\n"
+            "- 追问阶段回复「直接分析」可跳过补充；回复「取消」结束本次分析；"
+            "回复「重置会话」清空上下文。"
+        )
 
     def _pending_menu_text(self, question, menu) -> str:
         """在两级菜单后附上待回答的问题，提示选完项目会自动开始分析。"""
@@ -250,16 +471,323 @@ class ChatbotGateway:
         ]
         for module, branch in modules:
             lines.append(f"- {module}：`{branch}`")
-        lines.extend(
-            [
-                "",
-                "现在可以直接 @我 做代码问答。",
-                "如果遇到报错、超时、空白或崩溃，直接描述现象，我会进入故障分析。",
-                "发送「@我 切换项目」可重新选择。",
-            ]
-        )
+        interaction = getattr(self._settings, "interaction", None)
+        if getattr(interaction, "fault_dialog_enabled", False):
+            lines.extend(
+                [
+                    "",
+                    "现在可以直接 @我 做代码问答。",
+                    "如果遇到报错、超时、空白或崩溃，直接描述现象；我会先确认环境、操作路径、版本和日志，再进入故障分析。",
+                    "故障追问阶段回复「直接分析」可跳过补充。",
+                ]
+            )
+        else:
+            lines.extend(
+                [
+                    "",
+                    "现在可以直接 @我 做代码问答。",
+                    "如果遇到报错、超时、空白或崩溃，直接描述现象，我会进入故障分析。",
+                ]
+            )
+        lines.append("发送「@我 切换项目」可重新选择。")
         return "\n".join(lines)
-    async def _start_answer(self, project, question, body, req_id, mode="code"):
+
+    async def _route_question(self, project, question, body, req_id):
+        """按故障、知识库、代码三种模式路由；未启用新能力时保持旧链路。"""
+        fault_enabled = bool(getattr(self._settings.fault_analysis, "enabled", True))
+        interaction = getattr(self._settings, "interaction", None)
+        dialog_enabled = bool(getattr(interaction, "fault_dialog_enabled", False))
+        knowledge_first = bool(getattr(interaction, "knowledge_first", False))
+
+        if fault_enabled and self._is_fault_request(question):
+            if dialog_enabled:
+                await self._begin_fault_dialog(project, question, body, req_id)
+                return
+            await self._start_answer(project, question, body, req_id, mode="fault")
+            return
+
+        knowledge_ready = bool(
+            getattr(self._settings.knowledge, "enabled", False)
+            and getattr(self._settings.confluence, "configured", False)
+        )
+        if (
+            knowledge_first
+            and knowledge_ready
+            and (
+                (
+                    fault_analysis.is_document_question(question)
+                    and not fault_analysis.has_fault_evidence(question)
+                )
+                or not fault_analysis.is_code_question(question)
+            )
+        ):
+            await self._start_answer(project, question, body, req_id, mode="knowledge")
+            return
+        await self._start_answer(project, question, body, req_id, mode="code")
+
+    async def _begin_fault_dialog(
+        self, project, question, body, req_id, mode="fault"
+    ):
+        """创建追问上下文；项目只作为可选的代码分支快捷映射。"""
+        chatid = str(body.get("chatid") or "")
+        userid = str((body.get("from") or {}).get("userid") or "")
+        mode = "code" if str(mode or "").lower() == "code" else "fault"
+        dialog = fault_dialog.new_dialog(
+            question,
+            project.key if project is not None else "",
+            project.name if project is not None else "",
+            mode=mode,
+        )
+        product = fault_analysis.match_product(self._settings, question)
+        if product is None and project is not None:
+            product = self._settings.product_by_key(project.product_key)
+        if product is not None:
+            dialog["product_key"] = product.key
+        prompt = fault_dialog.next_prompt(
+            dialog, self._fault_dialog_max_turns()
+        )
+        if prompt:
+            self._save_fault_dialog(project, dialog, chatid, userid)
+            if project is not None:
+                lead = f"已识别项目：**{project.name}**。\n\n"
+            elif product is not None:
+                lead = f"已识别产品：**{product.name}**。\n\n"
+            elif mode == "code":
+                lead = "收到代码问题。\n\n"
+            else:
+                lead = "收到故障描述。\n\n"
+            lead += "代码分析只按「模块 + 分支」定位，不需要你选择项目或客户现场。\n\n"
+            await self._reply(
+                req_id,
+                lead
+                + "为避免仅凭现象误判，我还需要确认一项信息：\n\n"
+                f"{prompt}",
+            )
+            return
+
+        gap = self._module_version_gap(dialog, project)
+        if gap:
+            await self._ask_code_version(project, dialog, gap, chatid, userid, req_id)
+            return
+        await self._start_answer(
+            project,
+            question,
+            body,
+            req_id,
+            mode=mode,
+            fault_context=dialog,
+            code_targets=self._resolve_code_targets(dialog, project),
+        )
+
+    async def _continue_fault_dialog(self, project, dialog, answer, body, req_id):
+        """推进一轮追问；信息齐全后按模块分支检出代码并分析。"""
+        chatid = str(body.get("chatid") or "")
+        userid = str((body.get("from") or {}).get("userid") or "")
+        mode = str(dialog.get("mode") or "fault")
+        max_turns = self._fault_dialog_max_turns()
+
+        if fault_dialog.is_cancel_command(answer):
+            self._session.clear_fault_dialog(chatid, userid)
+            await self._reply(req_id, "已取消本次分析。需要时重新描述问题即可。")
+            return
+
+        skip = fault_dialog.is_skip_command(answer)
+        if not skip:
+            dialog = fault_dialog.record_answer(dialog, answer)
+            project = project or self._resolve_dialog_project(dialog)
+            if project is not None:
+                dialog = fault_dialog.set_project(
+                    dialog, project.key, project.name
+                )
+            prompt = fault_dialog.next_prompt(dialog, max_turns)
+            if prompt:
+                self._save_fault_dialog(project, dialog, chatid, userid)
+                await self._reply(
+                    req_id,
+                    "已收到，继续确认下一项：\n\n"
+                    f"{prompt}",
+                )
+                return
+        else:
+            project = project or self._resolve_dialog_project(dialog)
+            if project is not None:
+                dialog = fault_dialog.set_project(
+                    dialog, project.key, project.name
+                )
+
+        gap = self._module_version_gap(dialog, project)
+        if gap:
+            if not skip and int(dialog.get("turns") or 0) < max_turns:
+                await self._ask_code_version(
+                    project, dialog, gap, chatid, userid, req_id
+                )
+                return
+            await self._fallback_to_knowledge(dialog, body, req_id, chatid, userid)
+            return
+
+        targets = self._resolve_code_targets(dialog, project)
+        if not targets:
+            await self._fallback_to_knowledge(dialog, body, req_id, chatid, userid)
+            return
+        sent = await self._start_answer(
+            project,
+            dialog.get("original_question") or "",
+            body,
+            req_id,
+            mode=mode,
+            fault_context=dialog,
+            code_targets=targets,
+        )
+        if sent:
+            self._session.clear_fault_dialog(chatid, userid)
+
+    def _module_version_gap(self, dialog, project):
+        """检查模块/分支是否足以检出代码，返回缺失项类型。"""
+        slots = dialog.get("slots") or {}
+        raw = str(slots.get("module_version") or "").strip()
+        parsed = []
+        if raw and raw != "用户未提供":
+            parsed = fault_analysis.parse_code_targets(self._settings, raw)
+        if not parsed:
+            parsed = fault_analysis.parse_code_targets(
+                self._settings, fault_dialog.analysis_query(dialog)
+            )
+        if not parsed:
+            # 已识别项目时可以直接沿用项目配置的分支；没有项目才需要用户给模块。
+            if project is not None and project.module_items():
+                return ""
+            return "module"
+        branches = dict(project.module_items()) if project is not None else {}
+        for target in parsed:
+            if not target.get("branch") and not branches.get(target["module"]):
+                return "branch"
+        return ""
+
+    def _resolve_code_targets(self, dialog, project):
+        """把追问得到的模块/分支转成代码检出目标；项目只用于补全分支。"""
+        slots = dialog.get("slots") or {}
+        raw = str(slots.get("module_version") or "").strip()
+        parsed = []
+        if raw and raw != "用户未提供":
+            parsed = fault_analysis.parse_code_targets(self._settings, raw)
+        if not parsed:
+            parsed = fault_analysis.parse_code_targets(
+                self._settings, fault_dialog.analysis_query(dialog)
+            )
+
+        branches = dict(project.module_items()) if project is not None else {}
+        if parsed:
+            targets = []
+            for target in parsed:
+                module = str(target.get("module") or "").strip()
+                branch = str(target.get("branch") or branches.get(module) or "").strip()
+                if module and branch:
+                    targets.append({"module": module, "branch": branch})
+            return self._dedupe_targets(targets)
+
+        if project is None:
+            return []
+        if str(dialog.get("mode") or "fault") == "fault":
+            modules = fault_analysis.select_modules(
+                project,
+                fault_dialog.analysis_query(dialog),
+                self._settings.fault_analysis.max_modules,
+            )
+        else:
+            modules = project.module_items()
+        return self._dedupe_targets(
+            [{"module": module, "branch": branch} for module, branch in modules]
+        )
+
+    def _dedupe_targets(self, targets):
+        """按模块+分支去重，避免重复检出同一个工作树。"""
+        result = []
+        seen = set()
+        for target in targets or []:
+            key = (target.get("module"), target.get("branch"))
+            if key in seen:
+                continue
+            seen.add(key)
+            result.append(target)
+        return result
+
+    async def _ask_code_version(
+        self, project, dialog, gap, chatid, userid, req_id
+    ):
+        """只追问代码分支缺口，不再询问项目或客户现场。"""
+        dialog = fault_dialog.request_slot(dialog, "module_version")
+        self._save_fault_dialog(project, dialog, chatid, userid)
+        slots = dialog.get("slots") or {}
+        raw = str(slots.get("module_version") or "").strip()
+        parsed = fault_analysis.parse_code_targets(self._settings, raw)
+        if not parsed:
+            parsed = fault_analysis.parse_code_targets(
+                self._settings, fault_dialog.analysis_query(dialog)
+            )
+        modules = "、".join(
+            f"`{item['module']}`" for item in parsed if item.get("module")
+        )
+        if gap == "branch":
+            hint = (
+                f"已识别模块：{modules}，但还缺代码分支/版本。\n\n"
+                "请直接回复分支，例如 `release/3.1`；也可以回复完整的 "
+                "`模块名 release/3.1`。"
+            )
+        else:
+            hint = (
+                "还缺出问题的模块名。请直接回复模块名和分支，例如 "
+                "`yicall-common release/3.1`；只给模块名也可以，我会再确认分支。"
+            )
+        await self._reply(
+            req_id,
+            hint
+            + "\n\n如果暂时拿不到分支，回复「直接分析」，我会先按 Confluence "
+            "已同步资料给出排查建议。",
+        )
+
+    async def _fallback_to_knowledge(self, dialog, body, req_id, chatid, userid):
+        """没有可用代码分支时退回知识库，避免把用户卡在追问里。"""
+        knowledge_ready = bool(
+            getattr(self._settings.knowledge, "enabled", False)
+            and getattr(self._settings.confluence, "configured", False)
+        )
+        if not knowledge_ready:
+            self._session.clear_fault_dialog(chatid, userid)
+            await self._reply(
+                req_id,
+                "当前无法定位代码分支。请补充模块名和分支/版本后重新提问，"
+                "例如 `yicall-common release/3.1`。",
+            )
+            return
+        await self._reply(
+            req_id,
+            "没有拿到可用的代码分支，我先按 Confluence 已同步资料给出排查建议。",
+        )
+        sent = await self._start_answer(
+            None,
+            fault_dialog.format_context(dialog),
+            body,
+            req_id,
+            mode="knowledge",
+        )
+        if sent:
+            self._session.clear_fault_dialog(chatid, userid)
+
+    def _fault_dialog_max_turns(self):
+        """读取追问轮次上限，旧配置缺失时使用 4 轮。"""
+        interaction = getattr(self._settings, "interaction", None)
+        return max(1, int(getattr(interaction, "fault_dialog_max_turns", 4) or 4))
+
+    async def _start_answer(
+        self,
+        project,
+        question,
+        body,
+        req_id,
+        mode="code",
+        fault_context=None,
+        code_targets=None,
+    ):
         """投递一次问答任务，并先推一条「正在分析」的流式占位消息。"""
         chatid = str(body.get("chatid") or "")
         chattype = str(body.get("chattype") or "")
@@ -267,7 +795,27 @@ class ChatbotGateway:
         task_id = f"cb-{uuid.uuid4().hex}"
         stream_id = protocol.new_stream_id()
         started_at = time.time()
-        if project is None:
+        if mode == "knowledge":
+            label = f"（{project.name}）" if project is not None else ""
+            placeholder = (
+                f"正在查询 **Confluence 知识库**{label}…\n\n"
+                "只使用已同步资料作答，并给出可核对的页面来源，请稍候。"
+            )
+            project_key = project.key if project is not None else ""
+            project_name = project.name if project is not None else "Confluence 知识库"
+        elif code_targets:
+            modules = "、".join(
+                f"`{item.get('module')} {item.get('branch')}`"
+                for item in code_targets[:4]
+            )
+            label = f"**{project.name}** 的" if project is not None else ""
+            placeholder = (
+                f"正在分析 {label}{len(code_targets)} 个指定模块代码…\n\n"
+                f"{modules}\n\n首次分析需要拉取仓库，通常 1~3 分钟，请稍候。"
+            )
+            project_key = project.key if project is not None else ""
+            project_name = project.name if project is not None else "指定模块"
+        elif project is None:
             placeholder = (
                 "正在查询 **Confluence 知识库**…\n\n"
                 "我会从已同步资料中给出一个结论，请稍候。"
@@ -307,6 +855,13 @@ class ChatbotGateway:
             "answer_mode": str(mode or "code"),
             "started_at": started_at,
         }
+        if fault_context:
+            context["fault_context"] = fault_context
+        if code_targets:
+            context["code_targets"] = code_targets
+        if str(mode or "") == "knowledge":
+            # 普通问题走知识库时强制要求有效引用；旧的知识库任务调用不传该字段。
+            context["strict_citation"] = True
         self._session.save_stream(task_id, context)
 
         payload = dict(context)
@@ -318,6 +873,8 @@ class ChatbotGateway:
                 req_id, stream_id, f"任务投递失败，请稍后重试。\n\n> {exc}"
             )
             self._session.drop_stream(task_id)
+            return False
+        return True
 
     async def _reply(self, req_id, content):
         """用 markdown 直接回复一条消息。"""

@@ -256,6 +256,30 @@ class SkillTaskTests(unittest.TestCase):
         self.assertEqual(record.status, "failed")
         self.assertEqual(record.exit_code, 2)
 
+    def test_rate_limit_uses_dedicated_stage_and_failure_kind(self):
+        """429 限流单独归类，避免与代码错误、网络断开混在一起。"""
+        from app.skillrun import store
+        from app.skillrun.codex_runner import CodexRunResult
+
+        payload, _ = self.run_task(
+            CodexRunResult(
+                exit_code=1,
+                rate_limited=True,
+                error="上游模型服务触发限流（429 Too Many Requests）",
+                duration_ms=5000,
+            )
+        )
+
+        record = store.find_record(self.record.task_id)
+        self.assertEqual(payload["status"], "failed")
+        self.assertTrue(payload["rate_limited"])
+        self.assertEqual(record.stage, "rate_limited")
+
+        from app.skillrun.models.usage import SkillCallRecord
+
+        call = SkillCallRecord.query.filter_by(record_id=record.id).one()
+        self.assertEqual(call.failure_kind, "rate_limited")
+
     def test_success_without_final_message_is_failed(self):
         """流程成功但没有最终结论时视为失败，避免误报达标。"""
         from app.skillrun import store

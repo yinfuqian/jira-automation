@@ -989,6 +989,25 @@ export async function updateComment(keyOrUrl, commentId, body, options = {}) {
   return await request("PUT", "/rest/api/2/issue/" + encodeURIComponent(key) + "/comment/" + commentId, { ...options, body: { body: String(body) } });
 }
 
+/** 把正文追加到既有评论末尾；同一轮发现映射缺口时用它合并，不再新增第二条评论。 */
+export async function appendComment(keyOrUrl, commentId, body, options = {}) {
+  const key = parseIssueKey(keyOrUrl);
+  assertLockedIssueInput(keyOrUrl);
+  if (!key) throw new Error("无法解析 Jira 问题 Key：" + keyOrUrl);
+  const id = String(commentId || "").trim();
+  if (!id) throw new Error("缺少要追加的评论 ID");
+  if (!body || !String(body).trim()) throw new Error("追加内容为空，已阻止写入");
+  const current = await request(
+    "GET",
+    "/rest/api/2/issue/" + encodeURIComponent(key) + "/comment/" + encodeURIComponent(id),
+    options,
+  );
+  const previous = current && typeof current.body === "string" ? current.body : "";
+  if (!previous.trim()) throw new Error("评论 " + id + " 不存在或正文为空，无法追加");
+  const merged = previous.replace(/\s+$/, "") + "\n\n" + String(body).trim();
+  return await updateComment(keyOrUrl, id, merged, options);
+}
+
 /**
  * 上传附件（用于把故障分析 HTML 报告放进缺陷单评论区）。
  * 依赖运行时提供 FormData / Blob（Node 18+ 与 node_repl 均可用）。

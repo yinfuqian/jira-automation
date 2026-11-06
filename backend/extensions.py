@@ -42,6 +42,7 @@ def init_celery(app):
         broker_connection_max_retries=None,
         beat_schedule=app.config.get("CELERY_BEAT_SCHEDULE", {}),
         task_track_started=True,
+        task_time_limit=app.config.get("CELERY_TASK_TIME_LIMIT_SECONDS", 7800),
         task_serializer="json",
         result_serializer="json",
         accept_content=["json"],

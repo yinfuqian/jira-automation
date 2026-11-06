@@ -266,9 +266,12 @@ def run_skill_task(self, record_id: int):
         )
         return {"task_id": record.task_id, "skill_id": skill.skill_id, "status": "failed", "error": str(exc)}
 
-    # 网络不可达优先于退出码判断：它说明 agent 根本没跑起来，而不是业务判定失败。
+    # 限流与网络不可达优先于退出码判断：它们说明 agent 未正常完成，而不是业务判定失败。
     failure_kind = None
-    if run_result.network_failed:
+    if run_result.rate_limited:
+        status, stage = SkillRunRecord.STATUS_FAILED, "rate_limited"
+        failure_kind = usage.FAILURE_RATE_LIMITED
+    elif run_result.network_failed:
         status, stage = SkillRunRecord.STATUS_FAILED, "network_unreachable"
         failure_kind = usage.FAILURE_NETWORK
     elif run_result.timed_out:
@@ -318,6 +321,7 @@ def run_skill_task(self, record_id: int):
         "exit_code": run_result.exit_code,
         "timed_out": run_result.timed_out,
         "network_failed": run_result.network_failed,
+        "rate_limited": run_result.rate_limited,
         "duration_ms": run_result.duration_ms,
         "workspace_dir": workspace_dir,
         "command": run_result.command,

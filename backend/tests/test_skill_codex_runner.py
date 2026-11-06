@@ -5,6 +5,7 @@ import tempfile
 import unittest
 from pathlib import Path
 from types import SimpleNamespace
+from unittest.mock import Mock, patch
 
 
 BACKEND_DIR = Path(__file__).resolve().parents[1]
@@ -15,8 +16,10 @@ from app.skillrun.codex_runner import (
     build_codex_command,
     build_codex_env,
     build_network_failure_message,
+    build_rate_limit_failure_message,
     build_skill_prompt,
     is_network_error,
+    is_rate_limit_error,
     normalize_base_url,
     redact_command,
     run_codex_skill,
@@ -163,6 +166,18 @@ class CodexEventTests(unittest.TestCase):
         self.assertEqual(event.kind, "error")
         self.assertIn("upstream 500", event.text)
 
+    def test_summarize_turn_failed_as_error_event(self):
+        """turn.failed 的错误正文也必须进入统一错误事件，供限流和网络分类使用。"""
+        event = summarize_event(
+            {
+                "type": "turn.failed",
+                "error": {"message": "exceeded retry limit, last status: 429 Too Many Requests"},
+            }
+        )
+
+        self.assertEqual(event.kind, "error")
+        self.assertIn("429 Too Many Requests", event.text)
+
 
 class NetworkErrorDetectionTests(unittest.TestCase):
     def test_default_retry_limit_allows_slow_network_recovery(self):
@@ -178,6 +193,12 @@ class NetworkErrorDetectionTests(unittest.TestCase):
         self.assertFalse(is_network_error("Model metadata not found"))
         self.assertFalse(is_network_error(""))
 
+    def test_rate_limit_markers_are_detected(self):
+        """429 限流不能被当作代码错误或网络断开。"""
+        self.assertTrue(is_rate_limit_error("exceeded retry limit, last status: 429 Too Many Requests"))
+        self.assertTrue(is_rate_limit_error("rate limit exceeded"))
+        self.assertFalse(is_rate_limit_error("connection refused"))
+
     def test_failure_message_points_to_actionable_checks(self):
         """网络失败说明包含排查方向与原始报错，避免只给一个笼统错误。"""
         message = build_network_failure_message(3, "Connection failed: error sending request")
@@ -185,6 +206,14 @@ class NetworkErrorDetectionTests(unittest.TestCase):
         self.assertIn("3 次网络错误", message)
         self.assertIn("CODEX_BASE_URL", message)
         self.assertIn("Connection failed", message)
+
+    def test_rate_limit_message_explains_concurrency_and_quota(self):
+        """限流错误需要给出并发与配额两个可执行方向。"""
+        message = build_rate_limit_failure_message("429 Too Many Requests")
+
+        self.assertIn("SKILL_WORKER_CONCURRENCY", message)
+        self.assertIn("模型配额", message)
+        self.assertIn("429 Too Many Requests", message)
 
 
 class CodexProcessTests(unittest.TestCase):
@@ -235,6 +264,40 @@ class CodexProcessTests(unittest.TestCase):
 
         self.assertEqual(result.exit_code, 3)
         self.assertIn("3", result.error or "")
+
+    def test_run_classifies_rate_limit_exit(self):
+        """Codex 因 429 重试耗尽退出时返回专用限流结果。"""
+        workspace = self.make_workspace()
+        script = (
+            "import json, sys\n"
+            "print(json.dumps({'type': 'error', 'message': "
+            "'exceeded retry limit, last status: 429 Too Many Requests'}), flush=True)\n"
+            "sys.exit(1)\n"
+        )
+
+        result = run_codex_skill(
+            [sys.executable, "-c", script],
+            cwd=workspace,
+            env=dict(os.environ),
+            timeout_seconds=60,
+            last_message_path=os.path.join(workspace, "missing.md"),
+        )
+
+        self.assertEqual(result.exit_code, 1)
+        self.assertTrue(result.rate_limited)
+        self.assertIn("限流", result.error or "")
+
+    def test_terminate_process_kills_remaining_group_after_parent_exit(self):
+        """主进程已退出时仍按保存的进程组 ID 清理残留孙进程。"""
+        from app.skillrun import codex_runner
+
+        process = SimpleNamespace(pid=4321, poll=Mock(return_value=0), kill=Mock())
+        with patch.object(codex_runner.os, "name", "posix"), patch.object(
+            codex_runner.os, "killpg", create=True
+        ) as killpg, patch.object(codex_runner.signal, "SIGKILL", 9, create=True):
+            codex_runner._terminate_process(process, process_group_id=4321)
+
+        killpg.assert_called_once_with(4321, 9)
 
     def test_run_terminates_process_when_timeout_exceeded(self):
         """超过超时时间时终止子进程并标记超时。"""

@@ -18,10 +18,10 @@ from celery.signals import worker_ready
 import extensions
 from extensions import celery, db
 
-from . import answer, fault_analysis, knowledge, knowledge_answer, repos
+from . import answer, fault_analysis, fault_dialog, knowledge, knowledge_answer, repos
 from .models.knowledge import ChatbotAnswerSource, KnowledgeSyncRun
 from .models.model import ChatbotQuestion
-from .settings import DEFAULT_REPLY_CHANNEL, load_settings
+from .settings import DEFAULT_REPLY_CHANNEL, ProjectDefinition, load_settings
 
 
 logger = logging.getLogger(__name__)
@@ -284,6 +284,7 @@ def knowledge_answer_task(self, payload):
                     workspace_root,
                     max_answer_chars=min(settings.answer.max_answer_chars, 800),
                     max_total_chars=settings.knowledge.max_total_chars,
+                    require_citation=bool(payload.get("strict_citation")),
                 )
                 result = {
                     "ok": answer_result.ok,
@@ -357,6 +358,29 @@ def install_knowledge_startup_sync(app, celery_app):
         worker_ready.connect(on_worker_ready, weak=False)
     celery_app._knowledge_startup_sync_installed = True
     return True
+
+
+def _normalize_code_targets(value):
+    """校验网关传入的「模块 + 分支」列表，忽略缺项并去重。"""
+    if not isinstance(value, (list, tuple)):
+        return []
+    targets = []
+    seen = set()
+    for item in value:
+        if isinstance(item, dict):
+            module = str(item.get("module") or "").strip()
+            branch = str(item.get("branch") or "").strip()
+        elif isinstance(item, (list, tuple)) and len(item) >= 2:
+            module = str(item[0] or "").strip()
+            branch = str(item[1] or "").strip()
+        else:
+            continue
+        key = (module, branch)
+        if not module or not branch or key in seen:
+            continue
+        seen.add(key)
+        targets.append((module, branch))
+    return targets
 
 
 def _fault_background(question, project, settings):
@@ -433,11 +457,22 @@ def answer_task(self, payload):
         db.session.rollback()
 
     project = settings.project_by_key(payload.get("project_key"))
+    code_targets = _normalize_code_targets(payload.get("code_targets"))
+    if project is None and code_targets:
+        # 没有项目/客户现场也能分析：仓库地址按模块全局解析，分支由用户给出。
+        project = ProjectDefinition(
+            key="module-targets",
+            name="指定模块",
+            modules={module: branch for module, branch in code_targets},
+            description="用户直接指定的模块与分支",
+        )
     result = {"ok": False, "answer": "", "error": "", "duration_ms": 0, "usage": {}}
     workspace = None
     try:
         if project is None:
-            result["error"] = "项目已不存在，请重新选择项目后再提问"
+            result["error"] = (
+                "缺少可用的模块/分支信息，请补充模块名和代码分支后再分析"
+            )
         elif not project.module_items():
             result["error"] = f"项目「{project.name}」没有配置任何模块分支"
         else:
@@ -446,19 +481,31 @@ def answer_task(self, payload):
             mode = str(payload.get("answer_mode") or "code").strip().lower()
             modules = None
             background = ""
+            fault_context = payload.get("fault_context")
+            fault_context_text = ""
+            search_question = payload.get("question")
             if mode == "fault":
-                modules = fault_analysis.select_modules(
+                if isinstance(fault_context, dict) and fault_context:
+                    fault_context_text = fault_dialog.format_context(fault_context)
+                    search_question = fault_dialog.analysis_query(fault_context)
+                modules = code_targets or fault_analysis.select_modules(
                     project,
-                    payload.get("question"),
+                    search_question,
                     settings.fault_analysis.max_modules,
                 )
-                background = _fault_background(payload.get("question"), project, settings)
+                background = _fault_background(search_question, project, settings)
                 logger.info(
-                    "故障分析范围：task_id=%s project=%s modules=%s",
+                    "故障分析范围：task_id=%s project=%s modules=%s turns=%s",
                     task_id,
                     project.key,
                     ",".join(module for module, _branch in modules),
+                    (fault_context or {}).get("turns", 0)
+                    if isinstance(fault_context, dict)
+                    else 0,
                 )
+            elif mode == "code" and code_targets:
+                # 没有项目时也按用户指定的「模块 + 分支」直接检出。
+                modules = code_targets
             workspace = answer.prepare_workspace(
                 project,
                 workspace_root,
@@ -474,6 +521,7 @@ def answer_task(self, payload):
                 max_answer_chars=settings.answer.max_answer_chars,
                 mode=mode,
                 background=background,
+                fault_context=fault_context_text,
             )
     except Exception as exc:  # noqa: BLE001 - 任务失败也要回推给用户
         logger.exception("机器人问答执行异常：task_id=%s", task_id)

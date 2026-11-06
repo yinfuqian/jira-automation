@@ -85,9 +85,14 @@ class DefectGateSkillDefinitionTests(unittest.TestCase):
             "gate-set",
             "attach",
             "映射缺失分支只写评论",
+            "一次任务只能有一条预检评论",
+            "comment-append",
+            "禁止再新增第二条评论",
             "ANALYSIS_API_TOKEN",
             "rejectTransitionName",
             "打回流转后经办人必须是提单人",
+            "自动分析条件不足",
+            "不执行打回流转",
         ):
             self.assertIn(required, content)
 
@@ -107,6 +112,16 @@ class DefectGateSkillDefinitionTests(unittest.TestCase):
         self.assertIn("同机回环内部调用免令牌", content)
         self.assertIn("不得仅凭 `ANALYSIS_API_TOKEN` 为空", content)
         self.assertNotIn("未配置时脚本会直接报错", content)
+
+    def test_runtime_prompt_does_not_reject_for_missing_analysis_conditions(self):
+        """信息完整但缺少 Tag 等自动分析条件时，不能把门禁分支误导成打回。"""
+        runtime = json.loads((SKILL_DIR / "runtime.json").read_text(encoding="utf-8"))
+        prompt = runtime["prompt_template"]
+
+        self.assertIn("只有缺陷单信息不完整", prompt)
+        self.assertIn("自动分析条件不足", prompt)
+        self.assertIn("不打回、不改变工作流状态、不修改经办人", prompt)
+        self.assertNotIn("缺陷单信息不完整或缺少分析参数就打回", prompt)
 
     def test_references_define_judgement_rules(self):
         """判定依据必须落在参考资料里，而不是让模型自行发挥。"""
@@ -131,6 +146,8 @@ class DefectGateSkillDefinitionTests(unittest.TestCase):
             "不要求修复版本",
             "不要求环境入口或操作版本",
             "mappingOwner",
+            "自动分析条件不足",
+            "不执行打回流转",
         ):
             self.assertIn(required, checklist)
         self.assertNotIn("含时区", checklist)
@@ -355,6 +372,116 @@ console.log(JSON.stringify(failure));
         self.assertNotIn("转派给", payload["comment"])
         self.assertNotIn("jira-cli.mjs assign", payload["comment"])
         self.assertNotIn("打回", payload["comment"])
+
+    @unittest.skipIf(NODE_BIN is None, "需要 node 运行时才能执行技能脚本")
+    def test_mapping_gap_section_has_no_duplicate_heading(self):
+        """追加用的映射正文不能自带 h3，否则合并后会出现第二个标题。"""
+        scope_url = (SKILL_DIR / "scripts" / "scope.mjs").as_uri()
+        with tempfile.TemporaryDirectory() as temp_dir:
+            config_path = Path(temp_dir) / "scope-mapping.json"
+            config_path.write_text(json.dumps({
+                "versionRules": [{"name": "exact-tag", "pattern": "^.+$", "ref": "{version}"}],
+                "products": {"see": {"modules": {}}},
+            }, ensure_ascii=False), encoding="utf-8")
+            driver = """
+const {
+  ScopeResolutionError,
+  SCOPE_ERROR_REASONS,
+  buildMappingOwnerComment,
+  buildMappingOwnerSection,
+} = await import("__SCOPE__");
+const error = new ScopeResolutionError("缺少模块映射", SCOPE_ERROR_REASONS.MAPPING_MISSING, {
+  product: "see",
+  module: "operation-task",
+  version: "v2.3.73-update",
+});
+console.log(JSON.stringify({
+  section: buildMappingOwnerSection(error, process.argv[1]),
+  comment: buildMappingOwnerComment(error, process.argv[1]),
+}));
+""".replace("__SCOPE__", scope_url)
+
+            output = self.run_node(driver, str(config_path))
+
+        payload = json.loads(output.strip().splitlines()[-1])
+        self.assertNotIn("h3.", payload["section"])
+        self.assertTrue(payload["comment"].startswith("h3. 模块映射丢失，已跳过检查"))
+        self.assertEqual(payload["comment"].count("模块映射丢失"), 1)
+        self.assertIn(payload["section"], payload["comment"])
+
+    @unittest.skipIf(NODE_BIN is None, "需要 node 运行时才能执行技能脚本")
+    def test_comment_append_merges_into_existing_comment(self):
+        """同一轮已有预检评论时，映射缺口必须追加到原评论，不能新增评论。"""
+        original = "h3. 缺陷单预检：不通过（打回补充）\n\n* 结论：缺少模块信息"
+        appended = "h3. 模块映射丢失，已跳过检查\n\n* 待处理：[~yinfuqian1193] 补齐映射"
+        seen = {"get": 0, "post": 0, "put": None}
+
+        class FakeJiraHandler(http.server.BaseHTTPRequestHandler):
+            def do_GET(self):  # noqa: N802 - BaseHTTPRequestHandler 约定方法名
+                if self.path == "/rest/api/2/issue/ABC-1/comment/31985":
+                    seen["get"] += 1
+                    body = json.dumps({"id": "31985", "body": original}).encode("utf-8")
+                    self.send_response(200)
+                    self.send_header("Content-Type", "application/json")
+                    self.send_header("Content-Length", str(len(body)))
+                    self.end_headers()
+                    self.wfile.write(body)
+                    return
+                self.send_response(404)
+                self.end_headers()
+
+            def do_POST(self):  # noqa: N802
+                seen["post"] += 1
+                self.send_response(500)
+                self.end_headers()
+
+            def do_PUT(self):  # noqa: N802
+                length = int(self.headers.get("Content-Length") or 0)
+                seen["put"] = json.loads(self.rfile.read(length).decode("utf-8"))
+                body = json.dumps({"id": "31985", "body": seen["put"]["body"]}).encode("utf-8")
+                self.send_response(200)
+                self.send_header("Content-Type", "application/json")
+                self.send_header("Content-Length", str(len(body)))
+                self.end_headers()
+                self.wfile.write(body)
+
+            def log_message(self, format, *args):  # noqa: A002 - 基类签名固定
+                return
+
+        server = http.server.ThreadingHTTPServer(("127.0.0.1", 0), FakeJiraHandler)
+        thread = threading.Thread(target=server.serve_forever, daemon=True)
+        thread.start()
+        try:
+            with tempfile.TemporaryDirectory() as temp_dir:
+                body_path = Path(temp_dir) / "mapping.txt"
+                body_path.write_text(appended, encoding="utf-8")
+                result = subprocess.run(
+                    [
+                        NODE_BIN,
+                        str(SKILL_DIR / "scripts" / "jira-cli.mjs"),
+                        "comment-append", "ABC-1", "31985",
+                        "--file", str(body_path),
+                        "--base-url", f"http://127.0.0.1:{server.server_port}",
+                        "--token", "test-token",
+                    ],
+                    capture_output=True,
+                    text=True,
+                    encoding="utf-8",
+                    cwd=str(BACKEND_DIR.parent),
+                )
+        finally:
+            server.shutdown()
+            server.server_close()
+            thread.join(timeout=2)
+
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(seen["post"], 0, "不能新增第二条评论")
+        self.assertEqual(seen["get"], 1)
+        self.assertIsNotNone(seen["put"])
+        merged = seen["put"]["body"]
+        self.assertIn("缺陷单预检：不通过", merged)
+        self.assertIn("模块映射丢失，已跳过检查", merged)
+        self.assertLess(merged.index("缺陷单预检：不通过"), merged.index("模块映射丢失，已跳过检查"))
 
     @unittest.skipIf(NODE_BIN is None, "需要 node 运行时才能执行技能脚本")
     def test_cli_mapping_gap_exits_zero_so_agent_can_post_comment(self):

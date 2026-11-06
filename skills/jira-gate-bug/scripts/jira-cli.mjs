@@ -12,6 +12,7 @@
  *   node scripts/jira-cli.mjs attachments <KEY|URL> <目录>     # 下载缺陷单附件
  *   node scripts/jira-cli.mjs comment <KEY|URL> --file <文件>  # 新增评论
  *   node scripts/jira-cli.mjs comment-update <KEY|URL> <评论ID> --file <文件>
+ *   node scripts/jira-cli.mjs comment-append <KEY|URL> <评论ID> --file <文件>  # 追加到既有评论
  *   node scripts/jira-cli.mjs attach <KEY|URL> --file <文件>   # 上传附件（HTML 报告）
  *   node scripts/jira-cli.mjs gate-get <KEY|URL>              # 读取门禁字段
  *   node scripts/jira-cli.mjs gate-set <KEY|URL> --file <JSON> # 写入门禁字段
@@ -42,6 +43,7 @@ const USAGE = `用法：
   node scripts/jira-cli.mjs attachments <KEY|URL> <目录>
   node scripts/jira-cli.mjs comment <KEY|URL> --file <文件> [--body <文本>]
   node scripts/jira-cli.mjs comment-update <KEY|URL> <评论ID> --file <文件>
+  node scripts/jira-cli.mjs comment-append <KEY|URL> <评论ID> --file <文件>
   node scripts/jira-cli.mjs attach <KEY|URL> --file <文件> [--filename <文件名>]
   node scripts/jira-cli.mjs gate-get <KEY|URL>
   node scripts/jira-cli.mjs gate-set <KEY|URL> --file <JSON文件>
@@ -212,6 +214,13 @@ async function main() {
       requireArgs(positional, 2, "comment-update <KEY|URL> <评论ID> --file <文件>");
       const body = readBody(options);
       const result = await jira.updateComment(positional[0], positional[1], body, callOptions);
+      console.log(JSON.stringify({ ok: true, commentId: result && result.id }, null, 2));
+      return;
+    }
+    case "comment-append": {
+      requireArgs(positional, 2, "comment-append <KEY|URL> <评论ID> --file <文件>");
+      const body = readBody(options);
+      const result = await jira.appendComment(positional[0], positional[1], body, callOptions);
       console.log(JSON.stringify({ ok: true, commentId: result && result.id }, null, 2));
       return;
     }

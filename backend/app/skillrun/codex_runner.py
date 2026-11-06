@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import json
+import logging
 import os
 import signal
 import subprocess
@@ -32,6 +33,14 @@ NETWORK_ERROR_MARKERS = (
     "dns error",
     "dns resolution",
     "tls handshake",
+)
+# 上游模型服务限流会以普通 Codex 错误事件出现，不能混同为网络断开。
+RATE_LIMIT_ERROR_MARKERS = (
+    "429 too many requests",
+    "too many requests",
+    "rate limit",
+    "rate_limit",
+    "quota exceeded",
 )
 # 连续出现多少次网络错误后判定为不可达。Codex 采用指数退避重连，
 # 10 次约 15 分钟，届时仍未恢复基本可判定为网络不可达，
@@ -93,6 +102,7 @@ class CodexRunResult:
     exit_code: object = None
     timed_out: bool = False
     network_failed: bool = False
+    rate_limited: bool = False
     last_message: str = ""
     session_id: object = None
     events: list = field(default_factory=list)
@@ -108,6 +118,7 @@ class CodexRunResult:
             "exit_code": self.exit_code,
             "timed_out": self.timed_out,
             "network_failed": self.network_failed,
+            "rate_limited": self.rate_limited,
             "last_message": self.last_message,
             "session_id": self.session_id,
             "events": self.events,
@@ -143,6 +154,12 @@ def is_network_error(text) -> bool:
     return any(marker in lowered for marker in NETWORK_ERROR_MARKERS)
 
 
+def is_rate_limit_error(text) -> bool:
+    """判断错误文本是否为上游模型服务限流。"""
+    lowered = str(text or "").lower()
+    return any(marker in lowered for marker in RATE_LIMIT_ERROR_MARKERS)
+
+
 def build_network_failure_message(count: int, sample: str = "") -> str:
     """构造网络不可达时的可读错误说明，直接给出排查方向。"""
     detail = ""
@@ -152,6 +169,17 @@ def build_network_failure_message(count: int, sample: str = "") -> str:
         f"Codex 连续 {int(count)} 次网络错误，无法访问模型中转或 Jira，已提前终止本次任务{detail}。"
         "排查方向：确认 CODEX_BASE_URL 可达、运行进程可出网、代理与 DNS 正常；"
         "若从沙箱或离线环境启动，请改用正常网络环境重启 worker 后重试。"
+    )
+
+
+def build_rate_limit_failure_message(sample: str = "") -> str:
+    """构造限流失败说明，避免把 429 误报成普通代码错误。"""
+    detail = ""
+    if str(sample or "").strip():
+        detail = f"；最近一次报错：{str(sample).strip()[:200]}"
+    return (
+        "上游模型服务触发限流（429 Too Many Requests），Codex 重试耗尽后退出"
+        f"{detail}。请降低 SKILL_WORKER_CONCURRENCY、确认模型配额，或稍后重新提交任务。"
     )
 
 
@@ -294,6 +322,10 @@ def summarize_event(payload: dict, at: float = None) -> CodexEvent:
         return CodexEvent("turn", "模型开始处理任务", timestamp)
     if event_type == "error":
         return CodexEvent("error", str(payload.get("message") or "Codex 返回错误事件"), timestamp)
+    if event_type == "turn.failed":
+        failure = payload.get("error") if isinstance(payload.get("error"), dict) else {}
+        message = failure.get("message") or payload.get("message") or "Codex 本轮执行失败"
+        return CodexEvent("error", str(message), timestamp)
     if event_type == "turn.completed":
         return CodexEvent("turn", "本轮处理结束", timestamp)
 
@@ -318,19 +350,20 @@ def summarize_event(payload: dict, at: float = None) -> CodexEvent:
     return CodexEvent("raw", json.dumps(payload, ensure_ascii=False)[:500], timestamp)
 
 
-def _terminate_process(process) -> None:
-    """强制结束 Codex 进程及其子进程，避免超时后残留执行体。"""
-    if process.poll() is not None:
-        return
+def _terminate_process(process, process_group_id=None) -> None:
+    """强制结束 Codex 进程组，主进程已退出时也清理残留孙进程。"""
     if os.name == "nt":
-        subprocess.run(
-            ["taskkill", "/F", "/T", "/PID", str(process.pid)],
-            capture_output=True,
-            check=False,
-        )
+        if process.poll() is None:
+            subprocess.run(
+                ["taskkill", "/F", "/T", "/PID", str(process.pid)],
+                capture_output=True,
+                check=False,
+            )
     else:
         try:
-            os.killpg(os.getpgid(process.pid), signal.SIGKILL)
+            # POSIX 子进程使用 start_new_session，进程组 ID 固定为启动时的 PID。
+            # 不能重新调用 getpgid(process.pid)：主进程已被 wait 回收时它可能直接失效。
+            os.killpg(int(process_group_id or process.pid), signal.SIGKILL)
         except (OSError, ProcessLookupError):
             pass
     # taskkill 或进程组信号被环境限制时，退回直接结束主进程。
@@ -363,7 +396,13 @@ def run_codex_skill(
         retry_limit = max(1, int(network_retry_limit))
     except (TypeError, ValueError):
         retry_limit = DEFAULT_NETWORK_RETRY_LIMIT
-    network_state = {"count": 0, "sample": "", "aborted": False}
+    network_state = {
+        "count": 0,
+        "sample": "",
+        "aborted": False,
+        "rate_limited": False,
+        "rate_sample": "",
+    }
 
     popen_kwargs = {
         "cwd": cwd,
@@ -409,7 +448,10 @@ def run_codex_skill(
                 if payload.get("type") == "turn.completed" and isinstance(payload.get("usage"), dict):
                     result.usage = payload["usage"]
                 should_abort = False
-                if event.kind == "error" and is_network_error(event.text):
+                if event.kind == "error" and is_rate_limit_error(event.text):
+                    network_state["rate_limited"] = True
+                    network_state["rate_sample"] = event.text
+                elif event.kind == "error" and is_network_error(event.text):
                     network_state["count"] += 1
                     network_state["sample"] = event.text
                     if network_state["count"] >= retry_limit and not network_state["aborted"]:
@@ -418,7 +460,7 @@ def run_codex_skill(
                 elif event.kind in PROGRESS_EVENT_KINDS or event.kind == "error":
                     network_state["count"] = 0
             if should_abort:
-                _terminate_process(process)
+                _terminate_process(process, process.pid)
             if on_event is not None:
                 try:
                     on_event(event)
@@ -432,21 +474,26 @@ def run_codex_skill(
         result.exit_code = process.wait(timeout=max(1, int(timeout_seconds)))
     except subprocess.TimeoutExpired:
         result.timed_out = True
-        _terminate_process(process)
+        _terminate_process(process, process.pid)
         try:
             process.wait(timeout=10)
         except subprocess.TimeoutExpired:
             pass
         result.error = f"技能执行超过 {int(timeout_seconds)} 秒，已强制终止"
     finally:
+        # Codex 主进程退出不代表它的 MCP、shell 或工具孙进程都已退出。
+        # 每次结束都清理整个进程组，避免残留进程继续占用 worker 的文件描述符和内存。
+        _terminate_process(process, process.pid)
         # 读取线程是守护线程：残留的管道读取会随进程结束自动退出，这里只做有限等待。
         reader.join(timeout=5)
-        # 仅在子进程已经结束时关闭管道，避免在进程仍存活时阻塞主线程。
-        if process.poll() is not None and process.stdout:
+        # 读取线程仍存活时不要关闭管道：TextIOWrapper.close 可能与阻塞读互相等待。
+        if not reader.is_alive() and process.stdout:
             try:
                 process.stdout.close()
             except OSError:
                 pass
+        elif reader.is_alive():
+            logging.warning("Codex 输出读取线程未在 5 秒内退出，保留管道等待进程组清理")
 
     result.duration_ms = int((time.time() - started_at) * 1000)
     with lock:
@@ -455,11 +502,16 @@ def run_codex_skill(
         network_aborted = network_state["aborted"]
         network_count = network_state["count"]
         network_sample = network_state["sample"]
+        rate_limited = network_state["rate_limited"]
+        rate_sample = network_state["rate_sample"]
 
     result.last_message = _read_last_message(last_message_path) or _last_agent_message(result.events)
     if network_aborted and not result.timed_out:
         result.network_failed = True
         result.error = build_network_failure_message(network_count, network_sample)
+    if rate_limited and result.exit_code not in (0, None):
+        result.rate_limited = True
+        result.error = build_rate_limit_failure_message(rate_sample)
     if result.exit_code not in (0, None) and not result.error:
         result.error = f"Codex 退出码为 {result.exit_code}"
     return result

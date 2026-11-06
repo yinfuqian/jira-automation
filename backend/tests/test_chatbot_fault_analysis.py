@@ -35,6 +35,48 @@ class FaultIntentTests(unittest.TestCase):
         ):
             self.assertFalse(is_fault_analysis_question(question), question)
 
+    def test_document_request_is_distinguished_from_fault(self):
+        """“迁移方案/部署文档”是知识问答，不能进入故障追问。"""
+        from app.chatbot.fault_analysis import (
+            classify_question,
+            is_document_question,
+            is_fault_analysis_question,
+        )
+
+        for question in (
+            "给我redis 的迁移方案",
+            "call 最新部署文档在哪里",
+            "如何配置回调地址",
+        ):
+            self.assertTrue(is_document_question(question), question)
+            self.assertEqual(
+                classify_question(question, knowledge_ready=True, knowledge_first=True),
+                "knowledge",
+                question,
+            )
+        self.assertTrue(is_fault_analysis_question("redis 迁移时报错"))
+        self.assertEqual(
+            classify_question("redis 迁移时报错", knowledge_ready=True),
+            "fault",
+        )
+
+    def test_code_targets_only_need_module_and_branch(self):
+        """用户直接给模块/分支即可检出，不依赖项目或客户现场。"""
+        from app.chatbot.fault_analysis import parse_code_targets
+
+        self.assertEqual(
+            parse_code_targets(self.settings, "yicall-common release/3.1"),
+            [{"module": "yicall-common", "branch": "release/3.1"}],
+        )
+        self.assertEqual(
+            parse_code_targets(self.settings, "aiforce-web 分支 release/v2.7"),
+            [{"module": "aiforce-web", "branch": "release/v2.7"}],
+        )
+        self.assertEqual(
+            parse_code_targets(self.settings, "只看到 aiforce-web 报错"),
+            [{"module": "aiforce-web", "branch": ""}],
+        )
+
     def test_project_is_matched_from_alias_and_module(self):
         from app.chatbot.fault_analysis import match_project
 
@@ -85,6 +127,47 @@ class FaultIntentTests(unittest.TestCase):
         self.assertLessEqual(len(selected), 2)
         self.assertEqual(selected[0][0], "aiforce-web")
         self.assertIn(selected[0][0], {item for item, _branch in project.module_items()})
+
+
+class FaultDialogTests(unittest.TestCase):
+    """校验多轮故障收集的槽位推进与退出指令。"""
+
+    def test_dialog_parses_environment_and_walks_through_required_slots(self):
+        from app.chatbot import fault_dialog
+
+        dialog = fault_dialog.new_dialog(
+            "生产环境点击导出后一直卡住，帮我分析", "chatcall-3.1-main", "ChatCall 3.1 主线"
+        )
+
+        self.assertEqual(dialog["slots"]["environment"], "生产")
+        self.assertTrue(dialog["slots"]["operation_path"])
+        self.assertEqual(dialog["pending_slot"], "module_version")
+        dialog = fault_dialog.record_answer(dialog, "aiforce-web release/2.7")
+        self.assertEqual(dialog["slots"]["module_version"], "aiforce-web release/2.7")
+        self.assertEqual(dialog["pending_slot"], "error_evidence")
+        self.assertIn("报错日志", fault_dialog.next_prompt(dialog))
+
+        dialog = fault_dialog.record_answer(dialog, "没有")
+        self.assertEqual(dialog["slots"]["error_evidence"], "用户未提供")
+        self.assertTrue(fault_dialog.is_ready(dialog))
+        self.assertIn("模块/分支", fault_dialog.format_context(dialog))
+
+    def test_dialog_max_turns_stops_asking_even_when_slots_remain(self):
+        from app.chatbot import fault_dialog
+
+        dialog = fault_dialog.new_dialog("登录卡住", "demo", "Demo")
+        for answer in ("生产", "客户管理 -> 导出", "release/2.7"):
+            dialog = fault_dialog.record_answer(dialog, answer)
+        self.assertTrue(fault_dialog.is_ready(dialog, max_turns=3))
+        self.assertFalse(fault_dialog.is_ready(dialog, max_turns=4))
+        self.assertEqual(dialog["turns"], 3)
+
+    def test_skip_and_cancel_commands_are_distinguished(self):
+        from app.chatbot import fault_dialog
+
+        self.assertTrue(fault_dialog.is_skip_command("直接分析"))
+        self.assertTrue(fault_dialog.is_cancel_command("取消"))
+        self.assertFalse(fault_dialog.is_skip_command("没有"))
 
 
 class FaultRoutingTests(unittest.TestCase):
@@ -199,6 +282,100 @@ class FaultTaskTests(unittest.TestCase):
         self.assertEqual(run.call_args.kwargs["background"], "背景资料")
         workspace.cleanup.assert_called_once_with(settings)
         publish.assert_called_once()
+
+    def test_answer_task_passes_dialog_context_to_modules_and_prompt(self):
+        """多轮收集到的环境、路径、版本和日志必须进入模块筛选与故障提示词。"""
+        from flask import Flask
+        from unittest.mock import MagicMock, patch
+        from app.chatbot import tasks
+
+        app = Flask(__name__)
+        project = SimpleNamespace(
+            key="chatcall-3.1-main",
+            name="ChatCall 3.1 主线",
+            module_items=lambda: [("aiforce-web", "release/v2.7")],
+        )
+        settings = SimpleNamespace(
+            gateway=SimpleNamespace(reply_channel="chatbot:reply"),
+            fault_analysis=SimpleNamespace(max_modules=1),
+            answer=SimpleNamespace(max_answer_chars=1200),
+            project_by_key=lambda key: project if key == project.key else None,
+        )
+        workspace = SimpleNamespace(cleanup=MagicMock())
+        answer_result = {"ok": True, "answer": "结论", "error": "", "duration_ms": 12, "usage": {}}
+        fault_context = {
+            "original_question": "登录一直超时，帮我分析根因",
+            "slots": {
+                "environment": "生产",
+                "operation_path": "客户管理 -> 报表 -> 导出",
+                "module_version": "aiforce-web release/2.7",
+                "error_evidence": "用户未提供",
+            },
+            "turns": 4,
+        }
+        payload = {
+            "task_id": "cb-fault-context-task",
+            "project_key": project.key,
+            "project_name": project.name,
+            "question": fault_context["original_question"],
+            "answer_mode": "fault",
+            "fault_context": fault_context,
+        }
+
+        with tempfile.TemporaryDirectory() as workspace_root:
+            app.config["SKILL_WORKSPACE_DIR"] = workspace_root
+            with app.app_context(), patch.object(tasks, "load_settings", return_value=settings),                     patch.object(tasks, "_upsert_record", return_value=None),                     patch.object(tasks, "_codex_options", return_value=SimpleNamespace()),                     patch.object(
+                        tasks.fault_analysis, "select_modules", return_value=[]
+                    ) as select,                     patch.object(tasks, "_fault_background", return_value="背景资料"),                     patch.object(tasks.answer, "prepare_workspace", return_value=workspace),                     patch.object(tasks.answer, "run_answer", return_value=answer_result) as run,                     patch.object(tasks, "publish_result"):
+                tasks.answer_task.run(payload)
+
+        search_question = select.call_args.args[1]
+        self.assertIn("操作路径：客户管理 -> 报表 -> 导出", search_question)
+        self.assertIn("模块/分支：aiforce-web release/2.7", search_question)
+        self.assertIn("操作路径：客户管理 -> 报表 -> 导出", run.call_args.kwargs["fault_context"])
+        self.assertIn("用户未提供", run.call_args.kwargs["fault_context"])
+
+    def test_answer_task_accepts_code_targets_without_project(self):
+        """没有项目时，模块+分支必须能直接检出代码并分析。"""
+        from flask import Flask
+        from unittest.mock import MagicMock, patch
+        from app.chatbot import tasks
+
+        app = Flask(__name__)
+        settings = SimpleNamespace(
+            gateway=SimpleNamespace(reply_channel="chatbot:reply"),
+            fault_analysis=SimpleNamespace(max_modules=4),
+            answer=SimpleNamespace(max_answer_chars=1200),
+            project_by_key=lambda _key: None,
+        )
+        workspace = SimpleNamespace(cleanup=MagicMock())
+        answer_result = {
+            "ok": True,
+            "answer": "结论",
+            "error": "",
+            "duration_ms": 12,
+            "usage": {},
+        }
+        payload = {
+            "task_id": "cb-code-targets",
+            "project_key": "",
+            "question": "yicall-common 启动报错",
+            "answer_mode": "code",
+            "code_targets": [
+                {"module": "yicall-common", "branch": "release/3.1"}
+            ],
+        }
+
+        with tempfile.TemporaryDirectory() as workspace_root:
+            app.config["SKILL_WORKSPACE_DIR"] = workspace_root
+            with app.app_context(), patch.object(tasks, "load_settings", return_value=settings),                     patch.object(tasks, "_upsert_record", return_value=None),                     patch.object(tasks, "_codex_options", return_value=SimpleNamespace()),                     patch.object(tasks.answer, "prepare_workspace", return_value=workspace) as prepare,                     patch.object(tasks.answer, "run_answer", return_value=answer_result) as run,                     patch.object(tasks, "publish_result"):
+                tasks.answer_task.run(payload)
+
+        modules = prepare.call_args.kwargs["modules"]
+        self.assertEqual(modules, [("yicall-common", "release/3.1")])
+        synthetic = prepare.call_args.args[0]
+        self.assertEqual(synthetic.name, "指定模块")
+        self.assertEqual(run.call_args.kwargs["mode"], "code")
 
 
 if __name__ == "__main__":

@@ -53,6 +53,11 @@
     "sync_interval_seconds": 21600
   },
   "session_ttl_seconds": 14400,
+  "interaction": {
+    "fault_dialog_enabled": true,
+    "knowledge_first": true,
+    "fault_dialog_max_turns": 4
+  },
   "fault_analysis": {
     "enabled": true,
     "max_modules": 4,

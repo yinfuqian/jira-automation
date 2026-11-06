@@ -81,6 +81,7 @@ class KnowledgeTaskWithoutProjectTests(unittest.TestCase):
             "project_key": "",
             "project_name": "Confluence 知识库",
             "question": "权限怎么检查",
+            "strict_citation": True,
         }
 
         with tempfile.TemporaryDirectory() as workspace:
@@ -95,7 +96,7 @@ class KnowledgeTaskWithoutProjectTests(unittest.TestCase):
                     ) as retrieve, \
                     patch.object(tasks.knowledge, "direct_confluence_search", return_value=[999]) as online, \
                     patch.object(tasks.knowledge, "refresh_hits_live", return_value=[1]), \
-                    patch.object(tasks.knowledge_answer, "run_knowledge_answer", return_value=answer_result), \
+                    patch.object(tasks.knowledge_answer, "run_knowledge_answer", return_value=answer_result) as answer_run, \
                     patch.object(tasks, "_save_answer_sources"), \
                     patch.object(tasks, "_publish_reply", return_value=True) as publish:
                 result = tasks.knowledge_answer_task.run(payload)
@@ -105,6 +106,7 @@ class KnowledgeTaskWithoutProjectTests(unittest.TestCase):
         online.assert_called_once_with("权限怎么检查", settings)
         self.assertEqual(retrieve.call_args_list[1].kwargs["document_ids"], [999])
         self.assertEqual(publish.call_args.args[1]["answer"], "先检查权限。[S1]")
+        self.assertTrue(answer_run.call_args.kwargs["require_citation"])
 
 
 class KnowledgeRankingTests(unittest.TestCase):
@@ -602,6 +604,64 @@ class SingleAnswerTests(unittest.TestCase):
 
         self.assertEqual(normalized.count("[S3]"), 1)
         self.assertNotIn("[S1]", normalized)
+
+
+class KnowledgeCitationTests(unittest.TestCase):
+    def test_citation_must_reference_an_evidence_item_from_this_turn(self):
+        """严格模式下只接受本轮证据范围内、且实际存在的引用。"""
+        from app.chatbot.knowledge_answer import has_valid_citation
+
+        hits = [object(), object()]
+        self.assertTrue(has_valid_citation("结论 [S1]", hits))
+        self.assertTrue(has_valid_citation("结论 [S1][S2]", hits))
+        self.assertFalse(has_valid_citation("结论 [S3]", hits))
+        self.assertFalse(has_valid_citation("没有引用的结论", hits))
+
+    def test_strict_mode_rejects_an_answer_without_a_valid_citation(self):
+        """普通问题走知识库时，模型漏引用必须返回证据不足，不能补一个假来源。"""
+        from app.chatbot.answer import CodexOptions
+        from app.chatbot import knowledge_answer
+
+        hit = SimpleNamespace(
+            document=SimpleNamespace(
+                title="权限说明",
+                source_id="100",
+                current_version=3,
+                updated_at_source=datetime(2026, 1, 1),
+                url="https://confluence.example/pages/3",
+            ),
+            chunk=SimpleNamespace(heading_path="权限", content="先检查账号权限。"),
+        )
+        result = SimpleNamespace(
+            last_message="先检查账号权限。",
+            network_failed=False,
+            timed_out=False,
+            exit_code=0,
+            error="",
+            usage={},
+        )
+        with tempfile.TemporaryDirectory() as workspace, patch.object(
+            knowledge_answer.codex_runner, "run_codex_skill", return_value=result
+        ):
+            answer = knowledge_answer.run_knowledge_answer(
+                "权限怎么检查",
+                None,
+                [hit],
+                CodexOptions(),
+                workspace,
+                require_citation=True,
+            )
+
+        self.assertFalse(answer.ok)
+        self.assertIn("证据不足", answer.error)
+        self.assertEqual(answer.answer, "")
+
+    def test_insufficient_answer_is_not_treated_as_missing_citation(self):
+        """模型明确回答证据不足时，不应再报“缺少引用”。"""
+        from app.chatbot.knowledge_answer import _is_insufficient_answer
+
+        self.assertTrue(_is_insufficient_answer("Confluence 中未找到能够回答该问题的依据"))
+        self.assertFalse(_is_insufficient_answer("先检查账号权限 [S1]"))
 
 
 if __name__ == "__main__":
