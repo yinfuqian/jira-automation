@@ -277,7 +277,7 @@ services:
       - --hostname=worker-chatbot@%h
       - -Q
       - chatbot
-      - --concurrency=2
+      - --concurrency=20
     volumes:
       - ./data/logs:/app/app/logs
       - ./data/repos:/tmp/jira-automation-repos

@@ -1,9 +1,10 @@
+version: '2'
 services:
-  api-dev:
+  api:
     image: ${BACKEND_IMAGE}
     network_mode: "host"
     env_file:
-      - .env
+      - ${ENV_FILE:-.env}
     environment:
       FLASK_APP: app.py
       PYTHONUNBUFFERED: "1"
@@ -26,7 +27,7 @@ services:
       CODEX_SANDBOX: ${CODEX_SANDBOX:-danger-full-access}
       CODEX_EPHEMERAL: ${CODEX_EPHEMERAL:-true}
       # 单次技能执行超时秒数：留空表示按技能自身 runtime.json 声明（jira-code 7200、jira-defect-gate 3600、其余 1800）。
-      CODEX_SKILL_TIMEOUT: ${CODEX_SKILL_TIMEOUT:-1800}
+      CODEX_SKILL_TIMEOUT: ${CODEX_SKILL_TIMEOUT:-}
       # 连续网络错误达到该次数即判定模型/Jira 不可达并提前终止，避免空转到超时。
       CODEX_NETWORK_RETRY_LIMIT: ${CODEX_NETWORK_RETRY_LIMIT:-10}
       # worker 启动时把上一次运行遗留的“执行中”任务标记为失败。
@@ -53,28 +54,28 @@ services:
       - --timeout
       - "300"
       - --bind
-      - 0.0.0.0:6000
+      - 0.0.0.0:${API_PORT:-5000}
       - app:create_app()
     ports:
-      - "${API_PORT}:6000"
+      - "${API_PORT}:5000"
     volumes:
-      - ./data/users-dev.csv:/data/users.csv:ro
-      - ./data/upload-dev:/data/upload
+      - ./data/users.csv:/data/users.csv:ro
+      - ./data/upload:/data/upload
       # 机器人项目与分支映射随镜像内置（/app/config/chatbot.json），无需挂载。
-      - ./data/logs-dev:/app/app/logs
-      - ./data/repos-dev:/tmp/log-analyzer-repos
+      - ./data/logs:/app/app/logs
+      - ./data/repos:/tmp/jira-automation-repos
       # 技能目录只读挂载：Codex 运行时无法改动技能定义，也不会把内置技能写进业务技能目录。
       - ./skills:/data/skills:ro
       # CODEX_HOME 独立挂载：Codex 状态库（state/logs/goals 等）落在 data 目录，不污染仓库。
-      - ./data/codex-dev:/data/codex
-      - ./data/skill-workspace-dev:/data/skill-workspace
+      - ./data/codex:/data/codex
+      - ./data/skill-workspace:/data/skill-workspace
     restart: unless-stopped
 
-  worker-analysis-dev:
+  worker-analysis:
     image: ${BACKEND_IMAGE}
     network_mode: "host"
     env_file:
-      - .env
+      - ${ENV_FILE:-.env}
     environment:
       PYTHONUNBUFFERED: "1"
       # 分析 worker 只消费分析队列，并顺带消费低频 GitLab 维护队列。
@@ -85,24 +86,24 @@ services:
       - celery_worker.celery_app
       - worker
       - --loglevel=INFO
-      - --hostname=worker-analysis-dev@%h
+      - --hostname=worker-analysis@%h
       - -Q
       - analysis,maintenance
       - --concurrency=2
     volumes:
-      - ./data/users-dev.csv:/data/users.csv:ro
-      - ./data/upload-dev:/data/upload
-      - ./data/logs-dev:/app/app/logs
-      - ./data/repos-dev:/tmp/log-analyzer-repos
+      - ./data/users.csv:/data/users.csv:ro
+      - ./data/upload:/data/upload
+      - ./data/logs:/app/app/logs
+      - ./data/repos:/tmp/jira-automation-repos
     restart: unless-stopped
     depends_on:
-      - api-dev
+      - api
 
-  worker-skill-dev:
+  worker-skill:
     image: ${BACKEND_IMAGE}
     network_mode: "host"
     env_file:
-      - .env
+      - ${ENV_FILE:-.env}
     environment:
       PYTHONUNBUFFERED: "1"
       # 技能执行（Codex Agent）相关配置。CODEX_BASE_URL/CODEX_API_KEY 为空时回退到 OPENAI_URL/OPENAI_KEY。
@@ -124,10 +125,10 @@ services:
       CODEX_SANDBOX: ${CODEX_SANDBOX:-danger-full-access}
       CODEX_EPHEMERAL: ${CODEX_EPHEMERAL:-true}
       # 单次技能执行超时秒数：留空表示按技能自身 runtime.json 声明（jira-code 7200、jira-defect-gate 3600、其余 1800）。
-      CODEX_SKILL_TIMEOUT: ${CODEX_SKILL_TIMEOUT:-1800}
+      CODEX_SKILL_TIMEOUT: ${CODEX_SKILL_TIMEOUT:-}
       # 连续网络错误达到该次数即判定模型/Jira 不可达并提前终止，避免空转到超时。
       CODEX_NETWORK_RETRY_LIMIT: ${CODEX_NETWORK_RETRY_LIMIT:-10}
-      # 只由技能 worker 负责回收遗留的技能任务，并由它独占启动同步之外的启动副作用。
+      # 只由技能 worker 负责回收遗留的技能任务。
       SKILL_RECOVER_ORPHANS: ${SKILL_RECOVER_ORPHANS:-true}
       GITLAB_SYNC_ENABLED: "false"
       GITLAB_SYNC_ON_STARTUP: "false"
@@ -148,37 +149,37 @@ services:
       - celery_worker.celery_app
       - worker
       - --loglevel=INFO
-      - --hostname=worker-skill-dev@%h
+      - --hostname=worker-skill@%h
       - -Q
       - skill
       - --concurrency=2
     volumes:
-      - ./data/users-dev.csv:/data/users.csv:ro
-      - ./data/upload-dev:/data/upload
-      - ./data/logs-dev:/app/app/logs
-      - ./data/repos-dev:/tmp/log-analyzer-repos
+      - ./data/users.csv:/data/users.csv:ro
+      - ./data/upload:/data/upload
+      - ./data/logs:/app/app/logs
+      - ./data/repos:/tmp/jira-automation-repos
       # 技能目录只读挂载：Codex 运行时无法改动技能定义，也不会把内置技能写进业务技能目录。
       - ./skills:/data/skills:ro
       # CODEX_HOME 独立挂载：Codex 状态库（state/logs/goals 等）落在 data 目录，不污染仓库。
-      - ./data/codex-dev:/data/codex
-      - ./data/skill-workspace-dev:/data/skill-workspace
+      - ./data/codex:/data/codex
+      - ./data/skill-workspace:/data/skill-workspace
       # Maven：settings.xml 指向内网 Nexus 镜像，本地仓库用宿主机缓存目录。
       # 技能（jira-code）在容器里编译业务仓库时，私有依赖只能从内网 Nexus 取；
       # 预热好的本地仓库让 `mvn -o` 离线构建能直接命中，不必每次联网拉取。
       # 两个路径都要先在宿主机准备好：settings.xml 随仓库分发，repository 见 README「Maven 本地仓库」。
       - ./config/maven/settings.xml:/root/.m2/settings.xml:ro
-      - ./data/m2-dev/repository:/root/.m2/repository
+      - ./data/m2/repository:/root/.m2/repository
     restart: unless-stopped
     depends_on:
-      - api-dev
+      - api
 
   # Celery Beat 每分钟投递技能队列过期清理任务，并按 GITLAB_SYNC_INTERVAL_HOURS 周期同步 GitLab 产品/模块；
   # 分析 worker 启动时还会额外投递一次 GitLab 同步。
-  beat-dev:
+  beat:
     image: ${BACKEND_IMAGE}
     network_mode: "host"
     env_file:
-      - .env
+      - ${ENV_FILE:-.env}
     environment:
       PYTHONUNBUFFERED: "1"
     command:
@@ -189,18 +190,18 @@ services:
       - --loglevel=INFO
       - --schedule=/data/celerybeat/celerybeat-schedule
     volumes:
-      - ./data/users-dev.csv:/data/users.csv:ro
-      - ./data/celerybeat-dev:/data/celerybeat
+      - ./data/users.csv:/data/users.csv:ro
+      - ./data/celerybeat:/data/celerybeat
     restart: unless-stopped
     depends_on:
-      - worker-analysis-dev
-      - worker-skill-dev
+      - worker-analysis
+      - worker-skill
 
   migrate:
     image: ${BACKEND_IMAGE}
     network_mode: "host"
     env_file:
-      - .env
+      - ${ENV_FILE:-.env}
     environment:
       FLASK_APP: app.py
       PYTHONUNBUFFERED: "1"
@@ -223,7 +224,7 @@ services:
       CODEX_SANDBOX: ${CODEX_SANDBOX:-danger-full-access}
       CODEX_EPHEMERAL: ${CODEX_EPHEMERAL:-true}
       # 单次技能执行超时秒数：留空表示按技能自身 runtime.json 声明（jira-code 7200、jira-defect-gate 3600、其余 1800）。
-      CODEX_SKILL_TIMEOUT: ${CODEX_SKILL_TIMEOUT:-1800}
+      CODEX_SKILL_TIMEOUT: ${CODEX_SKILL_TIMEOUT:-}
       # 连续网络错误达到该次数即判定模型/Jira 不可达并提前终止，避免空转到超时。
       CODEX_NETWORK_RETRY_LIMIT: ${CODEX_NETWORK_RETRY_LIMIT:-10}
       # worker 启动时把上一次运行遗留的“执行中”任务标记为失败。
@@ -244,22 +245,22 @@ services:
       - -c
       - python init_database.py && (flask db upgrade || python bootstrap_schema.py)
     volumes:
-      - ./data/users-dev.csv:/data/users.csv:ro
-      - ./data/upload-dev:/data/upload
-      - ./data/logs-dev:/app/app/logs
-      - ./data/repos-dev:/tmp/log-analyzer-repos
+      - ./data/users.csv:/data/users.csv:ro
+      - ./data/upload:/data/upload
+      - ./data/logs:/app/app/logs
+      - ./data/repos:/tmp/jira-automation-repos
       # 技能目录只读挂载：Codex 运行时无法改动技能定义，也不会把内置技能写进业务技能目录。
       - ./skills:/data/skills:ro
       # CODEX_HOME 独立挂载：Codex 状态库（state/logs/goals 等）落在 data 目录，不污染仓库。
-      - ./data/codex-dev:/data/codex
-      - ./data/skill-workspace-dev:/data/skill-workspace
+      - ./data/codex:/data/codex
+      - ./data/skill-workspace:/data/skill-workspace
     restart: unless-stopped
 
-  worker-chatbot-dev:
+  worker-chatbot:
     image: ${BACKEND_IMAGE}
     network_mode: "host"
     env_file:
-      - .env
+      - ${ENV_FILE:-.env}
     environment:
       PYTHONUNBUFFERED: "1"
       # 机器人问答要把仓库检出到工作区，并调用 Codex 分析。
@@ -273,25 +274,25 @@ services:
       - celery_worker.celery_app
       - worker
       - --loglevel=INFO
-      - --hostname=worker-chatbot-dev@%h
+      - --hostname=worker-chatbot@%h
       - -Q
       - chatbot
-      - --concurrency=2
+      - --concurrency=20
     volumes:
-      - ./data/logs-dev:/app/app/logs
-      - ./data/repos-dev:/tmp/jira-automation-repos
-      - ./data/users-dev.csv:/data/users.csv:ro
-      - ./data/codex-dev:/data/codex
-      - ./data/skill-workspace-dev:/data/skill-workspace
+      - ./data/logs:/app/app/logs
+      - ./data/repos:/tmp/jira-automation-repos
+      - ./data/users.csv:/data/users.csv:ro
+      - ./data/codex:/data/codex
+      - ./data/skill-workspace:/data/skill-workspace
     restart: unless-stopped
     depends_on:
-      - api-dev
+      - api
 
-  chatbot-gateway-dev:
+  chatbot-gateway:
     image: ${BACKEND_IMAGE}
     network_mode: "host"
     env_file:
-      - .env
+      - ${ENV_FILE:-.env}
     environment:
       PYTHONUNBUFFERED: "1"
     # 长连接网关必须单实例：同一机器人同时只能保持一条有效连接。
@@ -299,10 +300,10 @@ services:
       - python
       - chatbot_gateway.py
     volumes:
-      - ./data/logs-dev:/app/app/logs
-      - ./data/users-dev.csv:/data/users.csv:ro
-      - ./data/codex-dev:/data/codex
-      - ./data/skill-workspace-dev:/data/skill-workspace
+      - ./data/logs:/app/app/logs
+      - ./data/users.csv:/data/users.csv:ro
+      - ./data/codex:/data/codex
+      - ./data/skill-workspace:/data/skill-workspace
     restart: unless-stopped
     depends_on:
-      - worker-chatbot-dev
+      - worker-chatbot
