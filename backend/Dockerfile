@@ -134,7 +134,7 @@ RUN find /app -type f -name '*.sh' -exec sed -i 's/\r$//' {} + \
     && chmod +x /app/docker-entrypoint.sh /app/migrate_db.sh /app/start.sh /app/start_worker.sh \
     && mkdir -p /data/upload /data/paddle-cache /data/config /app/app/logs /tmp/jira-automation-repos \
     && python -m pip check \
-    && python -m compileall -q app.py celery_worker.py chatbot_gateway.py extensions.py app bootstrap_schema.py init_database.py manage_users.py verify_runtime.py \
+    && python -m compileall -q app.py celery_worker.py chatbot_gateway.py knowledge_gateway.py knowledge_worker.py extensions.py app bootstrap_schema.py init_database.py manage_users.py verify_runtime.py \
     && AUTH_USERS_FILE=/app/users.example.csv python verify_runtime.py --build \
     && AUTH_USERS_FILE=/app/users.example.csv python verify_runtime.py --ocr \
     && rm -rf /app/app/logs/* \
@@ -159,6 +159,10 @@ RUN ln -sf /usr/local/lib/node_modules/npm/bin/npm-cli.js /usr/local/bin/npm \
 COPY --from=build /app/app /app/app
 # 机器人项目与分支映射随镜像发布，运行时不依赖宿主机目录挂载。
 COPY --from=build /app/config/chatbot.json /app/config/chatbot.json
+# 知识/故障机器人配置与入口独立复制，避免影响原代码问答机器人。
+COPY --from=build /app/config/knowledge_bot.json /app/config/knowledge_bot.json
+# 场景 → 模块映射表，新增产品只改这个 JSON，不用改代码。
+COPY --from=build /app/config/knowledge_scenarios.json /app/config/knowledge_scenarios.json
 COPY --from=build /app/migrations /app/migrations
 COPY --from=build /app/app.py /app/app.py
 COPY --from=build /app/celery_worker.py /app/celery_worker.py
@@ -168,6 +172,8 @@ COPY --from=build /app/init_database.py /app/init_database.py
 COPY --from=build /app/manage_users.py /app/manage_users.py
 COPY --from=build /app/verify_runtime.py /app/verify_runtime.py
 COPY --from=build /app/chatbot_gateway.py /app/chatbot_gateway.py
+COPY --from=build /app/knowledge_gateway.py /app/knowledge_gateway.py
+COPY --from=build /app/knowledge_worker.py /app/knowledge_worker.py
 COPY --from=build /app/docker-entrypoint.sh /app/docker-entrypoint.sh
 COPY --from=build /app/migrate_db.sh /app/migrate_db.sh
 COPY --from=build /app/start.sh /app/start.sh

@@ -700,6 +700,101 @@ def normalize_code_locations(value):
     return locations
 
 
+def first_non_empty_text(source, *keys):
+    """按字段优先级读取第一段非空文本，兼容模型返回的字段别名。"""
+    if not isinstance(source, dict):
+        return ""
+    for key in keys:
+        value = source.get(key)
+        if value is None:
+            continue
+        text = str(value).strip()
+        if text:
+            return text
+    return ""
+
+
+def normalize_solution_pair(source):
+    """把处理建议规范化为快速方案、代码修复及兼容旧字段的合并文本。"""
+    quick_solution = first_non_empty_text(
+        source,
+        "quick_solution",
+        "quick_mitigation",
+        "workaround",
+        "temporary_solution",
+    )
+    code_solution = first_non_empty_text(
+        source,
+        "code_solution",
+        "code_fix",
+        "permanent_solution",
+        "code_change_suggestion",
+    )
+    legacy_solution = first_non_empty_text(source, "solution")
+    if not code_solution and legacy_solution:
+        code_solution = legacy_solution
+
+    sections = []
+    if quick_solution:
+        sections.append("快速解决方案：\n" + quick_solution)
+    if code_solution:
+        sections.append("代码修改建议：\n" + code_solution)
+    return quick_solution, code_solution, "\n\n".join(sections)
+
+
+def normalize_quick_steps(value):
+    """把快速处置步骤规范化为可逐项渲染的字符串列表。"""
+    if isinstance(value, str):
+        values = re.split(r"\r?\n", value)
+    elif isinstance(value, list):
+        values = value
+    else:
+        values = []
+    steps = []
+    for item in values:
+        if isinstance(item, dict):
+            action = first_non_empty_text(item, "step", "action", "description", "text")
+            expected = first_non_empty_text(item, "expected", "result", "verification")
+            risk = first_non_empty_text(item, "risk", "warning")
+            parts = [action]
+            if expected:
+                parts.append("确认结果：" + expected)
+            if risk:
+                parts.append("注意：" + risk)
+            text = "；".join(part for part in parts if part)
+        else:
+            text = str(item or "").strip()
+        text = re.sub(r"^\s*(?:\d+[\.\)、]|[-*])\s*", "", text)
+        if text:
+            steps.append(text)
+    return steps
+
+
+def normalize_code_changes(value):
+    """规范代码修改项，保留文件、原代码、建议代码和必须阅读的备注。"""
+    if not isinstance(value, list):
+        return []
+    changes = []
+    for item in value:
+        if not isinstance(item, dict):
+            continue
+        line = item.get("line")
+        try:
+            line = int(line) if line not in (None, "") else None
+        except (TypeError, ValueError):
+            line = None
+        change = {
+            "file": first_non_empty_text(item, "file", "file_path"),
+            "line": line,
+            "original_code": first_non_empty_text(item, "original_code", "before_code", "original"),
+            "suggested_code": first_non_empty_text(item, "suggested_code", "after_code", "suggested"),
+            "note": first_non_empty_text(item, "note", "comment", "reason"),
+        }
+        if change["file"] or change["original_code"] or change["suggested_code"]:
+            changes.append(change)
+    return changes
+
+
 def normalize_issue_items(value):
     """规范化并返回 normalize_issue_items 对应的业务数据，保持现有调用约定。"""
     if not isinstance(value, list):
@@ -726,6 +821,13 @@ def normalize_issue_items(value):
             or item.get("fix_command")
             or item.get("fix_commond")
         )
+        quick_solution, code_solution, solution = normalize_solution_pair(item)
+        quick_steps = normalize_quick_steps(item.get("quick_steps") or item.get("solution_steps"))
+        code_changes = normalize_code_changes(item.get("code_changes") or item.get("code_diffs"))
+        if not quick_solution and quick_steps:
+            quick_solution = "\n".join(
+                f"{index}. {step}" for index, step in enumerate(quick_steps, start=1)
+            )
         issues.append({
             "index": index,
             "title": str(item.get("title") or item.get("issue_title") or f"问题{index}").strip(),
@@ -733,7 +835,11 @@ def normalize_issue_items(value):
             "issue_category_label": ISSUE_CATEGORY_LABELS[issue_category],
             "summary": str(item.get("summary") or item.get("conclusion_summary") or "").strip(),
             "root_cause": str(item.get("root_cause") or "").strip(),
-            "solution": str(item.get("solution") or "").strip(),
+            "quick_solution": quick_solution,
+            "quick_steps": quick_steps,
+            "code_solution": code_solution,
+            "code_changes": code_changes,
+            "solution": solution,
             "confidence": clamp_confidence(item.get("confidence")),
             "evidence": [str(entry) for entry in evidence if str(entry).strip()],
             "query_commands": normalize_command_list(query_commands),
@@ -753,6 +859,10 @@ def parse_issue_conclusion(ai_text):
             "issue_category_label": ISSUE_CATEGORY_LABELS["unknown"],
             "conclusion_summary": "",
             "root_cause": "",
+            "quick_solution": "",
+            "quick_steps": [],
+            "code_solution": "",
+            "code_changes": [],
             "solution": "",
             "confidence": 0,
             "possible_causes": normalize_possible_causes(None),
@@ -768,6 +878,7 @@ def parse_issue_conclusion(ai_text):
     if issue_category not in ISSUE_CATEGORY_LABELS:
         issue_category = "unknown"
     confidence = clamp_confidence(payload.get("confidence"))
+    quick_solution, code_solution, solution = normalize_solution_pair(payload)
     evidence = payload.get("evidence") or []
     if isinstance(evidence, str):
         evidence = [evidence]
@@ -790,12 +901,16 @@ def parse_issue_conclusion(ai_text):
         or payload.get("fix_commond")
     )
     issues = normalize_issue_items(issue_items)
-    if not issues and any(payload.get(key) for key in ("conclusion_summary", "root_cause", "solution", "evidence")):
+    if not issues and any(payload.get(key) for key in ("conclusion_summary", "root_cause", "quick_solution", "code_solution", "solution", "evidence")):
         issues = normalize_issue_items([{
             "title": payload.get("conclusion_summary") or "综合问题",
             "issue_category": issue_category,
             "summary": payload.get("conclusion_summary"),
             "root_cause": payload.get("root_cause"),
+            "quick_solution": payload.get("quick_solution"),
+            "quick_steps": payload.get("quick_steps"),
+            "code_solution": payload.get("code_solution"),
+            "code_changes": payload.get("code_changes"),
             "solution": payload.get("solution"),
             "confidence": confidence,
             "evidence": evidence,
@@ -809,7 +924,11 @@ def parse_issue_conclusion(ai_text):
         "issue_category_label": ISSUE_CATEGORY_LABELS[issue_category],
         "conclusion_summary": str(payload.get("conclusion_summary") or "").strip(),
         "root_cause": str(payload.get("root_cause") or "").strip(),
-        "solution": str(payload.get("solution") or "").strip(),
+        "quick_solution": quick_solution,
+        "quick_steps": normalize_quick_steps(payload.get("quick_steps") or payload.get("solution_steps")),
+        "code_solution": code_solution,
+        "code_changes": normalize_code_changes(payload.get("code_changes") or payload.get("code_diffs")),
+        "solution": solution,
         "confidence": confidence,
         "possible_causes": normalize_possible_causes(payload.get("possible_causes")),
         "query_commands": normalize_command_list(top_level_query_commands),
@@ -859,12 +978,21 @@ def build_cached_analysis_payload(case, task_id=None, repo_path=None):
     evidence = safe_json_loads(case.evidence, [])
     cached_payload = extract_json_object(case.ai_analysis or "") or {}
     cached_issues = normalize_issue_items(cached_payload.get("issues"))
+    quick_solution, code_solution, solution = normalize_solution_pair(cached_payload)
+    if not solution:
+        solution = case.solution or ""
+    if not code_solution and case.solution:
+        code_solution = case.solution
     issue_conclusion = {
         "issue_category": case.issue_category,
         "issue_category_label": ISSUE_CATEGORY_LABELS.get(case.issue_category, ISSUE_CATEGORY_LABELS["unknown"]),
         "conclusion_summary": case.conclusion_summary or "",
         "root_cause": case.root_cause or "",
-        "solution": case.solution or "",
+        "quick_solution": quick_solution,
+        "quick_steps": normalize_quick_steps(cached_payload.get("quick_steps") or cached_payload.get("solution_steps")),
+        "code_solution": code_solution,
+        "code_changes": normalize_code_changes(cached_payload.get("code_changes") or cached_payload.get("code_diffs")),
+        "solution": solution,
         "confidence": float(case.confidence or 0),
         "possible_causes": normalize_possible_causes(cached_payload.get("possible_causes")),
         "query_commands": normalize_command_list(cached_payload.get("query_commands")),
@@ -3243,18 +3371,26 @@ def analyze_code_with_deepseek(
         "\u5982\u679c\u5224\u65ad\u53ef\u80fd\u662f\u914d\u7f6e/\u7f51\u7edc/\u6570\u636e/\u4f9d\u8d56/\u8d44\u6e90\u95ee\u9898\uff0c\u4e5f\u8981\u8bf4\u660e\u65e5\u5fd7\u4f9d\u636e\u4ee5\u53ca\u9700\u8981\u8865\u5145\u68c0\u67e5\u7684\u914d\u7f6e\u9879\u3001\u7f51\u7edc\u94fe\u8def\u3001\u6570\u636e\u6837\u672c\u6216\u5916\u90e8\u670d\u52a1\u3002\n"
         f"{image_error_instruction}"
         "必须把【全量错误清单】里的错误按语义分组为 issues 数组。每个独立问题输出为一个对象：问题1、问题2、问题3...；不要只给一个总括结论。\n"
-        "每个 issue 必须包含 title、summary、root_cause、solution、evidence、query_commands、fix_commands、code_locations。code_locations 里写明 file、line、reason；如果没有代码证据也必须说明 reason。\n"
+        "每个 issue 必须包含 title、summary、root_cause、quick_solution、quick_steps、code_solution、code_changes、solution、evidence、query_commands、fix_commands、code_locations。code_locations 里写明 file、line、reason；如果没有代码证据也必须说明 reason。\n"
+        "quick_solution 必须给出可立即执行的临时规避方案摘要；quick_steps 必须是 3 到 6 个按执行顺序排列的操作步骤，每步写清操作对象、具体动作和完成后的确认结果，例如登录哪个配置入口、检查哪个键或文件、修改成什么值、如何验证；禁止只写“检查配置”“联系研发”这类无法执行的话。确实没有安全快速方案时，quick_steps 只返回“暂无可用的快速解决方案”并说明原因。\n"
+        "code_solution 必须概述长期修复思路，说明修改哪个文件或组件、为什么这样改以及验证方式，不能只重复快速方案。\n"
+        "code_changes 是对象数组，每个元素必须包含 file、line、original_code、suggested_code、note。original_code 必须逐字取自本次提供的当前版本代码片段；suggested_code 必须是可按该文件语言直接对照的修改后代码，并加入简短注释解释关键原因；note 必须写明修改目的、兼容性影响和验证点。无法获得真实原文时不得编造，code_changes 返回空数组，并在 code_solution 中明确说明缺少哪个文件的源码证据。\n"
+        "solution 是兼容旧调用方的合并文本，必须依次包含“快速解决方案：”和“代码修改建议：”两部分。\n"
         "\u8bf7\u53ea\u8fd4\u56de JSON\uff0c\u4e0d\u8981\u8fd4\u56de Markdown\u3002JSON \u5b57\u6bb5\u5fc5\u987b\u5305\u542b\uff1a\n"
         "- issue_category: code_issue/data_issue/config_issue/network_issue/dependency_issue/resource_issue/unknown \u4e4b\u4e00\n"
         "- conclusion_summary: \u4e00\u53e5\u8bdd\u7ed3\u8bba\n"
         "- root_cause: \u6839\u56e0\u8bf4\u660e\uff0c\u5fc5\u987b\u8bf4\u660e\u7ed3\u8bba\u662f\u5426\u7531\u4ee3\u7801\u7247\u6bb5\u652f\u6491\n"
-        "- solution: \u5904\u7406\u5efa\u8bae\n"
+        "- quick_solution: \u53ef\u7acb\u5373\u6267\u884c\u7684\u4e34\u65f6\u89c4\u907f\u65b9\u6848\uff0c\u6ca1\u6709\u5b89\u5168\u65b9\u6848\u65f6\u660e\u786e\u8bf4\u660e\n"
+        "- quick_steps: \u6309\u6267\u884c\u987a\u5e8f\u7ed9\u51fa 3 \u5230 6 \u4e2a\u53ef\u64cd\u4f5c\u6b65\u9aa4\n"
+        "- code_solution: \u9488\u5bf9\u6839\u56e0\u7684\u4ee3\u7801\u4fee\u6539\u5efa\u8bae\n"
+        "- code_changes: \u6570\u7ec4\uff0c\u6bcf\u9879\u5305\u542b file\u3001line\u3001original_code\u3001suggested_code\u3001note\uff1boriginal_code \u5fc5\u987b\u6765\u81ea\u5f53\u524d\u4ee3\u7801\u8bc1\u636e\uff0c\u65e0\u6cd5\u786e\u8ba4\u65f6\u7559\u7a7a\uff0c\u4e0d\u5f97\u7f16\u9020\n"
+        "- solution: \u517c\u5bb9\u65e7\u8c03\u7528\u65b9\u7684\u5408\u5e76\u6587\u672c\uff0c\u5305\u542b\u4e0a\u8ff0\u4e24\u90e8\u5206\n"
         "- confidence: 0 \u5230 1 \u7684\u6570\u5b57\n"
         "- possible_causes: \u5bf9\u8c61\uff0c\u5fc5\u987b\u5305\u542b code_issue/config_issue/network_issue/data_issue/dependency_issue/resource_issue \u516d\u4e2a\u952e\uff1b\u6bcf\u4e2a\u952e\u7684\u503c\u90fd\u662f {possible: boolean, confidence: 0\u52301, reason: string}\n"
         "- query_commands: \u5b57\u7b26\u4e32\u6570\u7ec4\uff0c\u7ed9\u51fa\u53ef\u76f4\u63a5\u6267\u884c\u7684\u6392\u67e5/\u67e5\u8be2\u547d\u4ee4\uff0c\u6bd4\u5982 grep\u3001redis-cli\u3001mysql\u3001curl\u3001kubectl \u7b49\n"
         "- fix_commands: \u5b57\u7b26\u4e32\u6570\u7ec4\uff0c\u7ed9\u51fa\u53ef\u76f4\u63a5\u6267\u884c\u7684\u4fee\u590d/\u7f13\u89e3\u547d\u4ee4\uff0c\u5982\u679c\u4e0d\u5e94\u76f4\u63a5\u6267\u884c\u5219\u7ed9\u51fa\u5b89\u5168\u66ff\u4ee3\u65b9\u6848\n"
         "- evidence: \u5b57\u7b26\u4e32\u6570\u7ec4\uff0c\u5217\u51fa\u5224\u65ad\u4f9d\u636e\uff0c\u4f18\u5148\u5305\u542b\u65e5\u5fd7\u4e0a\u4e0b\u6587\u3001\u4ee3\u7801\u6587\u4ef6\u3001\u884c\u53f7\u3001\u4ee3\u7801\u7247\u6bb5\u8bf4\u660e\n\n"
-        "- issues: 数组，每个元素表示一个独立问题，字段包含 title、issue_category、summary、root_cause、solution、confidence、evidence、query_commands、fix_commands、code_locations\n\n"
+        "- issues: 数组，每个元素表示一个独立问题，字段包含 title、issue_category、summary、root_cause、quick_solution、quick_steps、code_solution、code_changes、solution、confidence、evidence、query_commands、fix_commands、code_locations\n\n"
         f"{log_context}\n\n"
         f"\u3010\u65e5\u5fd7\u521d\u6b65\u5206\u6790\u3011\n{log_analysis}"
         f"{image_context}\n\n"

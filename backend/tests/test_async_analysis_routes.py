@@ -963,6 +963,14 @@ java.lang.NullPointerException: null
         self.assertIn("code_issue", prompt)
         self.assertIn("query_commands", prompt)
         self.assertIn("fix_commands", prompt)
+        self.assertIn("quick_solution", prompt)
+        self.assertIn("quick_steps", prompt)
+        self.assertIn("code_solution", prompt)
+        self.assertIn("code_changes", prompt)
+        self.assertIn("original_code", prompt)
+        self.assertIn("suggested_code", prompt)
+        self.assertIn("quick_steps 必须是 3 到 6 个", prompt)
+        self.assertIn("original_code 必须逐字取自", prompt)
 
     def test_code_analysis_prompt_includes_common_component_reference_rule(self):
         routes, flask_stub, _, _, fake_openai = load_routes_module()
@@ -1668,7 +1676,21 @@ worker.sh:43: exit status 1
           "issue_category": "network_issue",
           "conclusion_summary": "Redis connection was reset.",
           "root_cause": "The broker closed the socket.",
-          "solution": "Check Redis timeout and keepalive.",
+          "quick_solution": "Raise the client timeout and retry the failed request once.",
+          "quick_steps": [
+            "1. 打开 Redis 客户端配置，确认 connect/read timeout。",
+            "2. 将读超时从 1 秒调整为 5 秒并保存配置。",
+            "3. 重新执行一次失败请求，确认连接不再被重置。"
+          ],
+          "code_solution": "Configure a bounded connect/read timeout and retry only transient resets.",
+          "code_changes": [{
+            "file": "src/redis/client.js",
+            "line": 18,
+            "original_code": "const readTimeoutMs = 1000;",
+            "suggested_code": "// Use a bounded timeout that exceeds the broker p99 latency.\\nconst readTimeoutMs = 5000;",
+            "note": "降低瞬时网络抖动导致的失败；只对连接重置执行有限次数重试。"
+          }],
+          "solution": "快速解决方案：Raise the client timeout and retry the failed request once.\\n\\n代码修改建议：Configure a bounded connect/read timeout and retry only transient resets.",
           "query_commands": ["redis-cli -h 127.0.0.1 -p 6379 ping"],
           "fix_commands": ["redis-cli CONFIG SET timeout 300"],
           "confidence": 0.82,
@@ -1694,6 +1716,26 @@ worker.sh:43: exit status 1
         self.assertEqual(conclusion["possible_causes"]["network_issue"]["confidence"], 0.9)
         self.assertEqual(conclusion["query_commands"][0], "redis-cli -h 127.0.0.1 -p 6379 ping")
         self.assertEqual(conclusion["fix_commands"][0], "redis-cli CONFIG SET timeout 300")
+        self.assertEqual(conclusion["quick_solution"], "Raise the client timeout and retry the failed request once.")
+        self.assertEqual(len(conclusion["quick_steps"]), 3)
+        self.assertEqual(conclusion["quick_steps"][1], "将读超时从 1 秒调整为 5 秒并保存配置。")
+        self.assertEqual(conclusion["code_solution"], "Configure a bounded connect/read timeout and retry only transient resets.")
+        self.assertEqual(conclusion["code_changes"][0]["file"], "src/redis/client.js")
+        self.assertEqual(conclusion["code_changes"][0]["line"], 18)
+        self.assertIn("p99", conclusion["code_changes"][0]["suggested_code"])
+        self.assertIn("readTimeoutMs = 5000", conclusion["code_changes"][0]["suggested_code"])
+        self.assertIn("有限次数重试", conclusion["code_changes"][0]["note"])
+
+    def test_parse_issue_conclusion_keeps_legacy_solution_as_code_fix(self):
+        routes, _, _, _, _ = load_routes_module()
+
+        conclusion = routes.parse_issue_conclusion(
+            '{"conclusion_summary":"调用失败","solution":"在调用客户端补充超时和重试。"}'
+        )
+
+        self.assertEqual(conclusion["quick_solution"], "")
+        self.assertEqual(conclusion["code_solution"], "在调用客户端补充超时和重试。")
+        self.assertIn("代码修改建议", conclusion["solution"])
 
     def test_parse_issue_conclusion_normalizes_command_lists(self):
         routes, _, _, _, _ = load_routes_module()
@@ -1725,7 +1767,9 @@ worker.sh:43: exit status 1
                   "issue_category": "dependency_issue",
                   "summary": "ASR could not download MinIO audio.",
                   "root_cause": "MinIO URL returned download failure.",
-                  "solution": "Check object existence and bucket permission.",
+                  "quick_solution": "Restore the missing audio object and confirm bucket permission.",
+                  "code_solution": "Validate object metadata before download and return a retryable error category.",
+                  "solution": "快速解决方案：Restore the missing audio object and confirm bucket permission.\\n\\n代码修改建议：Validate object metadata before download and return a retryable error category.",
                   "evidence": ["line 23 SeeTaskException", "line 88 Can not download file"],
                   "query_commands": "grep -n 'Can not download file' app.log",
                   "fix_commands": ["mc stat minio/zhuiyi-see/mock/audio.wav"],
@@ -1753,6 +1797,8 @@ worker.sh:43: exit status 1
         self.assertEqual(conclusion["issues"][0]["query_commands"], ["grep -n 'Can not download file' app.log"])
         self.assertEqual(conclusion["issues"][0]["fix_commands"], ["mc stat minio/zhuiyi-see/mock/audio.wav"])
         self.assertEqual(conclusion["issues"][0]["code_locations"][0]["file"], "BaseAsrTransferService.java")
+        self.assertIn("Restore the missing audio object", conclusion["issues"][0]["quick_solution"])
+        self.assertIn("Validate object metadata", conclusion["issues"][0]["code_solution"])
         self.assertEqual(conclusion["issues"][1]["issue_category"], "code_issue")
 
     def test_parse_issue_conclusion_accepts_issue_and_command_field_aliases(self):

@@ -236,8 +236,35 @@ class DefectGateScriptBehaviourTests(unittest.TestCase):
                         "conclusion_summary": "回调超时 <script>alert(1)</script>",
                         "confidence": 0.62,
                         "issue_count": 1,
-                        "issues": [{"title": "回调超时", "root_cause": "未设置超时", "confidence": 0.6}],
+                        "issues": [{
+                            "title": "回调超时",
+                            "root_cause": "未设置超时",
+                            "quick_solution": "将当前回调超时临时调整为 5 秒并重试失败请求。",
+                            "quick_steps": [
+                                "打开回调客户端配置，确认当前超时值为 1 秒。",
+                                "将超时临时调整为 5 秒并保存配置。",
+                                "重新发起一次失败请求，确认回调不再超时。",
+                            ],
+                            "code_solution": "在回调客户端统一设置 5 秒超时，并只对瞬时网络错误执行重试。",
+                            "code_changes": [{
+                                "file": "src/callback/client.ts",
+                                "line": 42,
+                                "original_code": "const timeoutMs = 1000;",
+                                "suggested_code": "// Keep the timeout above the callback p99 latency.\nconst timeoutMs = 5000;",
+                                "note": "只对连接超时执行有限次数重试，避免重复提交业务请求。",
+                            }],
+                            "confidence": 0.6,
+                            "code_locations": [{
+                                "file": "src/callback/client.ts",
+                                "line": 42,
+                                "reason": "调用第三方回调时没有设置超时时间。",
+                            }],
+                        }],
                     },
+                    "code_snippets": [
+                        {"file": "src/callback/client.ts", "line": 42, "numbered_snippet": "42: await callback.post(payload)"},
+                    ],
+                    "code_analysis": "MODEL_RAW_OUTPUT_MUST_NOT_BE_EXPORTED",
                 },
             }
         ],
@@ -1722,7 +1749,7 @@ console.log(JSON.stringify(checks));
             payload_path = Path(temp_dir) / "payload.json"
             payload_path.write_text(json.dumps(self.SAMPLE_PAYLOAD, ensure_ascii=False), encoding="utf-8")
             result = subprocess.run(
-                [NODE_BIN, "-e", driver, str(payload_path)],
+                [NODE_BIN, "--input-type=module", "-e", driver, str(payload_path)],
                 capture_output=True,
                 text=True,
                 encoding="utf-8",
@@ -1736,6 +1763,61 @@ console.log(JSON.stringify(checks));
         self.assertTrue(checks["hasConclusion"])
         self.assertTrue(checks["hasEvidence"])
         self.assertTrue(checks["hasTask"])
+
+    @unittest.skipIf(NODE_BIN is None, "需要 node 运行时才能执行技能脚本")
+    def test_report_prioritizes_actionable_findings_and_omits_raw_analysis(self):
+        """报告首页必须突出结论、修复和代码位置，不能导出模型原始输出。"""
+        report_url = (SKILL_DIR / "scripts" / "report.mjs").as_uri()
+        driver = """
+const { renderAnalysisHtml } = await import("__REPORT__");
+const fs = await import("node:fs/promises");
+const payload = JSON.parse(await fs.readFile(process.argv[1], "utf8"));
+payload.tasks[0].result.code_snippets.push({
+  file: "unrelated/pom.xml",
+  line: 2,
+  numbered_snippet: "2: UNRELATED_SNIPPET_MUST_NOT_BE_EXPORTED",
+});
+const html = renderAnalysisHtml(payload);
+const checks = {
+  hasCoreIssue: html.includes("核心问题"),
+  hasSolutionHeading: html.includes("解决办法"),
+  hasQuickSolution: html.includes("快速解决方案（立即规避）") && html.includes("临时调整为 5 秒"),
+  hasCodeSolution: html.includes("代码修改建议（长期修复）") && html.includes("统一设置 5 秒超时"),
+  hasQuickSteps: html.includes('<ol class="steps">') && html.includes("重新发起一次失败请求"),
+  hasCodeDiff: html.includes("修改前") && html.includes("建议修改后") && html.includes("const timeoutMs = 1000") && html.includes("const timeoutMs = 5000"),
+  hasCodeNote: html.includes("备注：") && html.includes("避免重复提交业务请求"),
+  hasCodeLocation: html.includes("代码文件位置") && html.includes("src/callback/client.ts"),
+  hasCodeSnippet: html.includes("关键代码片段") && html.includes("await callback.post(payload)"),
+  excludesUnrelatedSnippet: !html.includes("UNRELATED_SNIPPET_MUST_NOT_BE_EXPORTED"),
+  hidesRawOutput: !html.includes("MODEL_RAW_OUTPUT_MUST_NOT_BE_EXPORTED") && !html.includes("展开模型原始输出"),
+};
+console.log(JSON.stringify(checks));
+""".replace("__REPORT__", report_url)
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            payload_path = Path(temp_dir) / "payload.json"
+            payload_path.write_text(json.dumps(self.SAMPLE_PAYLOAD, ensure_ascii=False), encoding="utf-8")
+            result = subprocess.run(
+                [NODE_BIN, "--input-type=module", "-e", driver, str(payload_path)],
+                capture_output=True,
+                text=True,
+                encoding="utf-8",
+                cwd=str(BACKEND_DIR.parent),
+            )
+
+        self.assertEqual(result.returncode, 0, result.stderr)
+        checks = json.loads(result.stdout.strip().splitlines()[-1])
+        self.assertTrue(checks["hasCoreIssue"], "报告必须明确标出核心问题")
+        self.assertTrue(checks["hasSolutionHeading"], "报告必须明确给出解决办法")
+        self.assertTrue(checks["hasQuickSolution"], "报告必须单独给出快速解决方案")
+        self.assertTrue(checks["hasCodeSolution"], "报告必须单独给出代码修改建议")
+        self.assertTrue(checks["hasQuickSteps"], "快速解决方案必须展示具体操作步骤")
+        self.assertTrue(checks["hasCodeDiff"], "代码修改必须展示修改前和建议修改后代码")
+        self.assertTrue(checks["hasCodeNote"], "代码修改必须包含备注")
+        self.assertTrue(checks["hasCodeLocation"], "报告必须展示代码文件位置")
+        self.assertTrue(checks["hasCodeSnippet"], "报告必须展示关键代码片段")
+        self.assertTrue(checks["excludesUnrelatedSnippet"], "报告不能展示与代码位置无关的片段")
+        self.assertTrue(checks["hidesRawOutput"], "报告不能嵌入模型原始输出")
 
     @unittest.skipIf(NODE_BIN is None, "需要 node 运行时才能执行技能脚本")
     def test_self_check_detection_requires_conclusion_and_evidence(self):

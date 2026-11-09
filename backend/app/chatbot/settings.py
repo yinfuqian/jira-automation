@@ -22,10 +22,16 @@ CONFIG_SOURCE = "配置文件 backend/config/chatbot.json（镜像内置）+ .en
 DEFAULT_WS_URL = "wss://openws.work.weixin.qq.com"
 # 网关与 Celery worker 之间的结果通道。
 DEFAULT_REPLY_CHANNEL = "chatbot:reply"
+# 第一机器人的默认队列；知识机器人通过 profile 使用独立队列。
+DEFAULT_QUEUE = "chatbot"
+# 知识机器人（第二机器人）的 profile 名称。
+KNOWLEDGE_PROFILE = "knowledge"
 
 # 代码目录内的配置文件：本地为 backend/config/chatbot.json，容器内为 /app/config/chatbot.json。
 # 这是默认来源，随镜像发布，不依赖宿主机目录挂载。
 CODE_CONFIG_PATH = Path(__file__).resolve().parents[2] / "config" / "chatbot.json"
+# 知识机器人配置；仍然随镜像构建，不要求宿主机挂载。
+KNOWLEDGE_CONFIG_PATH = Path(__file__).resolve().parents[2] / "config" / "knowledge_bot.json"
 # 兼容旧部署方式：仓库根目录或容器内旧挂载点仍可作为后备来源。
 PROJECT_ROOT = Path(__file__).resolve().parents[3]
 DEFAULT_CONFIG_PATH = PROJECT_ROOT / "config" / "chatbot.json"
@@ -74,6 +80,53 @@ def _as_text(value, fallback=""):
     return text or str(fallback or "").strip()
 
 
+def _as_tuple(value):
+    """把逗号分隔字符串或数组统一成去重元组，保持原顺序。"""
+    if value is None:
+        return ()
+    items = value if isinstance(value, (list, tuple)) else str(value).split(",")
+    result = []
+    seen = set()
+    for item in items:
+        text = str(item or "").strip()
+        if not text or text in seen:
+            continue
+        seen.add(text)
+        result.append(text)
+    return tuple(result)
+
+
+def _profile_name(profile=None):
+    """返回当前机器人 profile；空值表示原有代码问答机器人。"""
+    return str(profile or os.getenv("CHATBOT_PROFILE") or "").strip().lower()
+
+
+def _profile_bot_credentials(profile):
+    """按 profile 读取各自独立的机器人凭据，绝不跨 profile 回退。"""
+    if profile == KNOWLEDGE_PROFILE:
+        # 兼容两种命名：优先使用用户确认的短名，同时接受带 BOT_ 的写法。
+        bot_id = (
+            os.getenv("CHATBOT_KNOWLEDGE_ID", "").strip()
+            or os.getenv("CHATBOT_KNOWLEDGE_BOT_ID", "").strip()
+        )
+        secret = (
+            os.getenv("CHATBOT_KNOWLEDGE_SECRET", "").strip()
+            or os.getenv("CHATBOT_KNOWLEDGE_BOT_SECRET", "").strip()
+        )
+        return bot_id, secret
+    return (
+        os.getenv("CHATBOT_BOT_ID", "").strip(),
+        os.getenv("CHATBOT_BOT_SECRET", "").strip(),
+    )
+
+
+def _profile_config_path(profile):
+    """返回 profile 对应的默认配置文件路径。"""
+    if profile == KNOWLEDGE_PROFILE:
+        return KNOWLEDGE_CONFIG_PATH
+    return CODE_CONFIG_PATH
+
+
 @dataclass(frozen=True)
 class ProjectDefinition:
     """一个可被提问的项目，内部包含若干个「模块 → 分支」组合。"""
@@ -109,6 +162,8 @@ class GatewaySettings:
     ws_url: str = DEFAULT_WS_URL
     heartbeat_seconds: float = 30.0
     reply_channel: str = DEFAULT_REPLY_CHANNEL
+    # 网关投递任务使用的 Celery 队列；每个机器人必须使用独立队列。
+    queue: str = DEFAULT_QUEUE
     # 收到 disconnected_event 说明新连接把自己踢掉，此时应退避重连，避免互踢抖动。
     kick_backoff_seconds: float = 60.0
     reconnect_min_seconds: float = 1.0
@@ -154,14 +209,81 @@ class AnswerSettings:
 
 
 @dataclass(frozen=True)
+class FaultAnalysisSettings:
+    """故障分析问答的开关与模块范围。"""
+
+    enabled: bool = True
+    max_modules: int = 4
+    include_knowledge: bool = True
+    knowledge_chunks: int = 2
+
+
+@dataclass(frozen=True)
+class InteractionSettings:
+    """多轮故障追问与普通问题优先查知识库的交互开关。"""
+
+    fault_dialog_enabled: bool = False
+    knowledge_first: bool = False
+    fault_dialog_max_turns: int = 4
+
+
+@dataclass(frozen=True)
+class ConfluenceSettings:
+    """Confluence 连接参数；敏感凭据只来自环境变量。"""
+
+    base_url: str = ""
+    username: str = ""
+    password: str = field(default="", repr=False)
+    token: str = field(default="", repr=False)
+    auth_mode: str = "bearer"
+    tls_verify: bool = True
+    request_timeout_seconds: int = 30
+
+    @property
+    def configured(self) -> bool:
+        """地址与所选鉴权模式的凭据齐备时才允许检索。"""
+        if not self.base_url:
+            return False
+        if str(self.auth_mode or "bearer").strip().lower() == "basic":
+            return bool(self.username and self.password)
+        return bool(self.token)
+
+
+@dataclass(frozen=True)
+class KnowledgeSettings:
+    """Confluence 在线检索与单结论回答参数。"""
+
+    enabled: bool = False
+    space_keys: tuple = ()
+    online_search_space_keys: tuple = ()
+    labels: tuple = ()
+    root_page_ids: tuple = ()
+    search_limit: int = 30
+    max_pages: int = 20
+    online_candidate_limit: int = 100
+    max_chunks: int = 6
+    max_total_chars: int = 50000
+    max_chunk_chars: int = 900
+    chunk_overlap_chars: int = 120
+    min_score: float = 0.15
+    embedding_model: str = ""
+    cache_ttl_seconds: int = 300
+
+
+@dataclass(frozen=True)
 class ChatbotSettings:
     """一次加载得到的完整机器人配置。"""
 
     source: str = CONFIG_SOURCE
+    profile: str = ""
     bot: BotSettings = field(default_factory=BotSettings)
     gateway: GatewaySettings = field(default_factory=GatewaySettings)
     repos: RepoSettings = field(default_factory=RepoSettings)
     answer: AnswerSettings = field(default_factory=AnswerSettings)
+    fault_analysis: FaultAnalysisSettings = field(default_factory=FaultAnalysisSettings)
+    interaction: InteractionSettings = field(default_factory=InteractionSettings)
+    confluence: ConfluenceSettings = field(default_factory=ConfluenceSettings)
+    knowledge: KnowledgeSettings = field(default_factory=KnowledgeSettings)
     projects: tuple = ()
     session_ttl_seconds: int = 14400
 
@@ -201,24 +323,28 @@ class ChatbotSettings:
         return "\n".join(lines)
 
 
-def _resolve_config_path(config_path=None) -> Path:
+def _resolve_config_path(config_path=None, profile="") -> Path:
     """按「显式参数 → 代码目录 → 仓库根目录 → 旧挂载点」顺序定位配置文件。"""
     if config_path:
         return Path(config_path).expanduser()
-    # 代码目录优先：镜像内置的 /app/config/chatbot.json 不依赖任何宿主机挂载。
-    for candidate in (CODE_CONFIG_PATH, DEFAULT_CONFIG_PATH, CONTAINER_CONFIG_PATH):
+    # 代码目录优先：镜像内置配置不依赖任何宿主机挂载。
+    preferred = _profile_config_path(profile)
+    candidates = [preferred]
+    if profile != KNOWLEDGE_PROFILE:
+        candidates.extend((DEFAULT_CONFIG_PATH, CONTAINER_CONFIG_PATH))
+    for candidate in candidates:
         if candidate.is_file():
             return candidate
-    return CODE_CONFIG_PATH
+    return preferred
 
 
-def _load_document(config_path=None):
+def _load_document(config_path=None, profile=""):
     """读取并解析 JSON 配置文件，返回 (配置字典, 文件路径)。"""
-    path = _resolve_config_path(config_path)
+    path = _resolve_config_path(config_path, profile=profile)
     if not path.is_file():
         raise ChatbotConfigError(
-            f"未找到机器人配置文件 {path}；请维护仓库内的 backend/config/chatbot.json，"
-            "该文件会随镜像构建到 /app/config/chatbot.json"
+            f"未找到机器人配置文件 {path}；请维护仓库内的 backend/config/chatbot.json 或 "
+            "backend/config/knowledge_bot.json，该文件会随镜像构建到 /app/config/"
         )
     try:
         # utf-8-sig 兼容 Windows 编辑器写入的 BOM。
@@ -288,28 +414,117 @@ def _parse_projects(document):
     return tuple(projects)
 
 
-def load_settings(config_path=None) -> ChatbotSettings:
-    """从 `backend/config/chatbot.json` 与环境变量构建机器人配置。
+def _parse_confluence(document, profile):
+    """解析 Confluence 连接参数；凭据只从环境变量读取。"""
+    section = _section(document, "confluence")
+    base_url = (
+        os.getenv("CONFLUENCE_URL", "").strip()
+        or os.getenv("CONFLUENCE_BASE_URL", "").strip()
+        or _as_text(section.get("base_url"))
+    )
+    auth_mode = (
+        os.getenv("CONFLUENCE_AUTH_MODE", "").strip()
+        or _as_text(section.get("auth_mode"), "bearer")
+        or "bearer"
+    )
+    return ConfluenceSettings(
+        base_url=base_url,
+        username=os.getenv("CONFLUENCE_USERNAME", "").strip()
+        or _as_text(section.get("username")),
+        password=os.getenv("CONFLUENCE_PASSWORD", "").strip(),
+        token=os.getenv("CONFLUENCE_TOKEN", "").strip()
+        or os.getenv("CONFLUENCE_API_TOKEN", "").strip(),
+        auth_mode=auth_mode,
+        tls_verify=_as_bool(os.getenv("CONFLUENCE_TLS_VERIFY"), _as_bool(section.get("tls_verify"), True)),
+        request_timeout_seconds=_as_int(
+            os.getenv("CONFLUENCE_TIMEOUT_SECONDS"),
+            _as_int(section.get("request_timeout_seconds"), 30),
+        ),
+    )
 
+
+def _parse_knowledge(document):
+    """解析 Confluence 在线检索参数；简单值支持环境变量覆盖。"""
+    section = _section(document, "knowledge")
+    return KnowledgeSettings(
+        enabled=_as_bool(os.getenv("KNOWLEDGE_ENABLED"), _as_bool(section.get("enabled"), False)),
+        space_keys=_as_tuple(os.getenv("CONFLUENCE_SPACE_KEYS") or section.get("space_keys")),
+        online_search_space_keys=_as_tuple(
+            os.getenv("CONFLUENCE_ONLINE_SPACE_KEYS") or section.get("online_search_space_keys")
+        ),
+        labels=_as_tuple(os.getenv("CONFLUENCE_LABELS") or section.get("labels")),
+        root_page_ids=_as_tuple(os.getenv("CONFLUENCE_ROOT_PAGE_IDS") or section.get("root_page_ids")),
+        search_limit=_as_int(section.get("search_limit"), 30),
+        max_pages=_as_int(section.get("max_pages"), 20),
+        online_candidate_limit=_as_int(section.get("online_candidate_limit"), 100),
+        max_chunks=_as_int(os.getenv("KNOWLEDGE_MAX_CHUNKS"), _as_int(section.get("max_chunks"), 6)),
+        max_total_chars=_as_int(section.get("max_total_chars"), 50000),
+        max_chunk_chars=_as_int(section.get("max_chunk_chars"), 900),
+        chunk_overlap_chars=_as_int(section.get("chunk_overlap_chars"), 120, minimum=0),
+        min_score=_as_float(os.getenv("KNOWLEDGE_MIN_SCORE"), _as_float(section.get("min_score"), 0.15)),
+        embedding_model=_as_text(section.get("embedding_model")),
+        cache_ttl_seconds=_as_int(section.get("cache_ttl_seconds"), 300, minimum=0),
+    )
+
+
+def _parse_interaction(document):
+    """解析多轮故障追问参数。"""
+    section = _section(document, "interaction")
+    return InteractionSettings(
+        fault_dialog_enabled=_as_bool(section.get("fault_dialog_enabled"), False),
+        knowledge_first=_as_bool(section.get("knowledge_first"), False),
+        fault_dialog_max_turns=_as_int(section.get("fault_dialog_max_turns"), 4),
+    )
+
+
+def _parse_fault_analysis(document):
+    """解析故障分析参数。"""
+    section = _section(document, "fault_analysis")
+    return FaultAnalysisSettings(
+        enabled=_as_bool(section.get("enabled"), True),
+        max_modules=_as_int(section.get("max_modules"), 4),
+        include_knowledge=_as_bool(section.get("include_knowledge"), True),
+        knowledge_chunks=_as_int(section.get("knowledge_chunks"), 2),
+    )
+
+
+def load_settings(config_path=None, profile=None) -> ChatbotSettings:
+    """从配置文件与环境变量构建机器人配置。
+
+    `profile` 为空时保持原有代码问答机器人的全部行为；传入 `knowledge` 时
+    只读取知识机器人自己的凭据、配置、队列和 Redis 命名空间。
     `config_path` 仅供测试或维护脚本显式指定文件，正常业务调用不传参。
     """
-    document, path = _load_document(config_path)
+    profile = _profile_name(profile)
+    document, path = _load_document(config_path, profile=profile)
     gateway = _section(document, "gateway")
     repos = _section(document, "repos")
     answer = _section(document, "answer")
+    bot_id, bot_secret = _profile_bot_credentials(profile)
+    default_queue = "chatbot-knowledge" if profile == KNOWLEDGE_PROFILE else DEFAULT_QUEUE
+    default_channel = (
+        "chatbot:knowledge:reply" if profile == KNOWLEDGE_PROFILE else DEFAULT_REPLY_CHANNEL
+    )
+    queue = _as_text(gateway.get("queue"), default_queue) or default_queue
+    if profile == KNOWLEDGE_PROFILE:
+        queue = os.getenv("CHATBOT_KNOWLEDGE_QUEUE", "").strip() or queue
+    else:
+        queue = os.getenv("CHATBOT_QUEUE", "").strip() or queue
 
     return ChatbotSettings(
-        source=f"{CONFIG_SOURCE}（{path}）",
+        source=f"{CONFIG_SOURCE}（{path}）" if not profile else f"知识机器人配置（{path}）",
+        profile=profile,
         bot=BotSettings(
             # 凭证只允许来自环境变量，避免误写入可提交的配置文件。
-            bot_id=os.getenv("CHATBOT_BOT_ID", "").strip(),
-            secret=os.getenv("CHATBOT_BOT_SECRET", "").strip(),
+            bot_id=bot_id,
+            secret=bot_secret,
         ),
         gateway=GatewaySettings(
             ws_url=_as_text(gateway.get("ws_url"), DEFAULT_WS_URL) or DEFAULT_WS_URL,
             heartbeat_seconds=_as_float(gateway.get("heartbeat_seconds"), 30.0, minimum=5.0),
-            reply_channel=_as_text(gateway.get("reply_channel"), DEFAULT_REPLY_CHANNEL)
-            or DEFAULT_REPLY_CHANNEL,
+            reply_channel=_as_text(gateway.get("reply_channel"), default_channel)
+            or default_channel,
+            queue=queue,
             kick_backoff_seconds=_as_float(gateway.get("kick_backoff_seconds"), 60.0),
             reconnect_min_seconds=_as_float(
                 gateway.get("reconnect_min_seconds"), 1.0, minimum=0.5
@@ -347,6 +562,10 @@ def load_settings(config_path=None) -> ChatbotSettings:
             reasoning_effort=_as_text(answer.get("reasoning_effort"), "medium") or "medium",
             sandbox=_as_text(answer.get("sandbox"), "danger-full-access") or "danger-full-access",
         ),
+        fault_analysis=_parse_fault_analysis(document),
+        interaction=_parse_interaction(document),
+        confluence=_parse_confluence(document, profile),
+        knowledge=_parse_knowledge(document),
         projects=_parse_projects(document),
         session_ttl_seconds=_as_int(document.get("session_ttl_seconds"), 14400),
     )
