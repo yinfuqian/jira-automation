@@ -44,6 +44,8 @@ metadata:
 
 `comment` 命令会返回 `commentId`，写完后必须记下；`comment-append` 会读取原评论并在末尾追加，不会覆盖已有内容。不要用 `comment-update` 手工拼接整段正文，避免漏掉原内容。
 
+脚本已内置硬约束：同一缺陷单在 12 小时内第二次执行 `comment` 时，会自动改为追加到上一条评论，不再新增第二条。标记同时写入 `~/.jira-gate-bug/.jira-preflight-comments.json`（可用 `JIRA_GATE_STATE_DIR` 覆盖）和评论正文的 `[TM-GATE-PREFLIGHT]` 尾标，因此换任务目录或换机器也能识别上一条预检评论。只有显式传 `--force-new` 才会强制新建。正常情况下不要使用 `--force-new`。
+
 ### 0. 运行环境适配（先读这一节）
 
 本技能可能在两种环境运行，**取数通道不同，判定标准完全相同**：

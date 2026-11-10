@@ -2,15 +2,15 @@
 set -euo pipefail
 
 # 统一启动入口。
-# dev（默认）使用 docker-compose-dev.yaml + .env，服务名带 -dev 后缀；
+# dev（默认）使用 docker-compose-dev.yaml + .env；
 # prod 使用 docker-compose-prod.yaml + .env.production，服务名不带后缀。
-# 也可以显式传入服务名，例如：bash start.sh api-dev
+# 也可以显式传入服务名，例如：bash start.sh api
 DEPLOY_ENV="${DEPLOY_ENV:-dev}"
 case "${DEPLOY_ENV}" in
   dev)
     DEFAULT_COMPOSE_FILE="docker-compose-dev.yaml"
     DEFAULT_ENV_FILE=".env"
-    SUFFIX="-dev"
+    SUFFIX=""
     ;;
   prod|production)
     DEPLOY_ENV="prod"
@@ -80,12 +80,22 @@ resolve_services() {
     SERVICES+=("${name}${SUFFIX}")
   done
 
-  local bot_id="${CHATBOT_BOT_ID:-$(read_env_value CHATBOT_BOT_ID)}"
-  local bot_secret="${CHATBOT_BOT_SECRET:-$(read_env_value CHATBOT_BOT_SECRET)}"
-  if [ -n "${bot_id}" ] && [ -n "${bot_secret}" ]; then
-    SERVICES+=("worker-chatbot${SUFFIX}" "chatbot-gateway${SUFFIX}")
-  else
-    echo "提示：未配置 CHATBOT_BOT_ID/CHATBOT_BOT_SECRET，跳过机器人网关与 worker-chatbot。"
+  if [ "${DEPLOY_ENV}" = "dev" ]; then
+    local bot_id="${CHATBOT_BOT_ID:-$(read_env_value CHATBOT_BOT_ID)}"
+    local bot_secret="${CHATBOT_BOT_SECRET:-$(read_env_value CHATBOT_BOT_SECRET)}"
+    if [ -n "${bot_id}" ] && [ -n "${bot_secret}" ]; then
+      SERVICES+=("worker-chatbot${SUFFIX}" "chatbot-gateway${SUFFIX}")
+    else
+      echo "提示：未配置 CHATBOT_BOT_ID/CHATBOT_BOT_SECRET，跳过机器人网关与 worker-chatbot。"
+    fi
+
+    local knowledge_id="${CHATBOT_KNOWLEDGE_ID:-$(read_env_value CHATBOT_KNOWLEDGE_ID)}"
+    local knowledge_secret="${CHATBOT_KNOWLEDGE_SECRET:-$(read_env_value CHATBOT_KNOWLEDGE_SECRET)}"
+    if [ -n "${knowledge_id}" ] && [ -n "${knowledge_secret}" ]; then
+      SERVICES+=("worker-chatbot-knowledge" "chatbot-gateway-knowledge")
+    else
+      echo "提示：未配置 CHATBOT_KNOWLEDGE_ID/CHATBOT_KNOWLEDGE_SECRET，跳过知识机器人网关与 worker。"
+    fi
   fi
 
 }

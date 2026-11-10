@@ -68,12 +68,55 @@ def strip_mentions(text):
     return _MENTION_PREFIX.sub("", raw).strip()
 
 
+def _mixed_items(payload):
+    """返回图文混排消息中的元素列表，兼容 msg_item/items 两种历史字段名。"""
+    mixed = payload.get("mixed") if isinstance(payload, dict) else {}
+    if not isinstance(mixed, dict):
+        return []
+    value = mixed.get("msg_item") or mixed.get("items") or []
+    return [item for item in value if isinstance(item, dict)]
+
+
 def extract_text(body):
-    """从文本消息体里提取并清理提问内容，非文本消息返回空串。"""
+    """提取文本或图文混排中的文字；纯图片消息返回空串。"""
     payload = body if isinstance(body, dict) else {}
-    if str(payload.get("msgtype") or "") != "text":
-        return ""
-    return strip_mentions((payload.get("text") or {}).get("content"))
+    msgtype = str(payload.get("msgtype") or "")
+    if msgtype == "text":
+        return strip_mentions((payload.get("text") or {}).get("content"))
+    if msgtype == "mixed":
+        chunks = []
+        for item in _mixed_items(payload):
+            if str(item.get("msgtype") or "") != "text":
+                continue
+            content = strip_mentions((item.get("text") or {}).get("content"))
+            if content:
+                chunks.append(content)
+        return "\n".join(chunks)
+    return ""
+
+
+def extract_images(body):
+    """提取图片消息和图文混排中的图片资源（url + 一次性 aeskey）。"""
+    payload = body if isinstance(body, dict) else {}
+    msgtype = str(payload.get("msgtype") or "")
+    candidates = []
+    if msgtype == "image":
+        candidates.append(payload.get("image"))
+    elif msgtype == "mixed":
+        candidates.extend(
+            item.get("image")
+            for item in _mixed_items(payload)
+            if str(item.get("msgtype") or "") == "image"
+        )
+    resources = []
+    for value in candidates:
+        if not isinstance(value, dict):
+            continue
+        url = str(value.get("url") or "").strip()
+        aeskey = str(value.get("aeskey") or "").strip()
+        if url:
+            resources.append({"url": url, "aeskey": aeskey})
+    return resources
 
 
 def split_utf8(text, limit_bytes=MAX_MARKDOWN_BYTES):

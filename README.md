@@ -20,12 +20,14 @@
 | 服务 | 职责 | 默认端口 |
 | --- | --- | --- |
 | `frontend` | Nginx 静态页面和 `/api` 反向代理 | `8080` |
-| `api-dev` | Flask API、认证、上传、Git 和分析任务提交（开发环境） | `6000` |
-| `worker-analysis-dev` | Celery 日志分析、图片识别与 GitLab 维护任务（开发环境） | 无宿主机端口 |
-| `worker-skill-dev` | Celery 技能（Codex Agent）执行（开发环境） | 无宿主机端口 |
-| `worker-chatbot-dev` | Celery 企业微信代码问答任务执行（开发环境） | 无宿主机端口 |
-| `chatbot-gateway-dev` | 企业微信智能机器人长连接网关，必须单实例（开发环境） | 无宿主机端口 |
-| `beat-dev` | 开发环境定时任务调度：每分钟清理排队过期技能任务，并按配置周期同步 GitLab 产品与模块 | 无宿主机端口 |
+| `api` | Flask API、认证、上传、Git 和分析任务提交 | `6000` |
+| `worker-analysis` | Celery 日志分析、图片识别与 GitLab 维护任务 | 无宿主机端口 |
+| `worker-skill` | Celery 技能（Codex Agent）执行 | 无宿主机端口 |
+| `worker-chatbot` | Celery 企业微信代码问答任务执行（仅 dev） | 无宿主机端口 |
+| `chatbot-gateway` | 企业微信智能机器人长连接网关，必须单实例（仅 dev） | 无宿主机端口 |
+| `worker-chatbot-knowledge` | Celery 知识/故障机器人任务执行（仅 dev） | 无宿主机端口 |
+| `chatbot-gateway-knowledge` | 知识/故障机器人长连接网关，必须单实例（仅 dev） | 无宿主机端口 |
+| `beat` | 定时任务调度：清理排队过期技能任务，并按周期同步 GitLab 产品与模块 | 无宿主机端口 |
 | `migrate` | 创建数据库并执行 `flask db upgrade` | 一次性容器 |
 | `mysql` | 业务数据、知识库和用户操作日志 | `3306` |
 | `redis` | 登录会话、限流状态、Celery Broker 和结果存储 | `6379` |
@@ -34,7 +36,7 @@
 
 环境要求：Docker Desktop 或 Docker Engine，且支持 Docker Compose v2。
 
-当前 dev 与 master 分别使用 `docker-compose-dev.yaml` 和 `docker-compose-prod.yaml`。两套配置使用不同的服务名和数据目录；MySQL、Redis 均使用外部地址：
+当前 dev 与 prod 分别使用 `docker-compose-dev.yaml` 和 `docker-compose-prod.yaml`。两套配置使用相同的基础服务名；dev 额外包含两个企业微信机器人，prod 只包含 API、分析/技能 Worker、beat 与迁移服务。MySQL、Redis 均使用外部地址：
 
 ```powershell
 Copy-Item .env.example .env
@@ -57,19 +59,19 @@ DEPLOY_ENV=prod bash stop.sh       # 停止生产
 DEPLOY_ENV=prod bash restart.sh    # 强制重建生产，重新读取 .env.production
 ```
 
-`restart.sh` 使用 `docker compose up -d --force-recreate`，修改 `.env` / `.env.production` 后会立即生效；`docker compose restart` 不会重新读取环境文件。默认重建 `api`、`worker-analysis`、`worker-skill` 和 `beat`，配置了机器人凭证时追加 `worker-chatbot`、`chatbot-gateway`。也可以只操作指定服务：
+`restart.sh` 使用 `docker compose up -d --force-recreate`，修改 `.env` / `.env.production` 后会立即生效；`docker compose restart` 不会重新读取环境文件。默认重建 `api`、`worker-analysis`、`worker-skill` 和 `beat`，dev 配置了机器人凭证时追加对应的 worker 与 gateway。也可以只操作指定服务：
 
 ```bash
-bash restart.sh api-dev
+bash restart.sh api
 bash restart.sh api worker-skill
 DEPLOY_ENV=prod bash stop.sh worker-analysis
 ```
 
 `stop.sh --down` 会删除当前环境的容器与网络，但不会删除数据卷、外部 MySQL 和 Redis。兼容入口 `restart-dev.sh`、`restart-master.sh` 仍然可用，分别等价于 `DEPLOY_ENV=dev bash restart.sh` 和 `DEPLOY_ENV=prod bash restart.sh`。如确需临时覆盖配置文件，可使用 `COMPOSE_FILE`、`ENV_FILE` 环境变量。
 
-企业微信机器人是可选能力：配置 `CHATBOT_BOT_ID` / `CHATBOT_BOT_SECRET` 后脚本会自动带上 `worker-chatbot` 与 `chatbot-gateway`。
+企业微信机器人只在 dev Compose 中定义。配置 `CHATBOT_BOT_ID` / `CHATBOT_BOT_SECRET` 后脚本会自动带上 `worker-chatbot` 与 `chatbot-gateway`；配置 `CHATBOT_KNOWLEDGE_ID` / `CHATBOT_KNOWLEDGE_SECRET` 后追加知识机器人的 worker 与 gateway。生产 Compose 不定义这些服务。
 
-GitLab 产品与模块会在 `worker-analysis-dev` 启动时自动同步一次，beat-dev 随后按 `GITLAB_SYNC_INTERVAL_HOURS` 周期同步，默认 12 小时。`POST /git/sync-projects` 继续作为 Windows 客户端的手动同步入口。
+GitLab 产品与模块会在 `worker-analysis` 启动时自动同步一次，`beat` 随后按 `GITLAB_SYNC_INTERVAL_HOURS` 周期同步，默认 12 小时。`POST /git/sync-projects` 继续作为 Windows 客户端的手动同步入口。
 
 API 只需按机器容量调整 `.env` 中的 `WEB_CONCURRENCY` 和 `WEB_THREADS`，默认 `4 x 8`。
 Gunicorn 使用 `gthread` 和 300 秒超时的固定运行参数，不再通过环境变量维护。
@@ -813,24 +815,26 @@ node ..\skills\jira-gate-bug\scripts\analysis-cli.mjs render --input <结果JSON
 - `backend/config/chatbot.json` 已内置到镜像，无需挂载宿主机目录；修改后必须重新构建后端镜像并重启网关与 Worker，进程不会热加载。
 - 容器内核通常不允许非特权 user namespace，`codex exec --sandbox read-only` 会因 `bwrap: No permissions to create a new namespace` 在检索前失败；因此 `answer.sandbox` 必须保持 `danger-full-access`，隔离由 Docker 容器、临时 `git worktree` 和只读提示词共同保证。
 
-### 部署
+### 开发环境部署
 
 ```bash
-# 1. 在 .env 中只填写机器人凭证
+# 1. 在 dev 的 .env 中填写机器人凭证
 CHATBOT_BOT_ID=你的BotID
 CHATBOT_BOT_SECRET=你的Secret
 
-# 2. 启动 API、专用 worker 与网关（三者都要读取同一份映射文件）
-docker compose --env-file .env.production -f docker-compose-prod.yaml up -d api worker-chatbot chatbot-gateway
+# 知识/故障机器人使用独立凭据
+CHATBOT_KNOWLEDGE_ID=你的知识机器人BotID
+CHATBOT_KNOWLEDGE_SECRET=你的知识机器人Secret
+
+# 2. dev Compose 已包含全部服务，按凭证自动选择需要启动的机器人
+bash start.sh
 ```
 
-生产 Compose 的 `worker-chatbot`、`chatbot-gateway` 通过 `${ENV_FILE:-.env}` 读取环境文件。
-使用 `--env-file .env.production` 启动时，请确保该文件里有 `ENV_FILE=.env.production`（部署示例已包含），
-否则容器内的机器人凭证和 GitLab 凭据会读不到。`bash start.sh` 在凭证齐全时才会追加这两个服务。
-首次部署或新增 `chatbot_questions` 表时，先执行一次
-`docker compose --env-file .env.production -f docker-compose-prod.yaml run --rm migrate`。
+dev Compose 的机器人服务通过 `${ENV_FILE:-.env}` 读取环境文件。生产 Compose 不定义
+`worker-chatbot`、`chatbot-gateway` 及其知识机器人变体，因此生产部署包不携带机器人凭证，
+也不会启动机器人长连接。
 
-项目与分支映射维护在 `backend/config/chatbot.json`：`projects` 数组的顺序就是群聊菜单里的序号，每个项目的 `modules` 写成 `模块名: 分支`，不使用的模块直接不写。该文件随镜像构建到 `/app/config/chatbot.json`，修改后需要重新构建后端镜像，再重启 `worker-chatbot` 与 `chatbot-gateway`。
+项目与分支映射维护在 `backend/config/chatbot.json`：`projects` 数组的顺序就是群聊菜单里的序号，每个项目的 `modules` 写成 `模块名: 分支`，不使用的模块直接不写。该文件随镜像构建到 `/app/config/chatbot.json`，修改后需要重新构建后端镜像，再重启 dev 中对应的 worker 与 gateway。
 
 ### 只读接口
 

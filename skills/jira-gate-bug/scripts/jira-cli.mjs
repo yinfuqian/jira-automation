@@ -23,7 +23,8 @@
  * 令牌来源：--token 参数、JIRA_TOKEN 环境变量，或 jira.mjs 默认查找的令牌文件。
  */
 
-import { existsSync, readFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { homedir } from "node:os";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -31,6 +32,118 @@ import * as jira from "./jira.mjs";
 
 
 const TOKEN_FILE_NAMES = [".jira-token", ".jira-token.txt", "jira-token.txt"];
+const PREFLIGHT_FILE = ".jira-preflight-comments.json";
+const PREFLIGHT_MARKER = "[TM-GATE-PREFLIGHT]";
+const PREFLIGHT_TTL_MS = 12 * 60 * 60 * 1000;
+
+
+function issueKey(value) {
+  const match = String(value || "").match(/([A-Z][A-Z0-9_]+-\d+)/i);
+  return match ? match[1].toUpperCase() : String(value || "").trim().toUpperCase();
+}
+
+
+function stablePreflightDir() {
+  const configured = String(process.env.JIRA_GATE_STATE_DIR || "").trim();
+  if (configured) return configured;
+  try {
+    return resolve(homedir(), ".jira-gate-bug");
+  } catch (error) {
+    return process.cwd();
+  }
+}
+
+
+function preflightPaths() {
+  const candidates = [
+    resolve(stablePreflightDir(), PREFLIGHT_FILE),
+    resolve(process.cwd(), PREFLIGHT_FILE),
+  ];
+  return [...new Set(candidates)];
+}
+
+
+function readPreflightFile(file) {
+  if (!existsSync(file)) return {};
+  try {
+    const parsed = JSON.parse(readFileSync(file, "utf8"));
+    return parsed && typeof parsed === "object" ? parsed : {};
+  } catch (error) {
+    return {};
+  }
+}
+
+
+function readPreflight() {
+  const merged = {};
+  for (const file of preflightPaths()) {
+    const parsed = readPreflightFile(file);
+    for (const [key, value] of Object.entries(parsed)) {
+      if (!merged[key]) merged[key] = value;
+    }
+  }
+  return merged;
+}
+
+
+function writePreflight(issue, commentId) {
+  if (!commentId) return;
+  const markers = readPreflight();
+  const key = issueKey(issue);
+  markers[key] = {
+    commentId: String(commentId),
+    at: new Date().toISOString(),
+  };
+  for (const file of preflightPaths()) {
+    try {
+      mkdirSync(dirname(file), { recursive: true });
+      writeFileSync(file, JSON.stringify(markers, null, 2));
+    } catch (error) {
+      // 标记文件写失败不应影响评论本身
+    }
+  }
+}
+
+
+function withinPreflightTtl(value) {
+  const at = Date.parse(value || "");
+  return !Number.isNaN(at) && Date.now() - at <= PREFLIGHT_TTL_MS;
+}
+
+
+async function reusablePreflight(issue, options = {}) {
+  const key = issueKey(issue);
+  const marker = readPreflight()[key];
+  if (marker && marker.commentId && withinPreflightTtl(marker.at)) return marker;
+
+  // 跨任务目录/跨机器的兜底：Jira 评论里带固定标记时，不再新增第二条。
+  try {
+    const data = await jira.getIssue(key, options);
+    const comments = (data && data.comments) || [];
+    for (let index = comments.length - 1; index >= 0; index -= 1) {
+      const comment = comments[index] || {};
+      if (!String(comment.body || "").includes(PREFLIGHT_MARKER)) continue;
+      if (!withinPreflightTtl(comment.created)) break;
+      return {
+        commentId: String(comment.id || ""),
+        at: comment.created || new Date().toISOString(),
+        foundInJira: true,
+      };
+    }
+  } catch (error) {
+    // 查询失败时退回新增评论，不能因此阻断门禁。
+  }
+  return null;
+}
+
+
+function withPreflightMarker(body) {
+  const text = String(body || "").trim();
+  if (!text || text.includes(PREFLIGHT_MARKER)) return text;
+  const nl = String.fromCharCode(10);
+  return text + nl + nl + "----" + nl + "{color:#7a7a7a}" + PREFLIGHT_MARKER +
+    " 本条为门禁预检记录，后续检查结果会自动追加到此评论。{color}";
+}
 
 
 const USAGE = `用法：
@@ -206,7 +319,21 @@ async function main() {
     case "comment": {
       requireArgs(positional, 1, "comment <KEY|URL> --file <文件>");
       const body = readBody(options);
-      const result = await jira.addComment(positional[0], body, callOptions);
+      const existing = options["force-new"] ? null : await reusablePreflight(positional[0], callOptions);
+      if (existing) {
+        // 硬约束：同一任务同一缺陷单只允许一条预检评论，第二次调用自动追加到原评论。
+        const result = await jira.appendComment(positional[0], existing.commentId, body, callOptions);
+        writePreflight(positional[0], existing.commentId);
+        console.log(JSON.stringify({
+          ok: true,
+          commentId: existing.commentId,
+          appended: true,
+          reason: "同一任务只允许一条预检评论，已自动追加到原评论",
+        }, null, 2));
+        return;
+      }
+      const result = await jira.addComment(positional[0], withPreflightMarker(body), callOptions);
+      writePreflight(positional[0], result && result.id);
       console.log(JSON.stringify({ ok: true, commentId: result && result.id }, null, 2));
       return;
     }
@@ -221,6 +348,7 @@ async function main() {
       requireArgs(positional, 2, "comment-append <KEY|URL> <评论ID> --file <文件>");
       const body = readBody(options);
       const result = await jira.appendComment(positional[0], positional[1], body, callOptions);
+      writePreflight(positional[0], positional[1]);
       console.log(JSON.stringify({ ok: true, commentId: result && result.id }, null, 2));
       return;
     }

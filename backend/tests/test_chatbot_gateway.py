@@ -415,6 +415,40 @@ class ReposTest(unittest.TestCase):
             "https://git.example.com/g/a.git",
         )
 
+    def test_fetch_url_prefers_gitlab_private_token(self):
+        """有效私有令牌必须优先于可能失效的 HTTP Basic 账号密码。"""
+        settings = build_settings()
+        settings = dataclasses.replace(
+            settings,
+            repos=dataclasses.replace(
+                settings.repos,
+                username="old-user",
+                password="old-password",
+                private_token="valid-token",
+            ),
+        )
+        self.assertEqual(
+            repos.resolve_fetch_url(settings, "https://git.example.com/g/a.git"),
+            "https://gitlab-ci-token:valid-token@git.example.com/g/a.git",
+        )
+
+    def test_fetch_url_falls_back_to_username_password(self):
+        """未配置令牌时继续支持普通账号密码仓库。"""
+        settings = build_settings()
+        settings = dataclasses.replace(
+            settings,
+            repos=dataclasses.replace(
+                settings.repos,
+                username="user",
+                password="password",
+                private_token="",
+            ),
+        )
+        self.assertEqual(
+            repos.resolve_fetch_url(settings, "https://git.example.com/g/a.git"),
+            "https://user:password@git.example.com/g/a.git",
+        )
+
     def test_resolve_repo_url_prefers_explicit_mapping(self):
         """显式映射优先于 GitLab 搜索。"""
         settings = build_settings()

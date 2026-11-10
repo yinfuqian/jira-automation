@@ -95,12 +95,13 @@ def build_authenticated_url(repo_url, username, password):
 
 
 def resolve_fetch_url(settings, repo_url):
-    """生成 git 用的带凭据地址：有账号密码用 Basic，否则用 oauth2 + 私有令牌。"""
-    # 只有确实有密码时才注入用户名，否则 git 会等待交互式输入密码直到超时。
+    """生成 git 用的带凭据地址：GitLab 私有令牌优先，账号密码兜底。"""
+    # 企业 GitLab 的 HTTP Basic 密码通道可能关闭，但私有令牌仍具备 read_repository
+    # 权限；优先使用令牌避免有效配置被失效密码遮蔽。
+    if settings.repos.private_token:
+        return build_authenticated_url(repo_url, "gitlab-ci-token", settings.repos.private_token)
     if settings.repos.username and settings.repos.password:
         return build_authenticated_url(repo_url, settings.repos.username, settings.repos.password)
-    if settings.repos.private_token:
-        return build_authenticated_url(repo_url, "oauth2", settings.repos.private_token)
     return str(repo_url or "")
 
 

@@ -495,6 +495,7 @@ console.log(JSON.stringify({
                     text=True,
                     encoding="utf-8",
                     cwd=str(BACKEND_DIR.parent),
+                    env={**os.environ, "JIRA_GATE_STATE_DIR": temp_dir},
                 )
         finally:
             server.shutdown()
@@ -509,6 +510,103 @@ console.log(JSON.stringify({
         self.assertIn("缺陷单预检：不通过", merged)
         self.assertIn("模块映射丢失，已跳过检查", merged)
         self.assertLess(merged.index("缺陷单预检：不通过"), merged.index("模块映射丢失，已跳过检查"))
+
+    @unittest.skipIf(NODE_BIN is None, "需要 node 运行时才能执行技能脚本")
+    def test_second_comment_call_appends_to_first_preflight_comment(self):
+        """同一任务第二次执行 comment 时必须追加到原评论，避免一次任务产生两条评论。"""
+        first = "h3. 缺陷单预检：不通过（打回补充）\n\n* 结论：缺少模块信息"
+        second = "h3. 模块映射丢失，已跳过检查\n\n* 待处理：补齐映射"
+        seen = {"get": 0, "post": 0, "put": None}
+        current = {"body": ""}
+
+        class FakeJiraHandler(http.server.BaseHTTPRequestHandler):
+            def do_GET(self):  # noqa: N802 - BaseHTTPRequestHandler 约定方法名
+                if self.path == "/rest/api/2/issue/ABC-1/comment/31985":
+                    seen["get"] += 1
+                    body = json.dumps({"id": "31985", "body": current["body"]}).encode("utf-8")
+                    self.send_response(200)
+                    self.send_header("Content-Type", "application/json")
+                    self.send_header("Content-Length", str(len(body)))
+                    self.end_headers()
+                    self.wfile.write(body)
+                    return
+                self.send_response(404)
+                self.end_headers()
+
+            def do_POST(self):  # noqa: N802
+                seen["post"] += 1
+                length = int(self.headers.get("Content-Length") or 0)
+                payload = json.loads(self.rfile.read(length).decode("utf-8"))
+                current["body"] = payload["body"]
+                body = json.dumps({"id": "31985", "body": payload["body"]}).encode("utf-8")
+                self.send_response(201)
+                self.send_header("Content-Type", "application/json")
+                self.send_header("Content-Length", str(len(body)))
+                self.end_headers()
+                self.wfile.write(body)
+
+            def do_PUT(self):  # noqa: N802
+                length = int(self.headers.get("Content-Length") or 0)
+                seen["put"] = json.loads(self.rfile.read(length).decode("utf-8"))
+                current["body"] = seen["put"]["body"]
+                body = json.dumps({"id": "31985", "body": current["body"]}).encode("utf-8")
+                self.send_response(200)
+                self.send_header("Content-Type", "application/json")
+                self.send_header("Content-Length", str(len(body)))
+                self.end_headers()
+                self.wfile.write(body)
+
+            def log_message(self, format, *args):  # noqa: A002 - 基类签名固定
+                return
+
+        server = http.server.ThreadingHTTPServer(("127.0.0.1", 0), FakeJiraHandler)
+        thread = threading.Thread(target=server.serve_forever, daemon=True)
+        thread.start()
+        try:
+            with tempfile.TemporaryDirectory() as temp_dir:
+                first_path = Path(temp_dir) / "first.txt"
+                second_path = Path(temp_dir) / "second.txt"
+                first_path.write_text(first, encoding="utf-8")
+                second_path.write_text(second, encoding="utf-8")
+                base = [
+                    NODE_BIN,
+                    str(SKILL_DIR / "scripts" / "jira-cli.mjs"),
+                    "comment", "ABC-1",
+                    "--base-url", f"http://127.0.0.1:{server.server_port}",
+                    "--token", "test-token",
+                ]
+                first_run = subprocess.run(
+                    base + ["--file", str(first_path)],
+                    capture_output=True,
+                    text=True,
+                    encoding="utf-8",
+                    cwd=temp_dir,
+                    env={**os.environ, "JIRA_GATE_STATE_DIR": temp_dir},
+                )
+                second_run = subprocess.run(
+                    base + ["--file", str(second_path)],
+                    capture_output=True,
+                    text=True,
+                    encoding="utf-8",
+                    cwd=temp_dir,
+                    env={**os.environ, "JIRA_GATE_STATE_DIR": temp_dir},
+                )
+        finally:
+            server.shutdown()
+            server.server_close()
+            thread.join(timeout=2)
+
+        self.assertEqual(first_run.returncode, 0, first_run.stderr)
+        self.assertEqual(second_run.returncode, 0, second_run.stderr)
+        self.assertEqual(seen["post"], 1, "第二次 comment 不能新增评论")
+        self.assertEqual(seen["get"], 1)
+        self.assertIsNotNone(seen["put"])
+        merged = seen["put"]["body"].replace("\r\n", "\n")
+        self.assertIn(first, merged)
+        self.assertIn(second, merged)
+        payload = json.loads(second_run.stdout)
+        self.assertTrue(payload["appended"])
+        self.assertEqual(payload["commentId"], "31985")
 
     @unittest.skipIf(NODE_BIN is None, "需要 node 运行时才能执行技能脚本")
     def test_cli_mapping_gap_exits_zero_so_agent_can_post_comment(self):

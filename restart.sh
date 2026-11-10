@@ -4,14 +4,14 @@ set -euo pipefail
 # 统一重启入口：强制重建容器，确保重新读取环境文件。
 # dev（默认）：bash restart.sh
 # prod：DEPLOY_ENV=prod bash restart.sh
-# 指定服务：bash restart.sh api-dev  或  bash restart.sh api
+# 指定服务：bash restart.sh api
 # 需要先跑迁移：RUN_MIGRATIONS=1 bash restart.sh
 DEPLOY_ENV="${DEPLOY_ENV:-dev}"
 case "${DEPLOY_ENV}" in
   dev)
     DEFAULT_COMPOSE_FILE="docker-compose-dev.yaml"
     DEFAULT_ENV_FILE=".env"
-    SUFFIX="-dev"
+    SUFFIX=""
     ;;
   prod|production)
     DEPLOY_ENV="prod"
@@ -81,12 +81,22 @@ resolve_services() {
     SERVICES+=("${name}${SUFFIX}")
   done
 
-  local bot_id="${CHATBOT_BOT_ID:-$(read_env_value CHATBOT_BOT_ID)}"
-  local bot_secret="${CHATBOT_BOT_SECRET:-$(read_env_value CHATBOT_BOT_SECRET)}"
-  if [ -n "${bot_id}" ] && [ -n "${bot_secret}" ]; then
-    SERVICES+=("worker-chatbot${SUFFIX}" "chatbot-gateway${SUFFIX}")
-  else
-    echo "提示：未配置 CHATBOT_BOT_ID/CHATBOT_BOT_SECRET，跳过机器人网关与 worker-chatbot。"
+  if [ "${DEPLOY_ENV}" = "dev" ]; then
+    local bot_id="${CHATBOT_BOT_ID:-$(read_env_value CHATBOT_BOT_ID)}"
+    local bot_secret="${CHATBOT_BOT_SECRET:-$(read_env_value CHATBOT_BOT_SECRET)}"
+    if [ -n "${bot_id}" ] && [ -n "${bot_secret}" ]; then
+      SERVICES+=("worker-chatbot${SUFFIX}" "chatbot-gateway${SUFFIX}")
+    else
+      echo "提示：未配置 CHATBOT_BOT_ID/CHATBOT_BOT_SECRET，跳过机器人网关与 worker-chatbot。"
+    fi
+
+    local knowledge_id="${CHATBOT_KNOWLEDGE_ID:-$(read_env_value CHATBOT_KNOWLEDGE_ID)}"
+    local knowledge_secret="${CHATBOT_KNOWLEDGE_SECRET:-$(read_env_value CHATBOT_KNOWLEDGE_SECRET)}"
+    if [ -n "${knowledge_id}" ] && [ -n "${knowledge_secret}" ]; then
+      SERVICES+=("worker-chatbot-knowledge" "chatbot-gateway-knowledge")
+    else
+      echo "提示：未配置 CHATBOT_KNOWLEDGE_ID/CHATBOT_KNOWLEDGE_SECRET，跳过知识机器人网关与 worker。"
+    fi
   fi
 
 }

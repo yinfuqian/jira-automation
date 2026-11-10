@@ -23,40 +23,48 @@ class ProductionDeploymentContractTests(unittest.TestCase):
             "api",
             "worker-analysis",
             "worker-skill",
-            "worker-chatbot",
-            "chatbot-gateway",
             "beat",
         ):
             self.assertRegex(source, rf"(?m)^  {re.escape(service)}:\s*$")
-        self.assertEqual(source.count("image: ${BACKEND_IMAGE}"), 7)
+        self.assertNotRegex(
+            source,
+            r"(?m)^  (worker-chatbot|chatbot-gateway|worker-chatbot-knowledge|chatbot-gateway-knowledge):\s*$",
+        )
+        self.assertEqual(source.count("image: ${BACKEND_IMAGE}"), 5)
 
     def test_online_services_use_host_network(self):
         source = ONLINE_COMPOSE.read_text(encoding="utf-8")
 
-        self.assertEqual(source.count('network_mode: "host"'), 7)
+        self.assertEqual(source.count('network_mode: "host"'), 5)
         self.assertIn('"${API_PORT}:5000"', source)
         # host 网络下 ports 映射不生效，gunicorn 必须直接监听 API_PORT。
         self.assertIn("0.0.0.0:${API_PORT:-5000}", source)
 
     def test_restart_scripts_remove_obsolete_worker_services(self):
         """重建时必须移除旧版 worker 容器，避免旧消费者继续占用错误队列。"""
-        for name in ("restart-master.sh", "restart-dev.sh"):
-            source = (PROJECT_ROOT / name).read_text(encoding="utf-8")
-            self.assertIn("--remove-orphans", source)
+        source = (PROJECT_ROOT / "restart.sh").read_text(encoding="utf-8")
+        self.assertIn("--remove-orphans", source)
 
     def test_all_production_services_read_users_from_image_configured_path(self):
         """所有启动 Flask 应用的服务都必须把用户文件挂到 AUTH_USERS_FILE 指定位置。"""
         source = ONLINE_COMPOSE.read_text(encoding="utf-8")
 
-        self.assertEqual(source.count("./data/users.csv:/data/users.csv:ro"), 7)
+        self.assertEqual(source.count("./data/users.csv:/data/users.csv:ro"), 5)
         self.assertNotIn(":/users.csv", source)
 
-    def test_production_chatbot_services_read_the_selected_env_file(self):
-        """生产机器人服务必须跟随 --env-file 读取 .env.production，不能硬编码 .env。"""
+    def test_production_services_read_the_selected_env_file(self):
+        """生产服务必须跟随 --env-file 读取 .env.production，不能硬编码 .env。"""
         source = ONLINE_COMPOSE.read_text(encoding="utf-8")
 
-        self.assertEqual(source.count("env_file:\n      - ${ENV_FILE:-.env}"), 7)
+        self.assertEqual(source.count("env_file:\n      - ${ENV_FILE:-.env}"), 5)
         self.assertNotIn("env_file:\n      - .env\n", source)
+
+    def test_production_environment_has_no_chatbot_credentials(self):
+        source = (PROJECT_ROOT / "deploy" / ".env.production.example").read_text(encoding="utf-8")
+        self.assertNotIn("CHATBOT_BOT_ID", source)
+        self.assertNotIn("CHATBOT_BOT_SECRET", source)
+        self.assertNotIn("CHATBOT_KNOWLEDGE_ID", source)
+        self.assertNotIn("CHATBOT_KNOWLEDGE_SECRET", source)
 
     def test_frontend_image_supports_template_upstreams(self):
         template = (PROJECT_ROOT / "frontend" / "nginx.conf").read_text(encoding="utf-8")

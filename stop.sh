@@ -11,7 +11,7 @@ case "${DEPLOY_ENV}" in
   dev)
     DEFAULT_COMPOSE_FILE="docker-compose-dev.yaml"
     DEFAULT_ENV_FILE=".env"
-    SUFFIX="-dev"
+    SUFFIX=""
     ;;
   prod|production)
     DEPLOY_ENV="prod"

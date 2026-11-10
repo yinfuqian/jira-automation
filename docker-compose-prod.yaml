@@ -1,4 +1,3 @@
-version: '2'
 services:
   api:
     image: ${BACKEND_IMAGE}
@@ -61,7 +60,6 @@ services:
     volumes:
       - ./data/users.csv:/data/users.csv:ro
       - ./data/upload:/data/upload
-      # 机器人项目与分支映射随镜像内置（/app/config/chatbot.json），无需挂载。
       - ./data/logs:/app/app/logs
       - ./data/repos:/tmp/jira-automation-repos
       # 技能目录只读挂载：Codex 运行时无法改动技能定义，也不会把内置技能写进业务技能目录。
@@ -70,7 +68,6 @@ services:
       - ./data/codex:/data/codex
       - ./data/skill-workspace:/data/skill-workspace
     restart: unless-stopped
-
   worker-analysis:
     image: ${BACKEND_IMAGE}
     network_mode: "host"
@@ -255,55 +252,3 @@ services:
       - ./data/codex:/data/codex
       - ./data/skill-workspace:/data/skill-workspace
     restart: unless-stopped
-
-  worker-chatbot:
-    image: ${BACKEND_IMAGE}
-    network_mode: "host"
-    env_file:
-      - ${ENV_FILE:-.env}
-    environment:
-      PYTHONUNBUFFERED: "1"
-      # 机器人问答要把仓库检出到工作区，并调用 Codex 分析。
-      SKILL_WORKSPACE_DIR: /data/skill-workspace
-      CODEX_HOME: /data/codex
-      REPO_CACHE_DIR: /tmp/jira-automation-repos
-      SKILL_RECOVER_ORPHANS: "false"
-    command:
-      - celery
-      - -A
-      - celery_worker.celery_app
-      - worker
-      - --loglevel=INFO
-      - --hostname=worker-chatbot@%h
-      - -Q
-      - chatbot
-      - --concurrency=20
-    volumes:
-      - ./data/logs:/app/app/logs
-      - ./data/repos:/tmp/jira-automation-repos
-      - ./data/users.csv:/data/users.csv:ro
-      - ./data/codex:/data/codex
-      - ./data/skill-workspace:/data/skill-workspace
-    restart: unless-stopped
-    depends_on:
-      - api
-
-  chatbot-gateway:
-    image: ${BACKEND_IMAGE}
-    network_mode: "host"
-    env_file:
-      - ${ENV_FILE:-.env}
-    environment:
-      PYTHONUNBUFFERED: "1"
-    # 长连接网关必须单实例：同一机器人同时只能保持一条有效连接。
-    command:
-      - python
-      - chatbot_gateway.py
-    volumes:
-      - ./data/logs:/app/app/logs
-      - ./data/users.csv:/data/users.csv:ro
-      - ./data/codex:/data/codex
-      - ./data/skill-workspace:/data/skill-workspace
-    restart: unless-stopped
-    depends_on:
-      - worker-chatbot

@@ -1,4 +1,3 @@
-version: '2'
 services:
   api:
     image: ${BACKEND_IMAGE}
@@ -307,3 +306,61 @@ services:
     restart: unless-stopped
     depends_on:
       - worker-chatbot
+
+  worker-chatbot-knowledge:
+    image: ${BACKEND_IMAGE}
+    network_mode: "host"
+    env_file:
+      - ${ENV_FILE:-.env}
+    environment:
+      PYTHONUNBUFFERED: "1"
+      # 知识/故障机器人使用独立队列、Redis DB 和运行目录，不干扰原问答机器人。
+      REDIS_DATABASE: "3"
+      SKILL_WORKSPACE_DIR: /data/skill-workspace-knowledge
+      CODEX_HOME: /data/codex-knowledge
+      REPO_CACHE_DIR: /tmp/jira-automation-repos-knowledge
+      SKILL_RECOVER_ORPHANS: "false"
+      GITLAB_SYNC_ON_STARTUP: "false"
+    command:
+      - celery
+      - -A
+      - knowledge_worker.celery_app
+      - worker
+      - --loglevel=INFO
+      - --hostname=worker-chatbot-knowledge@%h
+      - -Q
+      - chatbot-knowledge
+      - --concurrency=2
+    volumes:
+      - ./data/logs-knowledge:/app/app/logs
+      - ./data/repos-knowledge:/tmp/jira-automation-repos-knowledge
+      - ./data/users.csv:/data/users.csv:ro
+      - ./data/codex-knowledge:/data/codex-knowledge
+      - ./data/skill-workspace-knowledge:/data/skill-workspace-knowledge
+    restart: unless-stopped
+    depends_on:
+      - api
+
+  chatbot-gateway-knowledge:
+    image: ${BACKEND_IMAGE}
+    network_mode: "host"
+    env_file:
+      - ${ENV_FILE:-.env}
+    environment:
+      PYTHONUNBUFFERED: "1"
+      REDIS_DATABASE: "3"
+      SKILL_WORKSPACE_DIR: /data/skill-workspace-knowledge
+      CODEX_HOME: /data/codex-knowledge
+      REPO_CACHE_DIR: /tmp/jira-automation-repos-knowledge
+    # 同一机器人只能保持一条长连接，因此知识机器人网关必须单实例。
+    command:
+      - python
+      - knowledge_gateway.py
+    volumes:
+      - ./data/logs-knowledge:/app/app/logs
+      - ./data/users.csv:/data/users.csv:ro
+      - ./data/codex-knowledge:/data/codex-knowledge
+      - ./data/skill-workspace-knowledge:/data/skill-workspace-knowledge
+    restart: unless-stopped
+    depends_on:
+      - worker-chatbot-knowledge

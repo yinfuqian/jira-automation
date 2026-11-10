@@ -74,6 +74,9 @@ skills/.jira-token.txt
 skills/jira-token.txt
 skills/**/.jira-token
 skills/**/.jira-token.txt
+# 门禁技能的“同一任务只留一条预检评论”标记，属于运行期状态
+.jira-preflight-comments.json
+skills/**/.jira-preflight-comments.json
 skill-workspace/
 # review-jira-req 技能在本地跑时会把中间草稿与评审报告写到当前目录的 reports/ 下
 reports/

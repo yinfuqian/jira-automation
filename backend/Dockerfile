@@ -4,8 +4,14 @@ ARG PYTHON_BASE_IMAGE=docker.m.daocloud.io/library/python:3.10-slim-bookworm
 ARG NODE_BASE_IMAGE=docker.m.daocloud.io/library/node:20-bookworm-slim
 ARG CODEX_CLI_VERSION=0.142.5
 ARG NPM_REGISTRY=https://registry.npmmirror.com
+ARG JDK8_BASE_IMAGE=docker.m.daocloud.io/library/eclipse-temurin:8-jdk-jammy
+ARG JDK21_BASE_IMAGE=docker.m.daocloud.io/library/eclipse-temurin:21-jdk-jammy
+ARG MAVEN_BASE_IMAGE=docker.m.daocloud.io/library/maven:3.9.9-eclipse-temurin-21
 
 FROM ${NODE_BASE_IMAGE} AS node-runtime
+FROM ${JDK8_BASE_IMAGE} AS jdk8-runtime
+FROM ${JDK21_BASE_IMAGE} AS jdk21-runtime
+FROM ${MAVEN_BASE_IMAGE} AS maven-runtime
 
 FROM ${PYTHON_BASE_IMAGE} AS base
 
@@ -59,15 +65,8 @@ RUN --mount=type=bind,source=offline/apt,target=/opt/apt-offline \
     done
 
 # 技能在容器内需要直接编译 Java 代码，因此镜像内置 JDK 8、JDK 21 与 Maven 3.9.9。
-# 两个 JDK 都装 Adoptium(Temurin) 官方 tarball：bookworm 的 apt 源里没有 JDK 8，统一走 tarball
-# 既能保证两个版本来源一致，也不会把离线 apt 依赖清单（backend/offline/apt）扩大到上百个 java 相关 deb。
-# 下面两组地址按顺序尝试、命中即用；企业内网可以用 --build-arg 把内部制品库排在最前面。
-ARG JDK8_VERSION=8u504b01
-ARG JDK21_VERSION=21.0.13_9
-ARG MAVEN_VERSION=3.9.9
-ARG ADOPTIUM_MIRRORS="https://mirrors.tuna.tsinghua.edu.cn/Adoptium https://mirrors.huaweicloud.com/adoptium"
-ARG MAVEN_URLS="https://mirrors.huaweicloud.com/apache/maven/maven-3/${MAVEN_VERSION}/binaries/apache-maven-${MAVEN_VERSION}-bin.tar.gz https://repo.maven.apache.org/maven2/org/apache/maven/apache-maven/${MAVEN_VERSION}/apache-maven-${MAVEN_VERSION}-bin.tar.gz"
-ARG TARGETARCH
+# JDK/Maven 直接从受控基础镜像复制，构建阶段不再联网下载 tarball，避免镜像源返回 HTML
+# 或 GitHub 网络波动导致镜像构建随机失败。企业内网可通过构建参数替换三个基础镜像。
 
 # 默认使用 JDK 8：容器内要编译的业务仓库绝大多数是 Java 8，且老项目依赖的 lombok 1.16~1.18 在 JDK 21 下
 # 会报编译错误。Java 21 项目用 jdk 助手显式切换（见 docker/jdk.sh），避免默认版本把依赖不兼容伪装成代码问题。
@@ -82,38 +81,12 @@ ENV JAVA8_HOME=/opt/java/jdk8 \
 
 COPY docker/jdk.sh /usr/local/bin/jdk
 
+COPY --from=jdk8-runtime /opt/java/openjdk /opt/java/jdk8
+COPY --from=jdk21-runtime /opt/java/openjdk /opt/java/jdk21
+COPY --from=maven-runtime /usr/share/maven /opt/maven
+
 RUN set -eu; \
-    case "${TARGETARCH:-amd64}" in \
-        amd64) jdk_arch=x64 ;; \
-        arm64) jdk_arch=aarch64 ;; \
-        *) echo "不支持的镜像架构：${TARGETARCH}" >&2; exit 1 ;; \
-    esac; \
-    download() { \
-        archive="$1"; shift; \
-        for url in $*; do \
-            echo "下载 $archive：$url"; \
-            if curl -fsSL --retry 3 --connect-timeout 20 -o "$archive" "$url"; then return 0; fi; \
-            echo "该地址不可用，改试下一个：$url" >&2; \
-            rm -f "$archive"; \
-        done; \
-        echo "所有地址都无法下载 $archive，请用 --build-arg 换成内部制品库地址" >&2; \
-        return 1; \
-    }; \
-    jdk8_urls=""; \
-    jdk21_urls=""; \
-    for mirror in ${ADOPTIUM_MIRRORS}; do \
-        jdk8_urls="$jdk8_urls $mirror/8/jdk/$jdk_arch/linux/OpenJDK8U-jdk_${jdk_arch}_linux_hotspot_${JDK8_VERSION}.tar.gz"; \
-        jdk21_urls="$jdk21_urls $mirror/21/jdk/$jdk_arch/linux/OpenJDK21U-jdk_${jdk_arch}_linux_hotspot_${JDK21_VERSION}.tar.gz"; \
-    done; \
-    download /tmp/temurin8.tar.gz $jdk8_urls \
-    && download /tmp/temurin21.tar.gz $jdk21_urls \
-    && download /tmp/maven.tar.gz ${MAVEN_URLS} \
-    && mkdir -p /opt/java/jdk8 /opt/java/jdk21 /opt/maven \
-    && tar -xzf /tmp/temurin8.tar.gz -C /opt/java/jdk8 --strip-components=1 \
-    && tar -xzf /tmp/temurin21.tar.gz -C /opt/java/jdk21 --strip-components=1 \
-    && tar -xzf /tmp/maven.tar.gz -C /opt/maven --strip-components=1 \
-    && rm -f /tmp/temurin8.tar.gz /tmp/temurin21.tar.gz /tmp/maven.tar.gz \
-    && chmod +x /usr/local/bin/jdk \
+    chmod +x /usr/local/bin/jdk \
     && /opt/java/jdk8/bin/javac -version \
     && /opt/java/jdk21/bin/javac -version \
     && jdk 21 mvn --version
