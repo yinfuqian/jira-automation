@@ -86,7 +86,7 @@ services:
       - --hostname=worker-analysis@%h
       - -Q
       - analysis,maintenance
-      - --concurrency=2
+      - --concurrency=12
     volumes:
       - ./data/users.csv:/data/users.csv:ro
       - ./data/upload:/data/upload
@@ -149,7 +149,7 @@ services:
       - --hostname=worker-skill@%h
       - -Q
       - skill
-      - --concurrency=2
+      - --concurrency=12
     volumes:
       - ./data/users.csv:/data/users.csv:ro
       - ./data/upload:/data/upload
