@@ -126,19 +126,41 @@ class SettingsTest(unittest.TestCase):
     """校验项目映射与序号选择。"""
 
     def test_repository_config_matches_excel_mapping(self):
-        """仓库内配置应与 Excel 的 5 个项目、11 个模块口径一致。"""
+        """仓库内配置应与 Excel 的 5 个项目口径一致，并包含新增的 Call 1.x/2.x 项目。"""
         settings = load_settings()
         names = [item.name for item in settings.projects]
         self.assertEqual(
-            names, ["call3.1主线", "call3.1招商证券", "call3.0兴业银行", "call3.0天宏基金", "call3.0富国基金"]
+            names,
+            [
+                "call3.1主线",
+                "call3.1招商证券",
+                "call3.0兴业银行",
+                "call3.0天弘基金",
+                "call3.0富国基金",
+                "call1.x",
+                "call2.x",
+            ],
         )
-        # 主线 10 个模块、招商 9 个、其余各 5 个（空单元格表示不使用该模块）。
-        self.assertEqual([len(p.module_items()) for p in settings.projects], [10, 9, 5, 5, 5])
+        # 主线 10 个模块、招商 9 个、其余三个定制版各 5 个，新增 Call 1.x/2.x 各 3 个
+        # （空单元格表示不使用该模块）。
+        self.assertEqual(
+            [len(p.module_items()) for p in settings.projects], [10, 9, 5, 5, 5, 3, 3]
+        )
         main = settings.project_by_key("yicall-3.1-main")
         self.assertEqual(main.modules["llm-management"], "release/3.2")
         self.assertNotIn("yicall-management-system", main.modules)
         xyyh = settings.project_by_key("yicall-3.0-xyyh")
         self.assertEqual(xyyh.modules["fe-yicall-web"], "release/3.1-xyyh")
+
+        call1 = settings.project_by_key("yicall-1.x")
+        self.assertEqual(call1.modules["yicall-management-system"], "release/1.14.03")
+        self.assertEqual(call1.modules["fe-yicall-web"], "release/v1.14.3-zszq")
+        self.assertEqual(call1.modules["tame-dfs"], "release/v2")
+
+        call2 = settings.project_by_key("yicall-2.x")
+        self.assertEqual(call2.modules["yicall-management-system"], "release/dev/2.4.00")
+        self.assertEqual(call2.modules["fe-yicall-web"], "release/v2.4")
+        self.assertEqual(call2.modules["tame-dfs"], "release/v2")
 
     def test_project_by_index_and_out_of_range(self):
         """序号按 1 起始解析，越界返回 None。"""
@@ -169,6 +191,10 @@ class SettingsTest(unittest.TestCase):
         self.assertEqual(
             settings.repos.module_repo_urls["asr-tts-adaptor"],
             "https://code.in.wezhuiyi.com/asr-tts-adaptor/asr-tts-adaptor.git",
+        )
+        self.assertEqual(
+            settings.repos.module_repo_urls["tame-dfs"],
+            "https://code.in.wezhuiyi.com/common/tame-dfs.git",
         )
 
     def test_menu_lists_every_project(self):
@@ -941,12 +967,12 @@ class RoutesTest(unittest.TestCase):
         cls.app = create_test_app()
 
     def test_projects_endpoint_returns_all_projects(self):
-        """接口应返回 Excel 里的 5 个项目及其模块分支。"""
+        """接口应返回配置里的全部项目及其模块分支。"""
         response = self.app.test_client().get("/chatbot/projects")
         self.assertEqual(response.status_code, 200)
         payload = response.get_json()
         self.assertTrue(payload["ok"])
-        self.assertEqual(payload["total"], 5)
+        self.assertEqual(payload["total"], 7)
         first = payload["items"][0]
         self.assertEqual(first["name"], "call3.1主线")
         self.assertEqual(len(first["modules"]), 10)
@@ -956,7 +982,7 @@ class RoutesTest(unittest.TestCase):
         response = self.app.test_client().get("/chatbot/health")
         self.assertEqual(response.status_code, 200)
         payload = response.get_json()
-        self.assertEqual(payload["project_count"], 5)
+        self.assertEqual(payload["project_count"], 7)
         self.assertIn("gateway", payload)
 
     def test_create_app_publishes_redis_client_to_extensions(self):

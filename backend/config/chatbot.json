@@ -25,7 +25,8 @@
       "llm-management": "https://code.in.wezhuiyi.com/yicall/llm-management.git",
       "aiforce2": "https://code.in.wezhuiyi.com/aiforce/aiforce2.git",
       "aiforce-web": "https://code.in.wezhuiyi.com/aiforce/aiforce-web.git",
-      "asr-tts-adaptor": "https://code.in.wezhuiyi.com/asr-tts-adaptor/asr-tts-adaptor.git"
+      "asr-tts-adaptor": "https://code.in.wezhuiyi.com/asr-tts-adaptor/asr-tts-adaptor.git",
+      "tame-dfs": "https://code.in.wezhuiyi.com/common/tame-dfs.git"
     },
     "tls_verify": true,
     "clone_timeout_seconds": 900,
@@ -108,6 +109,26 @@
         "aiforce-web": "release/v2.7",
         "asr-tts-adaptor": "release/0.5.0",
         "yicall-management-system": "release/3.0.12/fgjj"
+      }
+    },
+    {
+      "key": "yicall-1.x",
+      "name": "call1.x",
+      "description": "Call 1.x 版本",
+      "modules": {
+        "yicall-management-system": "release/1.14.03",
+        "fe-yicall-web": "release/v1.14.3-zszq",
+        "tame-dfs": "release/v2"
+      }
+    },
+    {
+      "key": "yicall-2.x",
+      "name": "call2.x",
+      "description": "Call 2.x 版本",
+      "modules": {
+        "yicall-management-system": "release/dev/2.4.00",
+        "fe-yicall-web": "release/v2.4",
+        "tame-dfs": "release/v2"
       }
     }
   ]
