@@ -89,7 +89,7 @@
     },
     {
       "key": "yicall-3.0-thjj",
-      "name": "call3.0天宏基金",
+      "name": "call3.0天弘基金",
       "description": "天弘基金定制版",
       "modules": {
         "fe-yicall-web": "release/3.0-tianhongjijin",
