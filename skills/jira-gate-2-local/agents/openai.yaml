@@ -1,0 +1,4 @@
+interface:
+  display_name: "Jira G2 技术方案准出检查（本地预检）"
+  short_description: "只读检查 Jira 故事单的 G2 技术方案与 PDCA RD 交付物：评论、PDCA 报告、门禁字段与流转全部生成本地预检包，不上传、不评论、不回写、不流转。"
+  default_prompt: "用 $jira-gate-2-local 对这个 Jira 需求链接做 G2 技术方案准出本地预检。全程只读 Jira，不写评论、不回写字段、不上传或删除附件、不流转状态。先确认单据类型是「故事」且产品归属属于 Bot/Call/See/Pal/Learn/Aiforce 之一，任一项不符就跳过。按《技术方案准出 Checklist》判定 6 项 MUST（G2-M01~M06）与命中的 CONDITIONAL，同时按《通用团队交付物 PDCA 规范》（V2.3.0 / template V1.1）执行 RD 开发交付物检查（D-01~D-10）。只生成本地评论草稿和可选 PDCA RD 报告，评论标题带「（本地预检）」，退回补充时只写「建议处理人」纯文本；最后打包为 outputs/<KEY>-G2本地预检包-<时间戳>.zip，并给出绝对路径。"

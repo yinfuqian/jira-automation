@@ -1,0 +1,4 @@
+interface:
+  display_name: "Jira G1 需求准入本地预检"
+  short_description: "只读预检 G1 准入：按 PRD 需求准入 Checklist 运行包内 review-jira-req、review-jira-design、review-jira-qa；评论草稿、报告和 QA 清单只生成并打包在本地，不写评论、不传附件、不改字段、不流转"
+  default_prompt: "用 $jira-gate-1-local 本地预检这个 Jira 需求链接是否达到 G1 需求准入标准。先只读确认单据类型是「故事」且产品归属属于 Bot/Call/See/Pal/Learn/Aiforce 之一，任一项不符就跳过；按 PRD 需求准入 Checklist 逐项判定，并调用 detect-prototype.mjs 判定单子是否上传了原型：有原型才调用包内 review-jira-design 生成原型设计准入报告，没有原型就记「不适用」。随后调用包内 review-jira-req 生成需求评审报告、review-jira-qa 只执行阶段一生成 QA 清单；三个子技能都从本技能包的 subskills/ 目录读取。全程禁止写 Jira：不写评论、不回写门禁字段、不上传或删除附件、不流转状态、不真实 @ 人；评论草稿、报告和 QA 清单只放进本地预检包。任一准出不通过只建议流转到「需求设计」。子技能的任何失败都不得中断预检：运营性失败只记为「未完成（原因）」，继续完成本地草稿和打包。"

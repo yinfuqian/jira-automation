@@ -1,0 +1,95 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>{{TITLE}}</title>
+<style>
+  :root{
+    --ink:#1f2933; --muted:#5b6b7c; --line:#dbe3ec; --bg:#f4f6f9; --card:#fff;
+    --accent:#1f4e79; --bad:#b42318; --badbg:#fef3f2; --warn:#b54708; --warnbg:#fffaeb;
+    --ok:#046c4e; --okbg:#ecfdf3; --quote:#f7f9fc;
+  }
+  *{box-sizing:border-box;}
+  body{margin:0;background:var(--bg);color:var(--ink);font-size:14.5px;line-height:1.75;
+    font-family:-apple-system,BlinkMacSystemFont,"Segoe UI","PingFang SC","Hiragino Sans GB","Microsoft YaHei",sans-serif;}
+  .page{max-width:1080px;margin:0 auto;padding:26px 24px 56px;}
+  header{background:var(--card);border:1px solid var(--line);border-left:6px solid var(--accent);
+    border-radius:6px;padding:20px 24px;margin-bottom:16px;}
+  h1{margin:0 0 6px;font-size:22px;}
+  .sub{color:var(--muted);font-size:13px;margin-bottom:14px;}
+  .verdict{display:block;padding-top:12px;border-top:1px dashed var(--line);}
+  .verdict .vline{display:flex;align-items:center;gap:12px;flex-wrap:wrap;margin:3px 0;}
+  .verdict .label{color:var(--muted);font-size:13px;}
+  .pill{display:inline-block;padding:2px 10px;border-radius:999px;font-size:12px;font-weight:700;white-space:nowrap;}
+  .pill.stop{background:var(--badbg);color:var(--bad);border:1px solid #fda29b;}
+  .pill.pass{background:var(--okbg);color:var(--ok);border:1px solid #a6f4c5;}
+  .pill.block{background:var(--badbg);color:var(--bad);border:1px solid #fda29b;}
+  .pill.pending{background:var(--warnbg);color:var(--warn);border:1px solid #fec84b;}
+  .pill.idx{background:#eef3f8;color:var(--accent);border:1px solid #c6d7e8;font-weight:600;white-space:nowrap;}
+  section{background:var(--card);border:1px solid var(--line);border-radius:6px;padding:18px 22px;margin-bottom:16px;}
+  h2{font-size:17px;margin:0 0 12px;padding-bottom:8px;border-bottom:1px solid var(--line);color:var(--accent);}
+  h3{font-size:14.5px;margin:16px 0 8px;}
+  p{margin:8px 0;}
+  ol,ul{margin:8px 0 8px 22px;padding:0;}
+  li{margin:4px 0;}
+  code{background:#eef2f7;border:1px solid #e1e8f0;border-radius:3px;padding:0 4px;font-size:12px;
+    font-family:ui-monospace,SFMono-Regular,Consolas,monospace;word-break:break-all;}
+  table{width:100%;border-collapse:collapse;margin:10px 0;font-size:13px;}
+  th,td{border:1px solid var(--line);padding:8px 9px;text-align:left;vertical-align:top;word-break:break-word;}
+  th{background:#eef3f8;font-weight:600;}
+  tbody tr:nth-child(even){background:#fafcfe;}
+  .overview th:nth-child(1),.overview td:nth-child(1){width:6%;}
+  .overview th:nth-child(2),.overview td:nth-child(2){width:13%;}
+  .overview th:nth-child(3),.overview td:nth-child(3){width:18%;}
+  .overview th:nth-child(4),.overview td:nth-child(4){width:30%;}
+  .overview th:nth-child(5),.overview td:nth-child(5){width:22%;}
+  .overview th:nth-child(6),.overview td:nth-child(6){width:11%;}
+  blockquote{margin:8px 0;padding:9px 13px;background:var(--quote);border-left:3px solid #9fb3c8;
+    color:#243b53;font-size:13.5px;}
+  .problem{border-left:3px solid var(--bad);background:var(--badbg);padding:10px 14px;margin:12px 0;}
+  .gate{border-left:3px solid var(--ok);background:var(--okbg);padding:10px 14px;margin:12px 0;}
+  .note{font-size:13px;color:var(--muted);background:#f8fafc;border-left:3px solid #9fb3c8;padding:10px 14px;margin-top:12px;}
+  footer{color:var(--muted);font-size:12px;text-align:center;margin-top:22px;}
+  @media (max-width:900px){ .page{padding:14px;} table{font-size:12px;} }
+  @media print{
+    body{background:#fff;font-size:9.5pt;}
+    .page{max-width:none;padding:0;}
+    section,header{border:0;padding:0 0 8px;margin-bottom:10px;}
+    h2{break-after:avoid;page-break-after:avoid;}
+    tr,.problem,.gate{break-inside:avoid;page-break-inside:avoid;}
+    thead{display:table-header-group;}
+  }
+</style>
+</head>
+<body>
+<div class="page">
+<header>
+  <h1>{{H1}}</h1>
+  <div class="sub">{{SUB}}</div>
+  <div class="verdict">
+    <div class="vline"><span class="label">结论</span>{{VERDICT}}</div>
+  </div>
+</header>
+<section>
+  <h2>不通过项总表</h2>
+  {{OVERVIEW}}
+</section>
+{{SECTION_A}}
+{{SECTION_B}}
+<section>
+  <h2>非阻断文字事实（不影响材料放行）</h2>
+  {{NONBLOCKING}}
+</section>
+<section>
+  <h2>评审说明</h2>
+  <div class="note">{{REVIEW}}</div>
+</section>
+<section>
+  <h2>读取材料清单</h2>
+  {{MATERIALS}}
+</section>
+<footer>{{FOOTER}}</footer>
+</div>
+</body>
+</html>

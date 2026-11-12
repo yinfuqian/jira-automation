@@ -1,0 +1,40 @@
+{
+  "schemaVersion": 1,
+  "jiraKey": "QA-101",
+  "requirementName": "支持列表筛选与导出",
+  "prdVersion": "v0.1",
+  "deliverableVersion": "2.0",
+  "scope": "示例模块",
+  "analysisTime": "2026-10-21 20:00 +08:00",
+  "materials": [
+    {
+      "id": "1001",
+      "filename": "示例需求_PRD_DELIVERY.md",
+      "type": "PRD v0.1",
+      "uploadedAt": "2026-10-20 14:00"
+    },
+    {
+      "id": "1002",
+      "filename": "示例需求_Overview.html",
+      "type": "Overview",
+      "uploadedAt": "2026-10-20 14:00"
+    }
+  ],
+  "conclusion": "通过",
+  "failures": [],
+  "nonBlockingFacts": [],
+  "coverage": [
+    {
+      "id": "AC-001",
+      "checked": true,
+      "result": "通过",
+      "note": ""
+    },
+    {
+      "id": "AC-002",
+      "checked": true,
+      "result": "通过",
+      "note": ""
+    }
+  ]
+}

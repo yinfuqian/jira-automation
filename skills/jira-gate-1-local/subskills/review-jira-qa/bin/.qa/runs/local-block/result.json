@@ -1,0 +1,23 @@
+{
+  "schemaVersion": 1,
+  "stage": "risk-analysis",
+  "ok": false,
+  "applicable": true,
+  "status": "ERROR",
+  "jiraKey": "TEST-1",
+  "conclusion": "",
+  "failedItemCount": 0,
+  "pendingItemCount": 0,
+  "deliverableVersion": "",
+  "htmlPath": "",
+  "attachmentId": "",
+  "commentId": "",
+  "materialAttachmentIds": [],
+  "errorCode": "USAGE",
+  "error": "工作区不能位于技能安装目录内；请设置 QA_WORKSPACE 或换一个执行目录。",
+  "reason": "工作区不能位于技能安装目录内；请设置 QA_WORKSPACE 或换一个执行目录。",
+  "nextCommand": "",
+  "warnings": [
+    "本地预检模式：异常信息只写入本地 result.json，未写入 Jira 评论"
+  ]
+}

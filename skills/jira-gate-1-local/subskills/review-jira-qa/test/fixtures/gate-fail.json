@@ -1,0 +1,155 @@
+{
+  "schemaVersion": 1,
+  "jiraKey": "QA-101",
+  "requirementName": "支持列表筛选与导出",
+  "prdVersion": "v0.1",
+  "deliverableVersion": "1.0",
+  "scope": "示例模块",
+  "analysisTime": "2026-10-21 19:25 +08:00",
+  "materials": [
+    {
+      "id": "1001",
+      "filename": "示例需求_PRD_DELIVERY.md",
+      "type": "PRD v0.1",
+      "uploadedAt": "2026-10-20 14:00"
+    },
+    {
+      "id": "1002",
+      "filename": "示例需求_Overview.html",
+      "type": "Overview",
+      "uploadedAt": "2026-10-20 14:00"
+    }
+  ],
+  "failures": [
+    {
+      "type": "材料冲突",
+      "topic": "导出范围口径",
+      "facts": [
+        {
+          "source": "PRD 2. 规则",
+          "quote": "规则一：必须满足条件 A。"
+        }
+      ],
+      "problem": "PRD 与 Overview 对导出范围表述不同，同一场景存在两个结果。",
+      "closingConditions": [
+        "全部材料对导出范围给出一致表述",
+        "同一场景只有一个可判定结果"
+      ],
+      "productAction": "修订材料",
+      "ac": "AC-001",
+      "origin": "上一版漏检",
+      "criteria": [
+        "B7"
+      ]
+    },
+    {
+      "type": "材料未明确",
+      "topic": "异常提示文案",
+      "facts": [
+        {
+          "source": "PRD 2. 规则",
+          "quote": "规则二：异常时提示 B。"
+        }
+      ],
+      "problem": "未给出异常场景的用户可见文案，验收无法断言。",
+      "closingConditions": [
+        "给出异常提示的固定文案"
+      ],
+      "productAction": "补充结论",
+      "ac": "AC-002",
+      "origin": "本版材料变更引入",
+      "introducedBy": {
+        "source": "PRD 2. 规则",
+        "quote": "导出当前筛选结果。"
+      },
+      "criteria": [
+        "B5"
+      ]
+    }
+  ],
+  "nonBlockingFacts": [
+    "示例术语在 Overview 与 PRD 中不一致，建议统一。"
+  ],
+  "conclusion": "暂不通过",
+  "coverage": [
+    {
+      "id": "AC-001",
+      "checked": true,
+      "result": "不通过",
+      "note": "导出范围冲突"
+    },
+    {
+      "id": "AC-002",
+      "checked": true,
+      "result": "不通过",
+      "note": "异常提示文案未定义"
+    }
+  ],
+  "checks": [
+    {
+      "id": "B1",
+      "verdict": "已明确",
+      "basis": "PRD 对应章节"
+    },
+    {
+      "id": "B2",
+      "verdict": "已明确",
+      "basis": "PRD 对应章节"
+    },
+    {
+      "id": "B3",
+      "verdict": "已明确",
+      "basis": "PRD 对应章节"
+    },
+    {
+      "id": "B4",
+      "verdict": "已明确",
+      "basis": "PRD 对应章节"
+    },
+    {
+      "id": "B5",
+      "verdict": "不可验证",
+      "basis": "PRD 对应章节"
+    },
+    {
+      "id": "B6",
+      "verdict": "已明确",
+      "basis": "PRD 对应章节"
+    },
+    {
+      "id": "B7",
+      "verdict": "不可验证",
+      "basis": "PRD 对应章节"
+    },
+    {
+      "id": "C1",
+      "verdict": "已明确",
+      "basis": "PRD 对应章节"
+    },
+    {
+      "id": "C2",
+      "verdict": "已明确",
+      "basis": "PRD 对应章节"
+    },
+    {
+      "id": "C3",
+      "verdict": "已明确",
+      "basis": "PRD 对应章节"
+    },
+    {
+      "id": "C4",
+      "verdict": "已明确",
+      "basis": "PRD 对应章节"
+    },
+    {
+      "id": "C5",
+      "verdict": "已明确",
+      "basis": "PRD 对应章节"
+    },
+    {
+      "id": "C6",
+      "verdict": "已明确",
+      "basis": "PRD 对应章节"
+    }
+  ]
+}

@@ -1,0 +1,16 @@
+qa-gate vendors libarchive-wasm 1.2.0 for reading RAR/7z/ZIP archives.
+
+Upstream projects:
+- libarchive-wasm 1.2.0 (MIT), https://github.com/ofk/libarchive-wasm
+  Copyright (c) ofk contributors
+- libarchive (BSD-2-Clause), https://github.com/libarchive/libarchive
+  Copyright (c) 2003-2018 Tim Kientzle and contributors
+
+The bundled `libarchive.wasm` is an Emscripten build of libarchive produced by
+the libarchive-wasm project. The JavaScript files under this directory are the
+unmodified published `dist/` output of libarchive-wasm 1.2.0.
+
+License texts follow in LICENSE.
+
+This directory is vendored at build time. qa-gate does not download or execute
+external binaries at runtime.
