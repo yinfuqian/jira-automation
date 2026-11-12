@@ -308,7 +308,7 @@ services:
       - worker-chatbot
 
   worker-chatbot-knowledge:
-    image: ${BACKEND_IMAGE}
+    image: ${KNOWLEDGE_BACKEND_IMAGE:-${BACKEND_IMAGE}}
     network_mode: "host"
     env_file:
       - ${ENV_FILE:-.env}
@@ -342,7 +342,7 @@ services:
       - api
 
   chatbot-gateway-knowledge:
-    image: ${BACKEND_IMAGE}
+    image: ${KNOWLEDGE_BACKEND_IMAGE:-${BACKEND_IMAGE}}
     network_mode: "host"
     env_file:
       - ${ENV_FILE:-.env}

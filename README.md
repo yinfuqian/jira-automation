@@ -70,6 +70,7 @@ DEPLOY_ENV=prod bash stop.sh worker-analysis
 `stop.sh --down` 会删除当前环境的容器与网络，但不会删除数据卷、外部 MySQL 和 Redis。兼容入口 `restart-dev.sh`、`restart-master.sh` 仍然可用，分别等价于 `DEPLOY_ENV=dev bash restart.sh` 和 `DEPLOY_ENV=prod bash restart.sh`。如确需临时覆盖配置文件，可使用 `COMPOSE_FILE`、`ENV_FILE` 环境变量。
 
 企业微信机器人只在 dev Compose 中定义。配置 `CHATBOT_BOT_ID` / `CHATBOT_BOT_SECRET` 后脚本会自动带上 `worker-chatbot` 与 `chatbot-gateway`；配置 `CHATBOT_KNOWLEDGE_ID` / `CHATBOT_KNOWLEDGE_SECRET` 后追加知识机器人的 worker 与 gateway。生产 Compose 不定义这些服务。
+知识机器人可用 `KNOWLEDGE_BACKEND_IMAGE` 固定独立镜像，留空时回退 `BACKEND_IMAGE`；这样升级知识机器人不会带动原代码问答机器人。
 
 GitLab 产品与模块会在 `worker-analysis` 启动时自动同步一次，`beat` 随后按 `GITLAB_SYNC_INTERVAL_HOURS` 周期同步，默认 12 小时。`POST /git/sync-projects` 继续作为 Windows 客户端的手动同步入口。
 
@@ -844,6 +845,39 @@ dev Compose 的机器人服务通过 `${ENV_FILE:-.env}` 读取环境文件。�
 | `GET /chatbot/projects` | 项目与模块分支清单，用于核对映射 |
 | `GET /chatbot/questions?limit=20` | 最近问答记录（问题、结论、耗时、状态） |
 | `POST /chatbot/reload` | 重新读取配置文件并校验；变更实际生效需重启网关与 Worker |
+
+## 知识/故障机器人
+
+知识/故障机器人使用 `CHATBOT_KNOWLEDGE_ID` / `CHATBOT_KNOWLEDGE_SECRET` 独立长连接，
+任务队列为 `chatbot-knowledge`，会话与回推频道也使用独立命名空间，不影响原代码问答机器人。
+
+- 故障问题：按现象、模块、操作路径、版本和日志逐项补齐，信息足够后结合代码分析。
+- 普通问题：先查 Confluence；文档无有效依据时再按 `master` 分支代码兜底。
+- 资源测算：直接读取部署资源表解析结果，不让模型猜数。
+
+资源测算支持 `BOT3.2`、`CALL3.1`、`PAL1.11`、`SEE3.8`，可以一次说完，也可以分多轮补充：
+
+```text
+PAL1.11 100路坐席 16C32G500G 需要多少台服务器
+```
+
+缺少产品、规模或机型时，机器人只追问缺少的项，不会要求选择项目或客户现场。也可以使用
+`/资源` 显式进入测算。计算口径：
+
+- CALL/PAL 优先按实际规模档位取模块和副本数，不再把 50 路套到 550 路基准上做等比缩放。
+- BOT/SEE 使用各自「资源测算」页的基准值；固定模块保持不变，动态模块按 `目标规模 ÷ 基准规模` 向上取整。
+- 默认包含资源表中的中间件、不额外叠加预留；明确回复“预留 10%”时才增加余量。
+- 结论只给总 request 和最小工作节点数，不输出程序自行拼装的“每台分布”。
+- 单 Pod 超过机型可用资源时明确报错并提示换机型；GPU、显存、磁盘数据量和带宽不在 CPU/内存表内，结论会单独提示。
+
+资源表内容更新后，重新生成运行时 JSON 并重建后端镜像：
+
+```powershell
+python scripts/import_capacity_workbooks.py --source-dir "E:\AI工作\zhuiyi\追一文档"
+docker compose -f docker-compose-dev.yaml build worker-chatbot-knowledge chatbot-gateway-knowledge
+```
+
+生成结果位于 `backend/config/capacity_profiles.json`，镜像会随知识机器人一起发布；运行时不依赖 `openpyxl`。
 
 ## Git 与外部基础设施
 

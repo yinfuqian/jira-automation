@@ -136,6 +136,8 @@ COPY --from=build /app/config/chatbot.json /app/config/chatbot.json
 COPY --from=build /app/config/knowledge_bot.json /app/config/knowledge_bot.json
 # 场景 → 模块映射表，新增产品只改这个 JSON，不用改代码。
 COPY --from=build /app/config/knowledge_scenarios.json /app/config/knowledge_scenarios.json
+# 产品部署资源表解析结果；资源测算在容器内直接读取，运行时不依赖 openpyxl。
+COPY --from=build /app/config/capacity_profiles.json /app/config/capacity_profiles.json
 COPY --from=build /app/migrations /app/migrations
 COPY --from=build /app/app.py /app/app.py
 COPY --from=build /app/celery_worker.py /app/celery_worker.py

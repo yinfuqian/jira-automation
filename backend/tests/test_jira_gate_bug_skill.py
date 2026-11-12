@@ -151,6 +151,11 @@ class DefectGateSkillDefinitionTests(unittest.TestCase):
         ):
             self.assertIn(required, checklist)
         self.assertNotIn("含时区", checklist)
+        # 日志门禁只判断证据是否存在且可打开，不要求采集时段覆盖故障时刻。
+        self.assertIn("日志只需非空、可打开且内容与故障现象相关", checklist)
+        self.assertIn("不要求覆盖故障时间点", checklist)
+        self.assertNotIn("日志需覆盖故障时间点", checklist)
+        self.assertNotIn("明显与故障时间不符", checklist)
         self.assertNotIn("补入口、操作、数据", (SKILL_DIR / "SKILL.md").read_text(encoding="utf-8"))
         for required in ("自查", "结论", "证据", "selfCheckKeywords"):
             self.assertIn(required, self_check)
