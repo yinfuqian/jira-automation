@@ -92,7 +92,7 @@
       "name": "call3.0天弘基金",
       "description": "天弘基金定制版",
       "modules": {
-        "fe-yicall-web": "release/3.0-tianhongjijin",
+        "fe-yicall-web": "release/3.0-tianhongjijing",
         "aiforce2": "release/3.0.24-thjj",
         "aiforce-web": "release/v2.7",
         "asr-tts-adaptor": "release/0.5.0",
