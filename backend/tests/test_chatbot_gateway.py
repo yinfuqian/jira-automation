@@ -388,13 +388,15 @@ class PromptTest(unittest.TestCase):
         project = SimpleNamespace(name="call3.1主线")
         return build_prompt("这个功能怎么实现的", project, workspace, max_answer_chars)
 
-    def test_prompt_targets_product_readers_and_limits_evidence(self):
-        """提示词要求业务语言、四段结构，并把代码依据收敛到最多 3 条。"""
+    def test_prompt_targets_product_readers_with_three_sections(self):
+        """提示词要求业务语言与三段结构，且不得出现类名、表名等技术标识。"""
         prompt = self.render_prompt()
         self.assertIn("产品经理", prompt)
-        for section in ("**结论**", "**要点**", "**影响与注意**", "**依据**"):
+        for section in ("**结论**", "**关联逻辑与成因**", "**影响与注意**"):
             self.assertIn(section, prompt)
-        self.assertIn("最多 3 条", prompt)
+        self.assertNotIn("**依据**", prompt)
+        self.assertIn("不出现类名、方法名、表名、字段名", prompt)
+        self.assertIn("3~5 条", prompt)
         self.assertIn("禁止贴代码块", prompt)
         self.assertIn("300~600 字", prompt)
 

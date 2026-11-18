@@ -810,7 +810,7 @@ node ..\skills\jira-gate-bug\scripts\analysis-cli.mjs render --input <结果JSON
 - 只在群聊里被 @ 时触发；单聊直接提示改用群聊。回答范围包括代码、SQL、配置和接口文档。
 - 流式消息自首次发送起 10 分钟内必须 `finish=true`；超过配置的软截止时间会改为主动推送 `aibot_send_msg`。
 - 单会话 30 条/分钟；打字机分段数由 `backend/config/chatbot.json` 的 `gateway.typewriter_max_chunks` 控制，默认 12 段、间隔 2 秒。
-- 回答面向产品经理：固定「结论 / 要点 / 影响与注意 / 依据」四段，代码依据最多 3 条且放在最后，不贴代码块、SQL 与检索过程；默认 1200 字，可用 `answer.max_answer_chars` 调整。
+- 回答面向产品经理：固定「结论 / 关联逻辑与成因 / 影响与注意」三段；结论用 1~2 句业务语言，正文不出现类名、方法名、表名、字段名等技术标识，不贴代码块、SQL 与检索过程；默认 1200 字，可用 `answer.max_answer_chars` 调整。
 - 仓库地址优先取 `repos.module_repo_urls`，其次 `repos.repo_url_template`，最后用 GitLab 搜索接口按模块名解析（凭据复用 `GIT_BASE_URL`/`GIT_USER`/`GIT_PASSWORD`/`GITLAB_PRIVATE_TOKEN`）。
 - 每个「模块 + 分支」在 `REPO_CACHE_DIR/chatbot/repos` 下维护一份缓存仓库。`repos.refresh_interval_seconds` 默认 3600 秒：窗口内问答直接复用缓存 ref，不再 fetch；超过窗口后由下一次问答同步最新提交。设为 `0` 表示每次都拉取。
 - `backend/config/chatbot.json` 已内置到镜像，无需挂载宿主机目录；修改后必须重新构建后端镜像并重启网关与 Worker，进程不会热加载。
