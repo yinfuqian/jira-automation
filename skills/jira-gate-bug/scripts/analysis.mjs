@@ -435,6 +435,13 @@ function selectPrimaryInputForProduct(input, product, options) {
  * 校验主模块与关联模块使用的都是远端真实存在的精准 Tag。
  * 该检查在提交分析前完成；非公共模块缺少 Tag 或 Tag 在远端不存在时，门禁必须打回。
  */
+function isTagUnverifiableFailure(item) {
+  if (!item || typeof item !== "object") return false;
+  if (String(item.status || "").toLowerCase() === "unverifiable") return true;
+  const reason = String(item.reason || "");
+  return /(?:认证|鉴权|授权|permission\s+denied|access\s+denied|authentication|authorization|unable\s+to\s+access|could\s+not\s+read|connection|timed?\s*out|timeout|network|ssl|tls|certificate|repository\s+not\s+found|http\s+5\d\d|无法访问|无法执行|无法确认|服务不可用)/i.test(reason);
+}
+
 export async function validateScopeTags(scope, options = {}) {
   if (!scope) throw new Error("缺少分析范围，无法校验精准 Tag");
   const relatedModules = (scope.relatedModules || []).map((item) => ({
@@ -456,18 +463,39 @@ export async function validateScopeTags(scope, options = {}) {
     },
   });
   if (!result || result.ok !== true) {
-    const missing = Array.isArray(result && result.missing) ? result.missing : [];
-    const details = missing
+    const reportedMissing = Array.isArray(result && result.missing) ? result.missing : [];
+    const reportedUnverifiable = Array.isArray(result && result.unverifiable) ? result.unverifiable : [];
+    const missing = reportedMissing.filter((item) => !isTagUnverifiableFailure(item));
+    const unverifiable = [
+      ...reportedUnverifiable,
+      ...reportedMissing.filter((item) => isTagUnverifiableFailure(item)),
+    ];
+    if (missing.length) {
+      const details = missing
+        .map((item) => `${item.moduleName || "unknown"}:${item.tagVersion || "（未提供 Tag）"}${item.reason ? `（${item.reason}）` : ""}`)
+        .join("；");
+      throw new ScopeResolutionError(
+        "精准 Git Tag 校验失败：" + (details || "远端仓库中找不到指定 Tag"),
+        SCOPE_ERROR_REASONS.PRECISE_TAG_INVALID,
+        {
+          product: scope.productName || scope.productId || "",
+          module: scope.moduleName || scope.moduleId || "",
+          version: scope.tagVersion || "",
+          missing,
+        },
+      );
+    }
+    const details = unverifiable
       .map((item) => `${item.moduleName || "unknown"}:${item.tagVersion || "（未提供 Tag）"}${item.reason ? `（${item.reason}）` : ""}`)
       .join("；");
     throw new ScopeResolutionError(
-      "精准 Git Tag 校验失败：" + (details || "远端仓库中找不到指定 Tag"),
-      SCOPE_ERROR_REASONS.PRECISE_TAG_INVALID,
+      "精准 Git Tag 暂时无法验证：" + (details || "分析服务未返回校验结果"),
+      SCOPE_ERROR_REASONS.PRECISE_TAG_UNVERIFIABLE,
       {
         product: scope.productName || scope.productId || "",
         module: scope.moduleName || scope.moduleId || "",
         version: scope.tagVersion || "",
-        missing,
+        unverifiable,
       },
     );
   }

@@ -329,7 +329,7 @@ def inspect_git_tag(address, tag_version, timeout=30):
     """检查远端仓库中是否存在精确 Tag，返回结构化结果而不抛出业务异常。"""
     tag = str(tag_version or "").strip()
     if not address or not tag:
-        return {"exists": False, "reason": "缺少仓库地址或 Tag"}
+        return {"exists": False, "status": "missing", "reason": "缺少仓库地址或 Tag"}
 
     try:
         result = subprocess.run(
@@ -347,18 +347,21 @@ def inspect_git_tag(address, tag_version, timeout=30):
             timeout=timeout,
         )
     except subprocess.TimeoutExpired:
-        return {"exists": False, "reason": f"校验 Tag 超时：{tag}"}
+        return {"exists": False, "status": "unverifiable", "reason": f"校验 Tag 超时：{tag}"}
     except OSError as exc:
-        return {"exists": False, "reason": f"无法执行 Git Tag 校验：{exc}"}
+        return {"exists": False, "status": "unverifiable", "reason": f"无法执行 Git Tag 校验：{exc}"}
 
     if result.returncode != 0:
         stderr = _sanitize_git_error(getattr(result, "stderr", ""))
         detail = stderr.splitlines()[-1].strip() if stderr else f"Git 返回状态码 {result.returncode}"
-        return {"exists": False, "reason": detail}
+        # 非零退出不代表 Tag 不存在，常见原因是认证、权限或网络异常。
+        # 只有 ls-remote 成功且没有返回 refs/tags/<tag> 时，才能判定为缺失。
+        return {"exists": False, "status": "unverifiable", "reason": detail}
 
     exists = bool(_decode_process_output(getattr(result, "stdout", "")).strip())
     return {
         "exists": exists,
+        "status": "exists" if exists else "missing",
         "reason": "" if exists else f"仓库中不存在精确 Tag：{tag}",
     }
 
@@ -367,6 +370,7 @@ def validate_analysis_repositories(repositories, tag_checker=None):
     """校验分析用主模块和关联模块的精准 Tag 均真实存在。"""
     checker = tag_checker or inspect_git_tag
     missing = []
+    unverifiable = []
     skipped_common = []
     for repository in repositories or []:
         module_name = str(repository.get("moduleName") or repository.get("moduleId") or "unknown")
@@ -395,22 +399,31 @@ def validate_analysis_repositories(repositories, tag_checker=None):
         try:
             checked = checker(address, tag_version)
         except Exception as exc:
-            checked = {"exists": False, "reason": str(exc)}
+            checked = {"exists": False, "status": "unverifiable", "reason": str(exc)}
         if isinstance(checked, bool):
-            checked = {"exists": checked, "reason": "" if checked else f"仓库中不存在精确 Tag：{tag_version}"}
+            checked = {
+                "exists": checked,
+                "status": "exists" if checked else "missing",
+                "reason": "" if checked else f"仓库中不存在精确 Tag：{tag_version}",
+            }
         if not checked.get("exists"):
-            missing.append({
+            item = {
                 "moduleName": module_name,
                 "branchAddress": address,
                 "tagVersion": tag_version,
                 "reason": checked.get("reason") or f"仓库中不存在精确 Tag：{tag_version}",
-            })
+            }
+            if str(checked.get("status") or "").lower() == "unverifiable":
+                unverifiable.append(item)
+            else:
+                missing.append(item)
 
     return {
-        "ok": not missing,
+        "ok": not missing and not unverifiable,
         "checked": len(repositories or []),
         "skippedCommon": skipped_common,
         "missing": missing,
+        "unverifiable": unverifiable,
     }
 
 

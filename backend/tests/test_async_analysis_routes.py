@@ -259,8 +259,54 @@ class AsyncAnalysisRouteTests(unittest.TestCase):
         self.assertFalse(result["ok"])
         self.assertEqual(result["checked"], 2)
         self.assertEqual(len(result["missing"]), 1)
+        self.assertEqual(result["unverifiable"], [])
         self.assertEqual(result["missing"][0]["moduleName"], "bot-common")
         self.assertEqual(result["missing"][0]["tagVersion"], "missing-tag")
+
+    def test_validate_analysis_repositories_separates_unverifiable_tags(self):
+        """GitLab 认证/网络异常只能记为无法验证，不能当成 Tag 不存在。"""
+        routes, _, _, _, _ = load_routes_module()
+        repositories = [{
+            "role": "primary",
+            "moduleName": "bot-management",
+            "branchAddress": "https://git.example/bot-management.git",
+            "tagVersion": "v0.4.2-ZYKJ20230149-rc225",
+        }]
+
+        result = routes.validate_analysis_repositories(
+            repositories,
+            tag_checker=lambda _address, _tag: {
+                "exists": False,
+                "status": "unverifiable",
+                "reason": "GitLab 认证失败，无法确认远端 Tag",
+            },
+        )
+
+        self.assertFalse(result["ok"])
+        self.assertEqual(result["missing"], [])
+        self.assertEqual(len(result["unverifiable"]), 1)
+        self.assertEqual(result["unverifiable"][0]["moduleName"], "bot-management")
+        self.assertIn("认证失败", result["unverifiable"][0]["reason"])
+
+    def test_inspect_git_tag_nonzero_exit_is_unverifiable(self):
+        """ls-remote 非零退出表示无法校验，而不是远端确认 Tag 不存在。"""
+        routes, _, _, _, _ = load_routes_module()
+        failed = subprocess.CompletedProcess(
+            args=["git", "ls-remote"],
+            returncode=128,
+            stdout="",
+            stderr="fatal: Authentication failed for GitLab",
+        )
+
+        with mock.patch.object(routes.subprocess, "run", return_value=failed):
+            result = routes.inspect_git_tag(
+                "https://git.example/bot-management.git",
+                "v0.4.2-ZYKJ20230149-rc225",
+            )
+
+        self.assertFalse(result["exists"])
+        self.assertEqual(result["status"], "unverifiable")
+        self.assertIn("Authentication failed", result["reason"])
 
     def test_build_analysis_repositories_keeps_common_related_module(self):
         routes, _, _, _, _ = load_routes_module()

@@ -93,6 +93,8 @@ class DefectGateSkillDefinitionTests(unittest.TestCase):
             "打回流转后经办人必须是提单人",
             "缺少非公共模块的精准 Tag",
             "公共组件",
+            "scope-tag-unverifiable",
+            "自动分析已跳过",
         ):
             self.assertIn(required, content)
 
@@ -113,13 +115,16 @@ class DefectGateSkillDefinitionTests(unittest.TestCase):
         self.assertIn("不得仅凭 `ANALYSIS_API_TOKEN` 为空", content)
         self.assertNotIn("未配置时脚本会直接报错", content)
 
-    def test_runtime_prompt_rejects_missing_precise_tag_but_skips_mapping_gap(self):
-        """缺非公共模块精准 Tag 必须打回；内部映射缺口才跳过且不改状态。"""
+    def test_runtime_prompt_separates_missing_tag_from_unverifiable_dependency(self):
+        """明确缺 Tag 打回；Tag 无法验证或内部映射缺口只跳过自动分析。"""
         runtime = json.loads((SKILL_DIR / "runtime.json").read_text(encoding="utf-8"))
         prompt = runtime["prompt_template"]
 
         self.assertIn("非公共模块缺少自己的精准 Tag", prompt)
         self.assertIn("requiresReject=true", prompt)
+        self.assertIn("scope-tag-unverifiable", prompt)
+        self.assertIn("自动分析已跳过", prompt)
+        self.assertIn("不得写成 (x)", prompt)
         self.assertIn("公共组件", prompt)
         self.assertIn("common: true", prompt)
         self.assertIn("scope-mapping.json 缺映射", prompt)
@@ -151,6 +156,8 @@ class DefectGateSkillDefinitionTests(unittest.TestCase):
             "缺少非公共模块的精准 Tag",
             "公共组件没有精准 Tag 不打回",
             "不执行打回流转",
+            "GitLab 认证失败",
+            "自动分析已跳过",
         ):
             self.assertIn(required, checklist)
         self.assertNotIn("含时区", checklist)
@@ -450,6 +457,72 @@ console.log(JSON.stringify(failure));
         self.assertTrue(payload["requiresReject"])
         self.assertFalse(payload["skipped"])
         self.assertEqual(payload["details"]["missing"][0]["moduleName"], "yicall-dialog")
+
+    @unittest.skipIf(NODE_BIN is None, "需要 node 运行时才能执行技能脚本")
+    def test_unverifiable_remote_tag_skips_analysis_without_reject_marker(self):
+        """GitLab 认证失败只是暂时无法验证 Tag，不能画成门禁红叉或执行打回。"""
+        analysis_url = (SKILL_DIR / "scripts" / "analysis.mjs").as_uri()
+        scope_url = (SKILL_DIR / "scripts" / "scope.mjs").as_uri()
+        driver = """
+process.env.ANALYSIS_API_TOKEN = "test-token";
+globalThis.fetch = async () => ({
+  ok: true,
+  status: 200,
+  text: async () => JSON.stringify({
+    ok: false,
+    missing: [],
+    unverifiable: [
+      {
+        moduleName: "bot-management",
+        tagVersion: "v0.4.2-ZYKJ20230149-rc225",
+        reason: "GitLab 认证失败，无法确认远端 Tag",
+      },
+      {
+        moduleName: "bot-portal",
+        tagVersion: "v0.3.3-ZYKJ20230149-rc1",
+        reason: "GitLab 认证失败，无法确认远端 Tag",
+      },
+    ],
+  }),
+});
+const { validateScopeTags } = await import("__ANALYSIS__");
+const { buildScopeFailurePayload } = await import("__SCOPE__");
+let failure = null;
+try {
+  await validateScopeTags({
+    productId: "1",
+    productName: "bot",
+    moduleId: "2",
+    moduleName: "bot-management",
+    branchAddress: "https://code.in.wezhuiyi.com/bot/bot-management.git",
+    tagVersion: "v0.4.2-ZYKJ20230149-rc225",
+    relatedModules: [{
+      moduleId: "3",
+      moduleName: "bot-portal",
+      branchAddress: "https://code.in.wezhuiyi.com/bot/bot-portal.git",
+      tagVersion: "v0.3.3-ZYKJ20230149-rc1",
+    }],
+  }, { baseUrl: "http://127.0.0.1:5000", token: "test-token" });
+} catch (error) {
+  failure = buildScopeFailurePayload(error, process.argv[1]);
+}
+console.log(JSON.stringify(failure));
+""".replace("__ANALYSIS__", analysis_url).replace("__SCOPE__", scope_url)
+
+        output = self.run_node(driver)
+        payload = json.loads(output.strip().splitlines()[-1])
+
+        self.assertEqual(payload["reason"], "scope-tag-unverifiable")
+        self.assertEqual(payload["gateResult"], "未检查")
+        self.assertTrue(payload["skipped"])
+        self.assertTrue(payload["analysisSkipped"])
+        self.assertFalse(payload["requiresReject"])
+        self.assertNotIn("(x)", payload["comment"])
+        self.assertIn("自动分析已跳过", payload["comment"])
+        self.assertIn("未满足条件：精准 Tag 可访问性", payload["comment"])
+        self.assertIn("GitLab 认证失败", payload["comment"])
+        self.assertIn("bot-management:v0.4.2-ZYKJ20230149-rc225", payload["comment"])
+        self.assertIn("不修改经办人", payload["comment"])
 
     @unittest.skipIf(NODE_BIN is None, "需要 node 运行时才能执行技能脚本")
     def test_mapping_gap_section_has_no_duplicate_heading(self):

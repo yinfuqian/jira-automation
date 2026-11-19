@@ -15,6 +15,7 @@ export const SCOPE_ERROR_REASONS = Object.freeze({
   MAPPING_INVALID: "scope-mapping-invalid",
   MAPPING_AMBIGUOUS: "scope-mapping-ambiguous",
   PRECISE_TAG_INVALID: "scope-tag-invalid",
+  PRECISE_TAG_UNVERIFIABLE: "scope-tag-unverifiable",
 });
 
 
@@ -105,13 +106,14 @@ export function buildMappingOwnerComment(error, configPath) {
 export function buildScopeFailurePayload(error, configPath) {
   const reason = String((error && error.reason) || (error && error.code) || "analysis-error");
   const mappingGap = isMappingConfigurationReason(reason);
+  const tagUnverifiable = reason === SCOPE_ERROR_REASONS.PRECISE_TAG_UNVERIFIABLE;
   const requiresReject = reason === SCOPE_ERROR_REASONS.INPUT_MISSING ||
     reason === SCOPE_ERROR_REASONS.PRECISE_TAG_INVALID;
   const payload = {
     ok: false,
     reason,
     message: String((error && error.message) || error),
-    skipped: mappingGap,
+    skipped: mappingGap || tagUnverifiable,
     requiresReject,
   };
   if (error && error.details && typeof error.details === "object") {
@@ -121,10 +123,46 @@ export function buildScopeFailurePayload(error, configPath) {
     payload.gateResult = "未检查";
     payload.mappingOwner = resolveMappingOwner(configPath);
     payload.comment = buildMappingOwnerComment(error, configPath);
+  } else if (tagUnverifiable) {
+    payload.gateResult = "未检查";
+    payload.analysisSkipped = true;
+    payload.comment = buildAnalysisSkippedComment(error);
   } else if (requiresReject) {
     payload.gateResult = "不通过";
   }
   return payload;
+}
+
+
+/** 自动分析因外部依赖暂时不可用而跳过时使用的评论，不把条件不足画成门禁错误。 */
+export function buildAnalysisSkippedComment(error) {
+  const details = (error && error.details) || {};
+  const entries = Array.isArray(details.unverifiable)
+    ? details.unverifiable
+    : (Array.isArray(details.missing) ? details.missing : []);
+  const modules = entries
+    .map((item) => {
+      const name = String((item && item.moduleName) || "unknown").trim();
+      const tag = String((item && item.tagVersion) || "").trim();
+      return name + (tag ? ":" + tag : "");
+    })
+    .filter(Boolean);
+  const reasons = [...new Set(entries
+    .map((item) => String((item && item.reason) || "").trim())
+    .filter(Boolean))];
+  const reasonText = reasons.length
+    ? reasons.join("；")
+    : String((error && error.message) || "分析服务暂时无法完成精准 Tag 校验").trim();
+  const lines = [
+    "h3. 缺陷单预检：信息完整（自动分析已跳过）",
+    "",
+    "* 结论：缺陷单信息完整；自动分析条件暂未满足，本次跳过自动分析，不执行打回、不改变工作流状态、不修改经办人。",
+    "* 未满足条件：精准 Tag 可访问性。",
+    "* 原因：" + reasonText,
+  ];
+  if (modules.length) lines.push("* 涉及模块：" + modules.join("、"));
+  lines.push("* 处理方式：修复 GitLab 访问凭证和权限后重新触发即可；无需提单人重复补充工单内容。");
+  return lines.join("\n");
 }
 
 
