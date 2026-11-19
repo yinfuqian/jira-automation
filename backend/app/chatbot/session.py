@@ -171,6 +171,24 @@ class ChatSessionStore:
         else:
             self._client.delete(self._session_key(chatid, userid))
 
+    def get_context(self, chatid, userid, name):
+        """读取会话内的附加上下文（如上一轮故障分析结果）。"""
+        value = self._load_session(chatid, userid).get(str(name or ""))
+        return dict(value) if isinstance(value, dict) else {}
+
+    def set_context(self, chatid, userid, name, value):
+        """保存会话内的附加上下文；传空值表示删除。"""
+        key = str(name or "").strip()
+        if not key:
+            return
+        payload = self._load_session(chatid, userid)
+        if value:
+            payload[key] = dict(value) if isinstance(value, dict) else value
+        else:
+            payload.pop(key, None)
+        payload["updated_at"] = time.time()
+        self._save_session(chatid, userid, payload)
+
     def reset(self, chatid, userid):
         """删除整个会话，包含项目选择、待回答问题与故障追问状态。"""
         self._client.delete(self._session_key(chatid, userid))

@@ -191,7 +191,7 @@ async function main() {
 main().catch((error) => {
   const { options } = parseArgs(process.argv.slice(2));
   const failure = buildScopeFailurePayload(error, callOptions(options).configPath);
-  if (failure.skipped) {
+  if (failure.skipped || failure.requiresReject) {
     console.log(JSON.stringify(failure, null, 2));
     return;
   }

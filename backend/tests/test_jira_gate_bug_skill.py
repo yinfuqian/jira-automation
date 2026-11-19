@@ -69,7 +69,7 @@ class DefectGateSkillDefinitionTests(unittest.TestCase):
             "完整性检查",
             "完整性检查必须同时检查可辨认图片",
             "部署清单",
-            "模块与版本",
+            "模块与精准 Tag",
             "持续存在",
             "时间豁免判定",
             "Jira 模块/组件字段为空不等于模块缺失",
@@ -91,8 +91,8 @@ class DefectGateSkillDefinitionTests(unittest.TestCase):
             "ANALYSIS_API_TOKEN",
             "rejectTransitionName",
             "打回流转后经办人必须是提单人",
-            "自动分析条件不足",
-            "不执行打回流转",
+            "缺少非公共模块的精准 Tag",
+            "公共组件",
         ):
             self.assertIn(required, content)
 
@@ -113,14 +113,16 @@ class DefectGateSkillDefinitionTests(unittest.TestCase):
         self.assertIn("不得仅凭 `ANALYSIS_API_TOKEN` 为空", content)
         self.assertNotIn("未配置时脚本会直接报错", content)
 
-    def test_runtime_prompt_does_not_reject_for_missing_analysis_conditions(self):
-        """信息完整但缺少 Tag 等自动分析条件时，不能把门禁分支误导成打回。"""
+    def test_runtime_prompt_rejects_missing_precise_tag_but_skips_mapping_gap(self):
+        """缺非公共模块精准 Tag 必须打回；内部映射缺口才跳过且不改状态。"""
         runtime = json.loads((SKILL_DIR / "runtime.json").read_text(encoding="utf-8"))
         prompt = runtime["prompt_template"]
 
-        self.assertIn("只有缺陷单信息不完整", prompt)
-        self.assertIn("自动分析条件不足", prompt)
-        self.assertIn("不打回、不改变工作流状态、不修改经办人", prompt)
+        self.assertIn("非公共模块缺少自己的精准 Tag", prompt)
+        self.assertIn("requiresReject=true", prompt)
+        self.assertIn("公共组件", prompt)
+        self.assertIn("common: true", prompt)
+        self.assertIn("scope-mapping.json 缺映射", prompt)
         self.assertNotIn("缺陷单信息不完整或缺少分析参数就打回", prompt)
 
     def test_references_define_judgement_rules(self):
@@ -138,15 +140,16 @@ class DefectGateSkillDefinitionTests(unittest.TestCase):
             "日志",
             "明确缺陷不需要额外提供日志信息",
             "可辨认图片",
-            "可辨认图片中的模块/组件",
+            "可辨认图片中的模块组件及模块版本",
             "持续存在",
             "部署清单",
-            "模块与版本",
+            "模块:精准Tag",
             "不允许上线",
             "不要求修复版本",
             "不要求环境入口或操作版本",
             "mappingOwner",
-            "自动分析条件不足",
+            "缺少非公共模块的精准 Tag",
+            "公共组件没有精准 Tag 不打回",
             "不执行打回流转",
         ):
             self.assertIn(required, checklist)
@@ -404,6 +407,49 @@ console.log(JSON.stringify(failure));
         self.assertNotIn("转派给", payload["comment"])
         self.assertNotIn("jira-cli.mjs assign", payload["comment"])
         self.assertNotIn("打回", payload["comment"])
+
+    @unittest.skipIf(NODE_BIN is None, "需要 node 运行时才能执行技能脚本")
+    def test_missing_remote_precise_tag_requires_reject(self):
+        """远端找不到模块 Tag 时必须返回不通过并要求打回。"""
+        analysis_url = (SKILL_DIR / "scripts" / "analysis.mjs").as_uri()
+        scope_url = (SKILL_DIR / "scripts" / "scope.mjs").as_uri()
+        driver = """
+process.env.ANALYSIS_API_TOKEN = "test-token";
+globalThis.fetch = async () => ({
+  ok: true,
+  status: 200,
+  text: async () => JSON.stringify({
+    ok: false,
+    missing: [{ moduleName: "yicall-dialog", tagVersion: "3.1", reason: "tag_not_found" }],
+  }),
+});
+const { validateScopeTags } = await import("__ANALYSIS__");
+const { buildScopeFailurePayload } = await import("__SCOPE__");
+let failure = null;
+try {
+  await validateScopeTags({
+    productId: "1",
+    productName: "Call",
+    moduleId: "2",
+    moduleName: "yicall-dialog",
+    branchAddress: "https://code.in.wezhuiyi.com/yicall/yicall-dialog.git",
+    tagVersion: "3.1",
+    relatedModules: [],
+  }, { baseUrl: "http://127.0.0.1:5000", token: "test-token" });
+} catch (error) {
+  failure = buildScopeFailurePayload(error, process.argv[1]);
+}
+console.log(JSON.stringify(failure));
+""".replace("__ANALYSIS__", analysis_url).replace("__SCOPE__", scope_url)
+
+        output = self.run_node(driver)
+        payload = json.loads(output.strip().splitlines()[-1])
+
+        self.assertEqual(payload["reason"], "scope-tag-invalid")
+        self.assertEqual(payload["gateResult"], "不通过")
+        self.assertTrue(payload["requiresReject"])
+        self.assertFalse(payload["skipped"])
+        self.assertEqual(payload["details"]["missing"][0]["moduleName"], "yicall-dialog")
 
     @unittest.skipIf(NODE_BIN is None, "需要 node 运行时才能执行技能脚本")
     def test_mapping_gap_section_has_no_duplicate_heading(self):
@@ -1452,8 +1498,57 @@ console.log(JSON.stringify(resolved));
         }])
 
     @unittest.skipIf(NODE_BIN is None, "需要 node 运行时才能执行技能脚本")
-    def test_fault_scope_keeps_multiple_jira_modules_and_rejects_ambiguous_versions(self):
-        """Jira 有多个模块时保留全部，第一条只作分析入口；多个版本仍不能猜测。"""
+    def test_scope_resolution_allows_common_related_module_without_tag(self):
+        """公共组件只在代码引用时联动拉取，不要求评论提供精准 Tag。"""
+        analysis_url = (SKILL_DIR / "scripts" / "analysis.mjs").as_uri()
+        with tempfile.TemporaryDirectory() as temp_dir:
+            config_path = Path(temp_dir) / "scope-mapping.json"
+            config_path.write_text(json.dumps({
+                "versionRules": [{"name": "exact-tag", "pattern": "^.+$", "ref": "{version}"}],
+                "products": {
+                    "see": {
+                        "modules": {
+                            "see-task": {"repoUrl": "https://code.in.wezhuiyi.com/see/see-task.git"},
+                            "see-common-util": {
+                                "repoUrl": "https://code.in.wezhuiyi.com/see/see-common-util.git",
+                                "common": True,
+                            },
+                        }
+                    }
+                },
+            }, ensure_ascii=False), encoding="utf-8")
+            driver = """
+process.env.ANALYSIS_API_TOKEN = "test-token";
+globalThis.fetch = async (url) => {
+  const target = String(url);
+  let payload = {};
+  if (target.includes("/product/get")) payload = { products: [{ id: 1, name: "see" }] };
+  else if (target.includes("/module/search")) {
+    const name = decodeURIComponent(new URL(target).searchParams.get("names"));
+    payload = { modules: [{ module_id: name === "see-task" ? 2 : 3, module_name: name, branch: null }] };
+  } else return { ok: false, status: 404, text: async () => JSON.stringify({ error: target }) };
+  return { ok: true, status: 200, text: async () => JSON.stringify(payload) };
+};
+const { resolveScope } = await import("__ANALYSIS__");
+const resolved = await resolveScope({
+  product: "see",
+  module: "see-task",
+  version: "v1.2.3",
+  related: [{ module: "see-common-util", version: "" }],
+}, { configPath: process.argv[1] });
+console.log(JSON.stringify(resolved));
+""".replace("__ANALYSIS__", analysis_url)
+
+            output = self.run_node(driver, str(config_path))
+
+        payload = json.loads(output.strip().splitlines()[-1])
+        self.assertEqual(payload["relatedModules"][0]["moduleName"], "see-common-util")
+        self.assertEqual(payload["relatedModules"][0]["tagVersion"], "")
+        self.assertTrue(payload["relatedModules"][0]["common"])
+
+    @unittest.skipIf(NODE_BIN is None, "需要 node 运行时才能执行技能脚本")
+    def test_fault_scope_keeps_multiple_modules_and_requires_each_precise_tag(self):
+        """Jira 有多个模块时保留全部；Jira 版本字段不能替任何模块补精准 Tag。"""
         jira_url = (SKILL_DIR / "scripts" / "jira.mjs").as_uri()
         driver = """
 const { normalizeIssue, extractFaultAnalysisScope } = await import("__JIRA__");
@@ -1484,8 +1579,9 @@ console.log(JSON.stringify(extractFaultAnalysisScope(issue)));
             "version": "",
             "source": "Jira:模块/组件",
         }])
-        self.assertEqual(payload["candidates"]["version"], ["3.2.1", "3.2.2"])
+        self.assertEqual(payload["candidates"]["version"], [])
         self.assertEqual(payload["missing"], ["product", "version"])
+        self.assertEqual(payload["missingVersionModules"], ["see-task", "see-common"])
 
     @unittest.skipIf(NODE_BIN is None, "需要 node 运行时才能执行技能脚本")
     def test_fault_scope_extracts_module_version_from_description(self):
@@ -1500,7 +1596,7 @@ const issue = normalizeIssue({
   names: { customfield_10010: "问题发现产品" },
   fields: {
     summary: "对话标签查询失败",
-    description: "bot-3.2 模块发布后，对话标签查询失败。",
+        description: "bot-server:3.2 模块发布后，对话标签查询失败。",
     customfield_10010: { value: "bot" },
     components: [{ name: "bot-server" }],
     comment: { total: 0, comments: [] },
@@ -1515,6 +1611,7 @@ console.log(JSON.stringify(extractFaultAnalysisScope(issue)));
         self.assertEqual(payload["version"], "3.2")
         self.assertEqual(payload["sources"]["version"], "Jira:描述")
         self.assertEqual(payload["missing"], [])
+        self.assertEqual(payload["missingVersionModules"], [])
 
     @unittest.skipIf(NODE_BIN is None, "需要 node 运行时才能执行技能脚本")
     def test_fault_scope_extracts_module_version_from_summary(self):
@@ -1528,7 +1625,7 @@ const issue = normalizeIssue({
   self: "https://jira.in.wezhuiyi.com/rest/api/2/issue/11",
   names: { customfield_10010: "问题发现产品" },
   fields: {
-    summary: "bot-3.2 模块发布后，对话标签查询失败",
+        summary: "bot-server:3.2 模块发布后，对话标签查询失败",
     customfield_10010: { value: "bot" },
     components: [{ name: "bot-server" }],
     comment: { total: 0, comments: [] },
@@ -1543,6 +1640,7 @@ console.log(JSON.stringify(extractFaultAnalysisScope(issue)));
         self.assertEqual(payload["version"], "3.2")
         self.assertEqual(payload["sources"]["version"], "Jira:概要")
         self.assertEqual(payload["missing"], [])
+        self.assertEqual(payload["missingVersionModules"], [])
 
     @unittest.skipIf(NODE_BIN is None, "需要 node 运行时才能执行技能脚本")
     def test_fault_scope_does_not_use_fix_version_for_analysis(self):
@@ -1572,6 +1670,7 @@ console.log(JSON.stringify(extractFaultAnalysisScope(issue)));
 
         self.assertEqual(payload["version"], "")
         self.assertEqual(payload["missing"], ["version"])
+        self.assertEqual(payload["missingVersionModules"], ["bot-server"])
 
     @unittest.skipIf(NODE_BIN is None, "需要 node 运行时才能执行技能脚本")
     def test_fault_scope_ignores_fix_version_text_for_analysis(self):
@@ -1600,6 +1699,76 @@ console.log(JSON.stringify(extractFaultAnalysisScope(issue)));
 
         self.assertEqual(payload["version"], "")
         self.assertEqual(payload["missing"], ["version"])
+        self.assertEqual(payload["missingVersionModules"], ["bot-server"])
+
+    @unittest.skipIf(NODE_BIN is None, "需要 node 运行时才能执行技能脚本")
+    def test_fault_scope_does_not_turn_product_version_into_module_tag(self):
+        """Call 3.1 和概要中的 call3.1 只能识别产品，不能补 yicall 模块的精准 Tag。"""
+        jira_url = (SKILL_DIR / "scripts" / "jira.mjs").as_uri()
+        driver = """
+const { normalizeIssue, extractFaultAnalysisScope } = await import("__JIRA__");
+const issue = normalizeIssue({
+  key: "ZY20250063-4926",
+  id: "4926",
+  self: "https://jira.in.wezhuiyi.com/rest/api/2/issue/4926",
+  names: {
+    customfield_10010: "产品归属",
+    customfield_10011: "问题发现产品",
+  },
+  fields: {
+    summary: "【call3.1】招证 call 菜单显示空白",
+    customfield_10010: { value: "Call" },
+    customfield_10011: { value: "Call 3.1" },
+    components: [{ name: "yicall-dialog" }, { name: "yicall-management" }],
+    fixVersions: [{ name: "Call 3.1.0.ZSZQ_01.fix12" }],
+    versions: [],
+    comment: { total: 0, comments: [] },
+  },
+});
+console.log(JSON.stringify(extractFaultAnalysisScope(issue)));
+""".replace("__JIRA__", jira_url)
+
+        output = self.run_node(driver)
+        payload = json.loads(output.strip().splitlines()[-1])
+
+        self.assertEqual(payload["product"], "Call")
+        self.assertEqual(payload["module"], "yicall-dialog")
+        self.assertEqual(payload["version"], "")
+        self.assertEqual(payload["missing"], ["version"])
+        self.assertEqual(payload["missingVersionModules"], ["yicall-dialog", "yicall-management"])
+
+    @unittest.skipIf(NODE_BIN is None, "需要 node 运行时才能执行技能脚本")
+    def test_fault_scope_ignores_historical_ai_comment_version_evidence(self):
+        """历史 AI 预检评论里的“模块/版本”描述不能成为模块精准 Tag。"""
+        jira_url = (SKILL_DIR / "scripts" / "jira.mjs").as_uri()
+        driver = """
+const { normalizeIssue, extractFaultAnalysisScope } = await import("__JIRA__");
+const issue = normalizeIssue({
+  key: "KEY-13",
+  id: "13",
+  self: "https://jira.in.wezhuiyi.com/rest/api/2/issue/13",
+  names: { customfield_10010: "问题发现产品" },
+  fields: {
+    summary: "对话标签查询失败",
+    customfield_10010: { value: "bot" },
+    components: [{ name: "bot-server" }],
+    comment: { total: 1, comments: [{
+      id: "31",
+      author: { displayName: "AI", name: "ai" },
+      created: "2026-09-20T09:40:00Z",
+      body: "当前识别：产品={{yicall}}；模块={{情绪识别}}；版本={{3.1}}"
+    }] },
+  },
+});
+console.log(JSON.stringify(extractFaultAnalysisScope(issue)));
+""".replace("__JIRA__", jira_url)
+
+        output = self.run_node(driver)
+        payload = json.loads(output.strip().splitlines()[-1])
+
+        self.assertEqual(payload["version"], "")
+        self.assertEqual(payload["missing"], ["version"])
+        self.assertEqual(payload["missingVersionModules"], ["bot-server"])
 
     @unittest.skipIf(NODE_BIN is None, "需要 node 运行时才能执行技能脚本")
     def test_fault_scope_accepts_agent_recognized_image_version_override(self):
@@ -1628,6 +1797,7 @@ console.log(JSON.stringify(extractFaultAnalysisScope(issue, { version: "3.2" }))
         self.assertEqual(payload["version"], "3.2")
         self.assertEqual(payload["sources"]["version"], "调用方输入")
         self.assertEqual(payload["missing"], [])
+        self.assertEqual(payload["missingVersionModules"], [])
 
     @unittest.skipIf(NODE_BIN is None, "需要 node 运行时才能执行技能脚本")
     def test_fault_scope_accepts_agent_recognized_deployment_manifest_modules(self):
@@ -1669,6 +1839,7 @@ console.log(JSON.stringify(extractFaultAnalysisScope(issue, {
             {"module": "bot-portal", "version": "v0.4.0-ZYKJ20260089-rc2", "source": "调用方输入:可辨认图片"},
         ])
         self.assertEqual(payload["missing"], [])
+        self.assertEqual(payload["missingVersionModules"], [])
 
     @unittest.skipIf(NODE_BIN is None, "需要 node 运行时才能执行技能脚本")
     def test_skill_dir_is_absolute_and_loads_reject_config(self):

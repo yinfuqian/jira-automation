@@ -7,6 +7,7 @@
  *   node scripts/jira-cli.mjs get <KEY|URL>                   # 输出紧凑 Markdown 摘要（含评论）
  *   node scripts/jira-cli.mjs json <KEY|URL>                  # 输出规范化 JSON
  *   node scripts/jira-cli.mjs selfcheck <KEY|URL>             # 判断评论区是否已有自查结果
+ *   node scripts/jira-cli.mjs bot-analysis <KEY|URL>          # 判断是否知识机器人提单且已附分析
  *   node scripts/jira-cli.mjs log-exemption <KEY|URL>         # 判断效果类缺陷是否明确声明豁免日志/复现
  *   node scripts/jira-cli.mjs scope <KEY|URL>                 # 提取产品、模块、版本与可选分支
  *   node scripts/jira-cli.mjs attachments <KEY|URL> <目录>     # 下载缺陷单附件
@@ -302,6 +303,12 @@ async function main() {
       requireArgs(positional, 1, "log-exemption <KEY|URL>");
       const issue = await jira.getIssue(positional[0], callOptions);
       console.log(JSON.stringify(jira.findLogRequirementExemption(issue), null, 2));
+      return;
+    }
+    case "bot-analysis": {
+      requireArgs(positional, 1, "bot-analysis <KEY|URL>");
+      const issue = await jira.getIssue(positional[0], callOptions);
+      console.log(JSON.stringify(jira.findBotFiledAnalysis(issue), null, 2));
       return;
     }
     case "scope": {

@@ -14,6 +14,7 @@ export const SCOPE_ERROR_REASONS = Object.freeze({
   MAPPING_MISSING: "scope-mapping-missing",
   MAPPING_INVALID: "scope-mapping-invalid",
   MAPPING_AMBIGUOUS: "scope-mapping-ambiguous",
+  PRECISE_TAG_INVALID: "scope-tag-invalid",
 });
 
 
@@ -104,11 +105,14 @@ export function buildMappingOwnerComment(error, configPath) {
 export function buildScopeFailurePayload(error, configPath) {
   const reason = String((error && error.reason) || (error && error.code) || "analysis-error");
   const mappingGap = isMappingConfigurationReason(reason);
+  const requiresReject = reason === SCOPE_ERROR_REASONS.INPUT_MISSING ||
+    reason === SCOPE_ERROR_REASONS.PRECISE_TAG_INVALID;
   const payload = {
     ok: false,
     reason,
     message: String((error && error.message) || error),
     skipped: mappingGap,
+    requiresReject,
   };
   if (error && error.details && typeof error.details === "object") {
     payload.details = error.details;
@@ -117,6 +121,8 @@ export function buildScopeFailurePayload(error, configPath) {
     payload.gateResult = "未检查";
     payload.mappingOwner = resolveMappingOwner(configPath);
     payload.comment = buildMappingOwnerComment(error, configPath);
+  } else if (requiresReject) {
+    payload.gateResult = "不通过";
   }
   return payload;
 }

@@ -433,7 +433,7 @@ function selectPrimaryInputForProduct(input, product, options) {
 
 /**
  * 校验主模块与关联模块使用的都是远端真实存在的精准 Tag。
- * 该检查在提交分析前完成，找不到 Tag 时由门禁说明自动分析条件不足并跳过，不打回。
+ * 该检查在提交分析前完成；非公共模块缺少 Tag 或 Tag 在远端不存在时，门禁必须打回。
  */
 export async function validateScopeTags(scope, options = {}) {
   if (!scope) throw new Error("缺少分析范围，无法校验精准 Tag");
@@ -456,10 +456,20 @@ export async function validateScopeTags(scope, options = {}) {
     },
   });
   if (!result || result.ok !== true) {
-    const details = ((result && result.missing) || [])
+    const missing = Array.isArray(result && result.missing) ? result.missing : [];
+    const details = missing
       .map((item) => `${item.moduleName || "unknown"}:${item.tagVersion || "（未提供 Tag）"}${item.reason ? `（${item.reason}）` : ""}`)
       .join("；");
-    throw new Error("精准 Git Tag 校验失败：" + (details || "远端仓库中找不到指定 Tag"));
+    throw new ScopeResolutionError(
+      "精准 Git Tag 校验失败：" + (details || "远端仓库中找不到指定 Tag"),
+      SCOPE_ERROR_REASONS.PRECISE_TAG_INVALID,
+      {
+        product: scope.productName || scope.productId || "",
+        module: scope.moduleName || scope.moduleId || "",
+        version: scope.tagVersion || "",
+        missing,
+      },
+    );
   }
   return result;
 }

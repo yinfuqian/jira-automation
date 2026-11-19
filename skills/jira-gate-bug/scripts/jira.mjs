@@ -29,6 +29,8 @@ export const SELF_CHECK_KEYWORDS = {
 
 /** 效果类缺陷跳过日志/复现要求的固定评论语句。 */
 export const LOG_REQUIREMENT_EXEMPTION_PHRASE = "明确缺陷不需要额外提供日志信息";
+// 知识机器人提单后打的标签：表示已随单附过故障分析，门禁不需要重复跑一遍。
+export const BOT_FILED_LABEL = "chatbot-filed";
 
 /** Jira 中可能承载「问题发现产品」的字段名，按优先级排列。 */
 // 产品归属是当前 Jira 模板里唯一有值的产品字段；问题发现产品保留兼容旧单。
@@ -518,17 +520,18 @@ export function extractFaultAnalysisBlock(issue) {
 }
 
 
-/** 提取工单文本中的明确模块版本号，供 Jira 版本字段缺失时兜底。 */
+/**
+ * 提取工单文本中与具体模块成对出现的版本号。
+ * 产品级版本（例如概要里的 call3.1）不能证明任何模块的版本，
+ * 因此不再扫描任意“版本：x.y”文本，只接受模块名后的版本。
+ */
 function versionsFromText(value, moduleHints = []) {
   const text = String(value || "");
   const analysisLines = text
     .split(/\r?\n/)
     .filter((line) => !/(?:修复版本|修复的版本|fixed\s+version|fix\s+version)/i.test(line));
   const analysisText = analysisLines.join("\n");
-  const labelled = analysisLines
-    .filter((line) => /(?:版本|version|tag|release)/i.test(line))
-    .join(" ");
-  const matches = labelled ? (labelled.match(VERSION_TOKEN_RE) || []) : [];
+  const matches = [];
   for (const hint of uniqueTextValues(moduleHints)) {
     const escaped = String(hint).replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
     const modulePattern = new RegExp(
@@ -547,8 +550,8 @@ function versionsFromText(value, moduleHints = []) {
  *
  * 产品：调用方覆盖 > Jira「问题发现产品」 > 评论固定块（兼容人工纠正）。
  * 模块：调用方覆盖 > 评论固定块 > 描述/环境/概要中的模块声明 > Jira 组件。
- * 版本：调用方覆盖 > 评论固定块 > 影响版本/概要/环境/描述/评论 > 附件名或 Agent 从附件图片识别的模块版本对。
- * 修复版本不作为完整性依据，也不参与自动分析版本来源。
+ * 版本：调用方覆盖 > 评论固定块 > 文本或附件名中的“模块 + 版本”配对。
+ * 产品字段和修复版本只表示产品/修复计划，不能证明任何模块版本。
  * 分支：调用方覆盖 > 评论固定块；仓库地址与分支规则仍由 scope-mapping.json 维护。
  */
 export function extractFaultAnalysisScope(issue, overrides = {}) {
@@ -645,8 +648,9 @@ export function extractFaultAnalysisScope(issue, overrides = {}) {
   const addVersionSource = (source, values) => {
     for (const value of uniqueTextValues(values)) versionCandidates.push({ source, value });
   };
-  const moduleHints = uniqueTextValues([moduleValue, ...(issue.components || []), product]);
-  addVersionSource("Jira:影响版本", issue && issue.affectedVersions);
+  // 产品名只能用于定位产品，不能作为模块版本前缀。例如产品 Call 不能把
+  // 概要里的 call3.1 解释成 yicall-dialog:3.1。
+  const moduleHints = uniqueTextValues([moduleValue, ...(issue.components || [])]);
   addVersionSource("Jira:概要", versionsFromText(issue && issue.summary, moduleHints));
   addVersionSource("Jira:环境", versionsFromText(issue && issue.environment, moduleHints));
   addVersionSource("Jira:描述", versionsFromText(issue && issue.description, moduleHints));
@@ -719,6 +723,9 @@ export function extractFaultAnalysisScope(issue, overrides = {}) {
   if (!product) missing.push("product");
   if (!moduleValue) missing.push("module");
   if (!version) missing.push("version");
+  const missingVersionModules = modules
+    .filter((item) => item && item.module && !item.version)
+    .map((item) => item.module);
 
   return {
     product,
@@ -730,6 +737,7 @@ export function extractFaultAnalysisScope(issue, overrides = {}) {
     sources,
     candidates,
     missing,
+    missingVersionModules,
     block,
   };
 }
@@ -1099,6 +1107,27 @@ export function findSelfCheckComments(issue, options = {}) {
     reason: matches.length
       ? "评论区存在含自查结论与证据的评论：" + matches[0].snippet
       : "评论区未找到同时包含自查动作、结论与证据的评论",
+  };
+}
+
+/**
+ * 判断缺陷单是否由知识机器人提交并已附带分析。
+ * 命中时门禁跳过重复的自动分析；人工创建的单没有该标签，仍走完整流程。
+ */
+export function findBotFiledAnalysis(issue, options = {}) {
+  const label = String(options.label || BOT_FILED_LABEL).trim().toLowerCase();
+  const labels = ((issue && issue.labels) || []).map((item) => String(item || "").trim().toLowerCase());
+  const reports = ((issue && issue.attachments) || [])
+    .map((item) => String((item && item.filename) || ""))
+    .filter((name) => /故障分析|fault-analysis/i.test(name));
+  const found = labels.includes(label);
+  return {
+    found,
+    label,
+    reports,
+    reason: found
+      ? `缺陷单带 ${label} 标签，知识机器人已附带分析`
+      : `缺陷单没有 ${label} 标签，按普通缺陷执行自动分析`,
   };
 }
 

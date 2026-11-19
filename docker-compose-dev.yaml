@@ -321,6 +321,9 @@ services:
       REPO_CACHE_DIR: /tmp/jira-automation-repos-knowledge
       SKILL_RECOVER_ORPHANS: "false"
       GITLAB_SYNC_ON_STARTUP: "false"
+      DUTY_ROSTER_FILE: /app/config-knowledge/duty_roster.json
+      BUG_REPORT_ATTACHMENT_DIR: /data/skill-workspace-knowledge/bug-attachments
+      BUG_REPORT_CACHE_DIR: /data/skill-workspace-knowledge/bug-cache
     command:
       - celery
       - -A
@@ -330,16 +333,43 @@ services:
       - --hostname=worker-chatbot-knowledge@%h
       - -Q
       - chatbot-knowledge
-      - --concurrency=2
+      - --concurrency=20
+      # 并发 20 时默认会预取 80 条任务，容器重启会丢在途任务；只预取 1 条保证公平且不积压。
+      - --prefetch-multiplier=1
     volumes:
       - ./data/logs-knowledge:/app/app/logs
       - ./data/repos-knowledge:/tmp/jira-automation-repos-knowledge
       - ./data/users.csv:/data/users.csv:ro
       - ./data/codex-knowledge:/data/codex-knowledge
       - ./data/skill-workspace-knowledge:/data/skill-workspace-knowledge
+      - ./data/knowledge-config:/app/config-knowledge:ro
+      - ./skills:/data/skills:ro
     restart: unless-stopped
     depends_on:
       - api
+
+  # 值周数据定时同步：独立容器 + 独立浏览器登录态，不影响任何问答容器。
+  duty-sync-knowledge:
+    image: ${DUTY_SYNC_IMAGE:-registry.cn-hangzhou.aliyuncs.com/k8s-docker-image-yfq/tools:duty-sync-backend-2026-11-17-4}
+    network_mode: "host"
+    env_file:
+      - ${ENV_FILE:-.env}
+    environment:
+      PYTHONUNBUFFERED: "1"
+      TZ: Asia/Shanghai
+      DUTY_OUTPUT_FILE: /app/config-knowledge/duty_roster.json
+      DUTY_BROWSER_PROFILE: /data/duty-browser-profile
+      DUTY_LOGIN_QR_FILE: /app/app/logs/duty-login-qr.png
+      DUTY_WORK_DIR: /tmp/duty-sync
+    command:
+      - python
+      - duty_sync.py
+      - --loop
+    volumes:
+      - ./data/knowledge-config:/app/config-knowledge
+      - ./data/duty-browser-profile:/data/duty-browser-profile
+      - ./data/logs-knowledge:/app/app/logs
+    restart: unless-stopped
 
   chatbot-gateway-knowledge:
     image: ${KNOWLEDGE_BACKEND_IMAGE:-${BACKEND_IMAGE}}
@@ -352,6 +382,9 @@ services:
       SKILL_WORKSPACE_DIR: /data/skill-workspace-knowledge
       CODEX_HOME: /data/codex-knowledge
       REPO_CACHE_DIR: /tmp/jira-automation-repos-knowledge
+      DUTY_ROSTER_FILE: /app/config-knowledge/duty_roster.json
+      BUG_REPORT_ATTACHMENT_DIR: /data/skill-workspace-knowledge/bug-attachments
+      BUG_REPORT_CACHE_DIR: /data/skill-workspace-knowledge/bug-cache
     # 同一机器人只能保持一条长连接，因此知识机器人网关必须单实例。
     command:
       - python
@@ -361,6 +394,8 @@ services:
       - ./data/users.csv:/data/users.csv:ro
       - ./data/codex-knowledge:/data/codex-knowledge
       - ./data/skill-workspace-knowledge:/data/skill-workspace-knowledge
+      - ./data/knowledge-config:/app/config-knowledge:ro
+      - ./skills:/data/skills:ro
     restart: unless-stopped
     depends_on:
       - worker-chatbot-knowledge

@@ -1501,6 +1501,21 @@ def build_image_data_url(image_path):
     return f"data:{guess_image_mime_type(image_path)};base64,{encoded}"
 
 
+def ai_request_timeout(default=120.0):
+    """图片识别的模型调用超时时间（秒）。
+
+    OpenAI SDK 默认等待 600 秒且会自动重试，视觉请求一旦卡住就会让上游
+    机器人长时间没有回执。这里收敛到一个可配置的上限；文本日志分析不
+    使用该上限，保持原有时长不变。
+    """
+    raw = os.getenv("OPENAI_TIMEOUT", "")
+    try:
+        value = float(raw)
+    except (TypeError, ValueError):
+        value = float(default)
+    return max(10.0, value)
+
+
 def call_ai_multimodal_model(system_prompt, user_prompt, image_data_url):
     """处理 call_ai_multimodal_model 对应的业务步骤，并向调用方返回所需结果。"""
     api_key = app.config.get("OPENAI_KEY")
@@ -1519,7 +1534,12 @@ def call_ai_multimodal_model(system_prompt, user_prompt, image_data_url):
     image_data_urls = image_data_url if isinstance(image_data_url, list) else [image_data_url]
     image_data_urls = [item for item in image_data_urls if item]
     logging.info("\u5f00\u59cb\u8c03\u7528\u591a\u6a21\u6001 AI\uff1amodel=%s, style=%s", model, api_style)
-    client = OpenAI(api_key=api_key, base_url=base_url)
+    client = OpenAI(
+        api_key=api_key,
+        base_url=base_url,
+        timeout=ai_request_timeout(),
+        max_retries=1,
+    )
     try:
         if api_style in ("response", "responses"):
             content = [{"type": "input_text", "text": user_prompt}]

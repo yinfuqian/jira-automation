@@ -256,6 +256,8 @@ class KnowledgeSettings:
     enabled: bool = False
     space_keys: tuple = ()
     online_search_space_keys: tuple = ()
+    # 为 True 时只检索配置的空间，不再退回到全部可访问空间。
+    strict_space: bool = False
     labels: tuple = ()
     root_page_ids: tuple = ()
     search_limit: int = 30
@@ -266,6 +268,8 @@ class KnowledgeSettings:
     max_chunk_chars: int = 900
     chunk_overlap_chars: int = 120
     min_score: float = 0.15
+    # 架构图/拓扑图页面往往只有图片附件，开启后会对正文为空的图页做本地 OCR。
+    diagram_ocr: bool = True
     embedding_model: str = ""
     cache_ttl_seconds: int = 300
 
@@ -452,6 +456,9 @@ def _parse_knowledge(document):
         online_search_space_keys=_as_tuple(
             os.getenv("CONFLUENCE_ONLINE_SPACE_KEYS") or section.get("online_search_space_keys")
         ),
+        strict_space=_as_bool(
+            os.getenv("CONFLUENCE_STRICT_SPACE"), _as_bool(section.get("strict_space"), False)
+        ),
         labels=_as_tuple(os.getenv("CONFLUENCE_LABELS") or section.get("labels")),
         root_page_ids=_as_tuple(os.getenv("CONFLUENCE_ROOT_PAGE_IDS") or section.get("root_page_ids")),
         search_limit=_as_int(section.get("search_limit"), 30),
@@ -462,6 +469,9 @@ def _parse_knowledge(document):
         max_chunk_chars=_as_int(section.get("max_chunk_chars"), 900),
         chunk_overlap_chars=_as_int(section.get("chunk_overlap_chars"), 120, minimum=0),
         min_score=_as_float(os.getenv("KNOWLEDGE_MIN_SCORE"), _as_float(section.get("min_score"), 0.15)),
+        diagram_ocr=_as_bool(
+            os.getenv("KNOWLEDGE_DIAGRAM_OCR"), _as_bool(section.get("diagram_ocr"), True)
+        ),
         embedding_model=_as_text(section.get("embedding_model")),
         cache_ttl_seconds=_as_int(section.get("cache_ttl_seconds"), 300, minimum=0),
     )

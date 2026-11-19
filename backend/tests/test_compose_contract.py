@@ -38,7 +38,8 @@ class ComposeContractTests(unittest.TestCase):
             source.count("image: ${KNOWLEDGE_BACKEND_IMAGE:-${BACKEND_IMAGE}}"),
             2,
         )
-        self.assertEqual(source.count('network_mode: "host"'), 9)
+        # 9 个业务服务 + 值周同步服务（duty-sync-knowledge）
+        self.assertEqual(source.count('network_mode: "host"'), 10)
         self.assertIn("0.0.0.0:${API_PORT:-5000}", source)
         self.assertIn('"${API_PORT}:5000"', source)
 
@@ -64,7 +65,7 @@ class ComposeContractTests(unittest.TestCase):
     def test_online_compose_mounts_runtime_data_and_skills(self):
         source = DEV_COMPOSE_PATH.read_text(encoding="utf-8")
 
-        self.assertEqual(source.count("env_file:\n      - ${ENV_FILE:-.env}"), 9)
+        self.assertEqual(source.count("env_file:\n      - ${ENV_FILE:-.env}"), 10)
         self.assertEqual(source.count("./data/users.csv:/data/users.csv:ro"), 9)
         self.assertNotIn(":/users.csv", source)
         for mount in (

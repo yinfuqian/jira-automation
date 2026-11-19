@@ -97,9 +97,10 @@ def install_route_stubs():
     class FakeOpenAI:
         last_instance = None
 
-        def __init__(self, api_key=None, base_url=None):
+        def __init__(self, api_key=None, base_url=None, **kwargs):
             self.api_key = api_key
             self.base_url = base_url
+            self.options = dict(kwargs)
             self.chat = types.SimpleNamespace(completions=FakeChatCompletions())
             self.responses = FakeResponses()
             FakeOpenAI.last_instance = self
