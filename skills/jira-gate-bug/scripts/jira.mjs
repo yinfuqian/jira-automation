@@ -1,5 +1,5 @@
 /**
- * jira.mjs —— 缺陷单门禁（缺陷单完整性检查 + 自查结果检查 + 故障分析回写）使用的 Jira 客户端。
+ * jira.mjs —— 缺陷单门禁（缺陷单完整性检查 + 自查结果警告 + 故障分析回写）使用的 Jira 客户端。
  *
  * 运行环境约束：
  *   - 服务器容器 / codex exec：没有 node_repl，直接通过 shell 执行 scripts/jira-cli.mjs。

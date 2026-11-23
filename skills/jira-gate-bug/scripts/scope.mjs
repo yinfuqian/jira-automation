@@ -124,7 +124,8 @@ export function buildScopeFailurePayload(error, configPath) {
     payload.mappingOwner = resolveMappingOwner(configPath);
     payload.comment = buildMappingOwnerComment(error, configPath);
   } else if (tagUnverifiable) {
-    payload.gateResult = "未检查";
+    // 工单完整性已经通过；GitLab 暂时不可用只跳过自动分析，不阻断预检结论。
+    payload.gateResult = "通过";
     payload.analysisSkipped = true;
     payload.comment = buildAnalysisSkippedComment(error);
   } else if (requiresReject) {
@@ -154,9 +155,10 @@ export function buildAnalysisSkippedComment(error) {
     ? reasons.join("；")
     : String((error && error.message) || "分析服务暂时无法完成精准 Tag 校验").trim();
   const lines = [
-    "h3. 缺陷单预检：信息完整（自动分析已跳过）",
+    "h3. 缺陷单预检：通过（自动分析已跳过）",
     "",
-    "* 结论：缺陷单信息完整；自动分析条件暂未满足，本次跳过自动分析，不执行打回、不改变工作流状态、不修改经办人。",
+    "* 结论：缺陷单信息完整，缺陷单预检通过；自动分析条件暂未满足，本次跳过自动分析，不执行打回、不改变工作流状态、不修改经办人。",
+    "(!) *自查结果*：无有效自查结果，仅作为警告提示，不影响缺陷单预检通过。",
     "* 未满足条件：精准 Tag 可访问性。",
     "* 原因：" + reasonText,
   ];

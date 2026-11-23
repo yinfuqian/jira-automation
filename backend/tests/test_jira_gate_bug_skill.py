@@ -77,7 +77,7 @@ class DefectGateSkillDefinitionTests(unittest.TestCase):
             "scope-mapping-missing",
             "[~yinfuqian1193]",
             "打回",
-            "自查结果检查",
+            "自查结果提示（仅警告）",
             "自动故障分析",
             "analysis-cli.mjs",
             "jira-cli.mjs",
@@ -95,6 +95,9 @@ class DefectGateSkillDefinitionTests(unittest.TestCase):
             "公共组件",
             "scope-tag-unverifiable",
             "自动分析已跳过",
+            "自查结果仅作为警告",
+            "(!) *自查结果*",
+            "缺陷单预检：通过（自动分析已跳过）",
         ):
             self.assertIn(required, content)
 
@@ -128,6 +131,8 @@ class DefectGateSkillDefinitionTests(unittest.TestCase):
         self.assertIn("公共组件", prompt)
         self.assertIn("common: true", prompt)
         self.assertIn("scope-mapping.json 缺映射", prompt)
+        self.assertIn("自查结果仅作为警告", prompt)
+        self.assertIn("不影响缺陷单预检通过", prompt)
         self.assertNotIn("缺陷单信息不完整或缺少分析参数就打回", prompt)
 
     def test_references_define_judgement_rules(self):
@@ -169,6 +174,8 @@ class DefectGateSkillDefinitionTests(unittest.TestCase):
         self.assertNotIn("补入口、操作、数据", (SKILL_DIR / "SKILL.md").read_text(encoding="utf-8"))
         for required in ("自查", "结论", "证据", "selfCheckKeywords"):
             self.assertIn(required, self_check)
+        self.assertIn("仅作为警告", self_check)
+        self.assertIn("不影响缺陷单预检通过", self_check)
         for required in ("/rest/api/2/issue/{KEY}/comment", "/attachments", "transitions"):
             self.assertIn(required, jira_api)
 
@@ -513,16 +520,34 @@ console.log(JSON.stringify(failure));
         payload = json.loads(output.strip().splitlines()[-1])
 
         self.assertEqual(payload["reason"], "scope-tag-unverifiable")
-        self.assertEqual(payload["gateResult"], "未检查")
+        self.assertEqual(payload["gateResult"], "通过")
         self.assertTrue(payload["skipped"])
         self.assertTrue(payload["analysisSkipped"])
         self.assertFalse(payload["requiresReject"])
         self.assertNotIn("(x)", payload["comment"])
         self.assertIn("自动分析已跳过", payload["comment"])
+        self.assertIn("缺陷单预检：通过（自动分析已跳过）", payload["comment"])
+        self.assertIn("(!) *自查结果*", payload["comment"])
         self.assertIn("未满足条件：精准 Tag 可访问性", payload["comment"])
         self.assertIn("GitLab 认证失败", payload["comment"])
         self.assertIn("bot-management:v0.4.2-ZYKJ20230149-rc225", payload["comment"])
         self.assertIn("不修改经办人", payload["comment"])
+
+    @unittest.skipIf(NODE_BIN is None, "需要 node 运行时才能执行技能脚本")
+    def test_self_check_warning_does_not_block_pass_preflight(self):
+        """自查结果缺失或无效只能显示警告，不能形成门禁阻断项。"""
+        skill = (SKILL_DIR / "SKILL.md").read_text(encoding="utf-8")
+        self_check = (SKILL_DIR / "references" / "self-check.md").read_text(encoding="utf-8")
+        runtime = json.loads((SKILL_DIR / "runtime.json").read_text(encoding="utf-8"))
+
+        self.assertIn("自查结果仅作为警告", skill)
+        self.assertIn("不影响缺陷单预检通过", skill)
+        self.assertIn("(!) *自查结果*", skill)
+        self.assertNotIn("# (x) *自查结果*", skill)
+        self.assertIn("仅作为警告", self_check)
+        self.assertIn("不影响缺陷单预检通过", self_check)
+        self.assertIn("自查结果仅作为警告", runtime["prompt_template"])
+        self.assertIn("不影响缺陷单预检通过", runtime["prompt_template"])
 
     @unittest.skipIf(NODE_BIN is None, "需要 node 运行时才能执行技能脚本")
     def test_mapping_gap_section_has_no_duplicate_heading(self):

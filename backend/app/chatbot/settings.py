@@ -244,9 +244,21 @@ class ConfluenceSettings:
         """地址与所选鉴权模式的凭据齐备时才允许检索。"""
         if not self.base_url:
             return False
+        # PAT 优先：只要配置了令牌就按 Bearer 使用，避免忘了切换 auth_mode。
+        if self.token:
+            return True
         if str(self.auth_mode or "bearer").strip().lower() == "basic":
             return bool(self.username and self.password)
-        return bool(self.token)
+        return False
+
+
+@dataclass(frozen=True)
+class CatalogProduct:
+    """文档清单里一个产品的检索范围（页面树或空间）。"""
+
+    name: str = ""
+    root_page_ids: tuple = ()
+    space_keys: tuple = ()
 
 
 @dataclass(frozen=True)
@@ -272,6 +284,13 @@ class KnowledgeSettings:
     diagram_ocr: bool = True
     embedding_model: str = ""
     cache_ttl_seconds: int = 300
+    # 文档清单（收集类问题）：枚举页面树后按类别列出真实文档，不经过模型。
+    catalog_enabled: bool = False
+    catalog_root_page_ids: tuple = ()
+    catalog_space_keys: tuple = ()
+    catalog_max_pages: int = 800
+    catalog_per_category_limit: int = 5
+    catalog_products: tuple = ()
 
 
 @dataclass(frozen=True)
@@ -450,6 +469,18 @@ def _parse_confluence(document, profile):
 def _parse_knowledge(document):
     """解析 Confluence 在线检索参数；简单值支持环境变量覆盖。"""
     section = _section(document, "knowledge")
+    catalog = section.get("catalog") if isinstance(section.get("catalog"), dict) else {}
+    products = []
+    for name, item in (catalog.get("products") or {}).items():
+        if not isinstance(item, dict):
+            continue
+        products.append(
+            CatalogProduct(
+                name=str(name or "").strip().lower(),
+                root_page_ids=_as_tuple(item.get("root_page_ids")),
+                space_keys=_as_tuple(item.get("space_keys")),
+            )
+        )
     return KnowledgeSettings(
         enabled=_as_bool(os.getenv("KNOWLEDGE_ENABLED"), _as_bool(section.get("enabled"), False)),
         space_keys=_as_tuple(os.getenv("CONFLUENCE_SPACE_KEYS") or section.get("space_keys")),
@@ -474,6 +505,18 @@ def _parse_knowledge(document):
         ),
         embedding_model=_as_text(section.get("embedding_model")),
         cache_ttl_seconds=_as_int(section.get("cache_ttl_seconds"), 300, minimum=0),
+        catalog_enabled=_as_bool(
+            os.getenv("KNOWLEDGE_CATALOG_ENABLED"), _as_bool(catalog.get("enabled"), False)
+        ),
+        catalog_root_page_ids=_as_tuple(
+            os.getenv("KNOWLEDGE_CATALOG_ROOT_PAGE_IDS") or catalog.get("root_page_ids")
+        ),
+        catalog_space_keys=_as_tuple(
+            os.getenv("KNOWLEDGE_CATALOG_SPACE_KEYS") or catalog.get("space_keys")
+        ),
+        catalog_max_pages=_as_int(catalog.get("max_pages"), 800, minimum=10),
+        catalog_per_category_limit=_as_int(catalog.get("per_category_limit"), 5, minimum=1),
+        catalog_products=tuple(products),
     )
 
 
