@@ -147,8 +147,10 @@ class Gate2DefinitionTests(unittest.TestCase):
         text = (GATE2_DIR / "references" / "pdca-standard.md").read_text(encoding="utf-8")
 
         self.assertIn("GENERIC_TEAM_DELIVERABLE_PDCA_SKILLS", text)
-        self.assertIn("tools_version: V2.3.0", text)
-        self.assertIn("template_version: V1.1", text)
+        self.assertIn("tools_version: V2.3.1", text)
+        self.assertIn("template_version: V1.2", text)
+        self.assertIn("UI_DESIGN_DELIVERABLE_READY", text)
+        self.assertIn("current_attachment_ids", text)
         self.assertIn("collab_checks_skill_version: V1.0", text)
         self.assertIn('ui_check_source_version: "1.2"', text)
         self.assertIn("待产品确认", text)

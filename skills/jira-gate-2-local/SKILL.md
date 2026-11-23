@@ -33,7 +33,7 @@ metadata:
 本技能执行**两套并列判定**，两套都必须完整执行，互不替代：
 
 1. **G2 技术方案准出**：检查项、等级（`MUST` / `CONDITIONAL` / `SHOULD` / `OBSERVE`）与判定原则以 [references/checklist.md](references/checklist.md)（技术方案准出 Checklist）为准。
-2. **PDCA 开发交付物检查（RD）**：以 [references/pdca-standard.md](references/pdca-standard.md)（通用团队交付物 PDCA 规范，`tools_version: V2.3.0`、`template_version: V1.1`、`collab_checks_skill_version: V1.0`、`ui_check_source_version: "1.2"`）为准，本次只执行其中 **§5.1 开发交付物**的 10 项必查项，以及 §2.4 事实源边界、§2.5 复用既有能力判别、§4 结论口径、§5.4 / §5.5 / §5.6 特殊情形、§6 报告格式、§7.2 Jira 评论格式、§10 禁止事项。产品侧 PRD、产品交付物与 G1/G2/G3 协作门禁由 `GENERIC_TEAM_COLLAB_CHECKS_SKILLS.md V1.0` 统一检查，本技能不重复执行该轮全量检查。
+2. **PDCA 开发交付物检查（RD）**：以 [references/pdca-standard.md](references/pdca-standard.md)（通用团队交付物 PDCA 规范，`tools_version: V2.3.1`、`template_version: V1.2`、`collab_checks_skill_version: V1.0`、`ui_check_source_version: "1.2"`）为准，本次只执行其中 **§5.1 开发交付物**的 10 项必查项，以及 §2.4 事实源边界、§2.5 复用既有能力判别、§4 结论口径、§5.4 / §5.5 / §5.6 特殊情形、§6 报告格式、§7.2 Jira 评论格式、§10 禁止事项。产品侧 PRD、产品交付物与 G1/G2/G3 协作门禁由 `GENERIC_TEAM_COLLAB_CHECKS_SKILLS.md V1.0` 统一检查，本技能不重复执行该轮全量检查。
 
 **先读完这两份参考再开始判定**，不要凭印象发明标准。PDCA 部分的具体执行口径见 §5.2。
 
@@ -210,6 +210,8 @@ const files = await j.downloadAttachments(issue.key, "<工作目录>\\work\\jira
 
 - `mode: jira`、`role: RD`，等价于 `trigger_type = RD_TECH_PLAN_READY`；被检查对象就是本单的技术方案。
 - **只执行 RD 一类**：不得自动扩查 QA（测试方案/用例）或 UI（精修原型）。PDCA 规范禁止在未触发时检查其他角色，也不允许把不同角色合并成一份报告。
+- 母版 §2.1.2 中的 `QA_DELIVERABLE_READY`、`UI_DESIGN_DELIVERABLE_READY`、`UI_SUBTASK_ATTACHMENT`、`design_issue_key`、`attachment_issue_key` 以及 UI 设计子任务识别顺序，属于独立 PDCA 接入事件；本技能不订阅、不执行，只按 `RD_TECH_PLAN_READY` 的 RD 口径检查本单技术方案。
+- 母版中的 `new_attachment_ids` / `current_attachment_ids` 在本技能里只用于定位本单当前有效的技术方案附件，不触发其他角色，也不改变本技能的交付顺序。
 - PDCA 不修改 PRD、不改写技术方案，也不改 Jira 状态、标签或字段；状态流转只按 §9 预演。
 
 **输入定位**
@@ -273,7 +275,7 @@ PRD-DELIVERY：唯一业务事实源
 
 - 文件名：`{{需求名称}}_RD_{{YYYYMMDD}}_{{NN}}_PDCA.md`，`NN` 从 `01` 起递增；本地预检不读取 Jira 旧附件编号，也没有历史 Jira 副本，同一任务重跑时删除本次工作目录旧草稿后重新从 `01` 开始。
 - **禁止清理 Jira 历史附件**：不调用 `attach` / `attach-prune` / `attach-list`；不修改、不删除任何 Jira 附件。
-- 报告顶部按规范 §6 写**最小 front-matter**（`artifact_type: pdca`、`mode: jira`、`source_prd`、`source_prd_version`、`checked_deliverable`、`generated_at`、`pdca_template_version: "V1.1"`、`collab_checks_skill_version: "V1.0"`、`ui_check_source_version: "1.2"`、`jira_issue`、`report_name` 等）；字段与母版保持一致，不自行增删。
+- 报告顶部按规范 §6 写**最小 front-matter**（`artifact_type: pdca`、`mode: jira`、`source_prd`、`source_prd_version`、`checked_deliverable`、`generated_at`、`pdca_template_version: "V1.2"`、`collab_checks_skill_version: "V1.0"`、`ui_check_source_version: "1.2"`、`jira_issue`、`report_name` 等）；字段与母版保持一致，不自行增删。
 - 章节按规范 §6.1.2 只保留 **一、PDCA 结论**、**二、开发侧方案检查结果与问题项**、**五、附录**（输入材料、必查项核对表、AC 追溯明细、未检查项、变更记录）；不生成 UI / 测试章节，也不把未触发的角色写成「未检查」。
 - 色标统一用 🟢 / 🔴 / ⚪；问题编号用 `D-` 前缀，每项一张卡：影响 → 怎么改 → 完成标准 → PRD 要求 vs 交付物实际。
 - **责任方只写交付方（研发）**，不把产品列为交付物问题的责任方。

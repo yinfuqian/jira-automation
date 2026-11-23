@@ -91,8 +91,8 @@ const back = await j.getIssue(key);
 const saved = back.comments.find((item) => item.id === String(created.id));
 ```
 
-- Jira wiki 标记：不要提交 Markdown 表格；不要出现未转义的 `{color}`、`{{monospace}}` 等宏；提及统一用 `[~login]`。
-- 评论末尾的 `G1-Pre 指纹：V1.0 / sha256:...` 是幂等键，**不要删除或改写**。
+- Jira Wiki Markup：标题用 `h3.` / `h4.`，加粗标签用 `*当前问题：*`；不要提交 Markdown 表格；不要出现未转义的 `{color}`、`{{monospace}}` 等宏；提及统一用 `[~login]`。
+- 评论中**不得**出现规则版本、内容指纹、sha256 或「G1-Pre 指纹」。幂等改为比对「最新一条 G1-Pre 评论正文」，本轮渲染结果一致时不重复写入；判重命令使用 `history <KEY|URL> --file <result.json>`。
 
 ## 8. 故障排查
 
@@ -106,7 +106,7 @@ const saved = back.comments.find((item) => item.id === String(created.id));
 | `[压缩包解压失败]` | 环境缺少解压命令；记为「附件无法解析」并报告，不要自行安装。 |
 | 评论数与 `fields.comment.total` 不一致 | `getIssue()` 会自动再拉一次 `/comment` 全量接口。 |
 | `[~xxx]` 没有渲染成 @ 人 | 用了显示名；必须用登录名 `issue.reporter.name`。 |
-| `g1-pre.mjs history` 找不到指纹 | 旧评论不是本技能写的，或指纹行被手工改过；按首次处理。 |
+| `g1-pre.mjs history` 返回 `duplicate=false` | 没有传 `--file`，或最新一条 G1-Pre 评论正文与本轮渲染结果不同；按需要写入新评论。 |
 | `contentHash` 校验失败 | 没有先跑 `g1-pre.mjs hash`，或手工填了占位值。 |
 
 ## 9. 硬边界

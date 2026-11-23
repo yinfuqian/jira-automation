@@ -1,8 +1,8 @@
 ---
 name: GENERIC_TEAM_DELIVERABLE_PDCA_SKILLS
-description: 产品团队通用团队交付物 PDCA 检查规范。支持产品经理语义触发和 Jira 状态／附件事件触发，对开发技术方案、测试方案与用例、UI 精修原型等协作方交付物执行 PDCA 的 Check。UI 按 PRD、产品交付原型、精修原型三方判定，以用户能力是否闭环为核心，输出通过／待产品确认／不通过结论与精简问题清单。该检查不替代 G2 技术方案准出、G3 提测准入或 UI 正式验收，也不修改 PRD、下游交付物、Jira 状态、标签或字段。
-tools_version: V2.3.0
-template_version: V1.1
+description: 产品团队通用团队交付物 PDCA 检查规范。支持产品经理语义触发和 Jira 状态／附件事件触发，对开发技术方案、测试方案与用例、UI 设计稿与精修原型等协作方交付物执行 PDCA 的 Check。UI 按 PRD、产品交付原型、精修原型三方判定，以用户能力是否闭环为核心，输出通过／待产品确认／不通过结论与精简问题清单。该检查不替代 G2 技术方案准出、G3 提测准入或 UI 正式验收，也不修改 PRD、下游交付物、Jira 状态、标签或字段。
+tools_version: V2.3.1
+template_version: V1.2
 collab_checks_skill_version: V1.0
 ui_check_source_version: "1.2"
 ---
@@ -58,8 +58,8 @@ mode: manual | jira
 两种模式使用完全相同的必查项和结论口径，只在输入获取、报告命名和输出载体上不同。
 
 ```text
-tools_version: V2.3.0
-template_version: V1.1
+tools_version: V2.3.1
+template_version: V1.2
 collab_checks_skill_version: V1.0
 ui_check_source_version: "1.2"
 ```
@@ -83,21 +83,28 @@ Jira 接入方在状态迁移或附件变化后调用本 Skill，并传入以下
 
 ```text
 event_id          事件唯一标识
-trigger_type      三类触发类型之一
+trigger_type      本次触发类型
+trigger_source    status_transition | attachment_change | manual_design_issue
 issue_key         触发 Issue Key
 parent_issue_key  UI 子任务的父需求 Key；其他类型为空
-attachment_ids    本次新增或替换的附件 ID 列表
+design_issue_key  已识别的设计子任务 Key；其他类型为空
+attachment_issue_key  被检查附件实际所在 Issue Key
+new_attachment_ids    本次新增或替换的附件 ID 列表
+current_attachment_ids 当前仍有效的角色交付物附件 ID 列表
 from_status       迁移前状态；附件事件可为空
 to_status         迁移后状态；附件事件可为空
 ```
 
 鉴权、Webhook 传输、附件下载、评论写入和附件上传由 Jira 接入方负责。Skill 只消费上述上下文和已授权的只读材料，不自行假定 Jira 平台版本或调用其写接口。
 
+兼容旧接入：旧字段 `attachment_ids` 仅作为 `new_attachment_ids` 的别名；不得继续依赖该字段单独表达当前有效附件集合。
+
 | `trigger_type` | 事件条件 | 检查对象 |
 |---|---|---|
 | `RD_TECH_PLAN_READY` | 主 Issue 从「开发设计中」迁移到「排期中」 | 主 Issue 中尚未处理的技术方案附件 |
-| `QA_DELIVERABLE_READY` | 主 Issue 从「排期中」迁移到「开发中」或「测试中」，从「开发中」迁移到「测试中」；或在「开发中」「测试中」新增、替换测试附件 | 本轮新增或替换的测试方案、测试用例等附件；多个附件合并为一次 QA 检查 |
-| `UI_SUBTASK_ATTACHMENT` | 设计子任务标题去除空格后包含「UI精调」或「UI调优」，且新增或替换附件 | 子任务附件；PRD 与产品交付原型从 `parent_issue_key` 对应主 Issue 获取 |
+| `QA_DELIVERABLE_READY` | 主 Issue 从「排期中」迁移到「开发中」或「测试中」、从「开发中」迁移到「测试中」；或在「开发中」「测试中」新增、替换测试附件 | 状态迁移时无条件检查当前有效测试方案、测试用例等附件；附件事件只检查本轮新增或替换附件；多个附件合并为一次 QA 检查 |
+| `UI_DESIGN_DELIVERABLE_READY` | 已识别的设计子任务进入「完成」，或设计子任务／父需求新增、替换设计交付物附件 | 优先检查设计子任务附件；子任务无附件时检查父需求中与设计子任务关联的当前有效设计稿；排除 PRD、Overview、产品 Prototype、技术方案、测试材料和 LLM_PROMPTS |
+| `UI_SUBTASK_ATTACHMENT` | 旧事件名兼容入口 | 按 `UI_DESIGN_DELIVERABLE_READY` 的规则执行；新接入不得继续使用旧事件名 |
 
 Jira 模式按事件指定的角色执行，不自动改查其他角色：
 
@@ -106,7 +113,24 @@ Jira 模式按事件指定的角色执行，不自动改查其他角色：
 - 触发角色没有对应交付物时，直接判 `不通过`，回写“未上传交付物”，不生成报告，也不产生 `未检查` 结论。
 - 已提供附件但内容无法归入触发角色时，判 `不通过`，不得静默改归到其他角色。
 - 不存在新附件、事件重复或相同材料已处理时，不重复运行、不重复评论、不重复上传报告。
-- 状态迁移事件中的 `attachment_ids` 可以为空。此时接入方应提供该 Issue 当前有效附件列表；Skill 只处理该角色此前未按同一附件哈希检查过的材料。Issue 中根本没有该角色附件时才按“未上传交付物”判 `不通过`。
+- 状态迁移事件中的 `new_attachment_ids` 可以为空，但接入方仍必须传入 `current_attachment_ids`。Skill 检查当前有效材料中此前未按“附件哈希 + PRD 版本／哈希”检查过的附件；当前集合中没有该角色附件时才按“未上传交付物”判 `不通过`。
+- 事件条件命中后必须调用本 Skill。接入方不得因本轮没有新附件、状态迁移附件为空或暂时未找到附件而静默丢弃事件；交付物是否存在及结论由 Skill 判断。
+- 若 Jira 状态已命中触发条件，但没有任何对应的 PDCA 评论、报告或执行异常记录，应直接判为接入链路失败，不得解释为“无需检查”。
+
+QA 状态事件要求：
+
+- 主 Issue 进入「开发中」或「测试中」时，无论之前是否已经上传测试附件、无论本轮附件列表是否为空，都必须发出 `QA_DELIVERABLE_READY`。
+- 测试附件在状态迁移前上传时，进入目标状态仍必须检查，不得因“没有新附件”跳过。
+- 接入方必须同时提供当前 Issue 的全部有效附件；Skill 从中识别测试方案和测试用例。
+
+UI 设计子任务识别顺序：
+
+1. Jira 中指派给设计组织或设计责任角色的子任务。
+2. 可配置的 Jira 标签、分类字段或组织字段。
+3. 子任务标题包含「设计」。
+4. 人工显式指定 `design_issue_key`。
+
+不得只依赖「UI精调」「UI调优」等固定标题词。设计子任务进入「完成」即触发，即使当前没有附件也必须进入 Skill 判断。
 
 去重键为：
 
@@ -119,15 +143,16 @@ role + attachment_id + SHA-256 + PRD版本或PRD哈希
 
 Jira 模式按以下顺序确定事实源：
 
-1. RD、QA 从 `issue_key` 对应主 Issue 读取附件；UI 从 `parent_issue_key` 对应主 Issue 读取 PRD 和产品交付原型，从 `issue_key` 对应子任务读取被检查附件。
+1. RD、QA 从 `issue_key` 对应主 Issue 读取附件；UI 从 `parent_issue_key` 对应主 Issue 读取 PRD 和产品交付原型，从 `design_issue_key` 读取设计子任务及附件。
 2. PRD 候选文件名必须以前缀 `{{需求名称}}_PRD_DELIVERY` 开头且扩展名为 `.md`。仅一份时直接使用；多份时按文件名中的语义版本取最高版本，同版本取最新上传。多份均无可解析版本，或最高版本仍无法唯一确定时，回写“执行异常”，不产生 `通过／待产品确认／不通过` 业务结论。
 3. 产品交付原型按前缀 `{{需求名称}}_Prototype` 且扩展名为 `.html` 匹配，多份时取最新上传；没有匹配时 UI 按一致性模式检查，并写明缺少产品交付原型。
-4. PRD 缺失、不可读取或版本无法唯一确定时，回写“执行异常”，不生成 PDCA 报告。
+4. UI 设计交付物先从 `design_issue_key` 的当前有效附件中选择；设计子任务没有附件时，检查 `parent_issue_key` 的当前有效附件，只选择文件名或元数据明确表达为设计稿的附件。不得把 `PRD_DELIVERY`、`Overview`、产品 `Prototype`、`LLM_PROMPTS`、技术方案和测试方案自动归为 UI 精修交付物。
+5. PRD 缺失、不可读取或版本无法唯一确定时，回写“执行异常”，不生成 PDCA 报告。
 
 ### 2.2 必需输入
 
 - 手工模式：指定版本 PRD 的精确文件和版本，以及至少一份待检查交付物。
-- Jira 模式：2.1.2 规定的触发上下文、指定版本 PRD，以及事件角色对应的待检查附件。角色附件为空也是有效触发，但结论为 `不通过`，不生成报告。
+- Jira 模式：2.1.2 规定的触发上下文、指定版本 PRD，以及事件角色对应的待检查附件。角色附件为空也是有效触发，但结论为 `不通过`，不生成报告；接入方不得因附件为空而不调用。
 
 ### 2.3 可选输入
 
@@ -444,7 +469,7 @@ mode: "<manual|jira>"
 source_prd: "<PRD 文件名>"
 checked_deliverable: "<本轮被检查交付物文件名>"
 generated_at: <检查日期>
-pdca_template_version: "V1.1"
+pdca_template_version: "V1.2"
 collab_checks_skill_version: "V1.0"
 ui_check_source_version: "1.2"
 jira_issue: "<Jira Issue Key；手工模式省略>"
@@ -768,12 +793,16 @@ dedupe_key: 本轮事件与附件对应的去重键
 |---|---|
 | `RD_TECH_PLAN_READY` 且存在未处理技术方案 | 检查 RD 附件，回写简明评论，生成一份 RD 角色报告 |
 | 任一角色触发但 Issue 中没有对应交付物 | 回写“未上传交付物，检查结论：不通过”，不生成报告 |
+| 测试方案和测试用例先上传，之后主 Issue 进入“开发中” | 必须触发 `QA_DELIVERABLE_READY`，检查当前有效测试附件并生成 QA 角色报告 |
+| 主 Issue 进入“开发中”但当前没有测试附件 | 仍必须触发 `QA_DELIVERABLE_READY`，回写未上传交付物、不通过，不生成报告 |
 | `QA_DELIVERABLE_READY` 同轮有测试方案和测试用例 | 合并为一次 QA 检查，生成一份 QA 角色报告 |
 | 同一 `event_id` 重放 | 不重复检查、不重复评论、不重复上传报告 |
 | 同一附件 ID 内容变化，或 PRD 版本／哈希变化 | 允许复检并生成新快照 |
 | PRD 缺失、不可读取或最高版本无法唯一确定 | 回写“执行异常”，不产生角色业务结论，不生成报告 |
-| UI 子任务标题命中 `UI精调`／`UI调优` 且有附件 | 使用子任务附件，从父 Issue 读取 PRD 与产品原型并检查 |
-| UI 子任务标题不命中关键词 | 不触发 UI PDCA |
+| 设计子任务标题为“【设计】ui设计”并进入“完成” | 必须触发 `UI_DESIGN_DELIVERABLE_READY`，不依赖 `UI精调`／`UI调优` 标题 |
+| 设计稿上传到父需求，设计子任务没有附件 | 设计子任务完成时仍触发；检查父需求中关联的设计稿，排除 PRD、Overview、Prototype、技术方案和测试材料 |
+| 设计子任务完成但子任务和父需求都没有设计交付物 | 仍必须进入 Skill，回写未上传交付物、不通过，不生成报告 |
+| Jira 状态或附件已满足触发条件，但没有任何 PDCA 评论、报告或执行异常 | 判为 Jira 接入链路失败，不得视为无需检查 |
 | 检查存在多项不通过 | Jira 评论逐项列完全部问题及两类依据，不粘贴核对表或整改步骤 |
 | 同一角色一天内多次复检 | 报告序号依次递增，不覆盖历史快照 |
 
@@ -781,9 +810,12 @@ dedupe_key: 本轮事件与附件对应的去重键
 - [ ] 是否按开发、测试、UI 内容特征自动分组，并对每组独立给出结论。
 - [ ] Jira 模式是否只检查触发类型指定的角色，并把同一角色本轮多个附件合并为一份报告。
 - [ ] Jira 模式没有对应交付物时，是否判 `不通过`、只输出规定评论且不生成空报告。
+- [ ] Jira 状态或附件已满足触发条件时，是否确认实际产生 PDCA 评论或执行异常，不存在静默跳过。
+- [ ] QA 状态迁移时是否无论有无新附件都触发，并使用 `current_attachment_ids` 检查此前已上传的测试材料。
+- [ ] UI 是否支持设计子任务完成触发、父需求附件回退和非固定标题识别。
 - [ ] Jira 模式是否按 `event_id` 与附件哈希去重，并对附件替换或 PRD 变化允许复检。
 - [ ] Jira 评论是否只写角色、结论、附件、PRD 版本、全部不通过项及依据和报告文件名。
-- [ ] 是否使用 `tools_version: V2.3.0`、`template_version: V1.1`，并在报告 front-matter 写入 `pdca_template_version: "V1.1"`。
+- [ ] 是否使用 `tools_version: V2.3.1`、`template_version: V1.2`，并在报告 front-matter 写入 `pdca_template_version: "V1.2"`。
 - [ ] 是否记录 `collab_checks_skill_version: V1.0` 和 UI 来源版本 `1.2`，且没有把它们当作具体 PRD 版本。
 - [ ] 是否按每类必查项逐项核对；开发、测试输出核对表，UI 只保留一行核对摘要。
 - [ ] 开发、测试结论是否只用 `通过` / `不通过`；UI 是否只用 `通过` / `待产品确认` / `不通过`，且未把未关闭确认项写成通过；手工模式未要求检查的类别是否写「未检查」。

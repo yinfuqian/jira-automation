@@ -2,15 +2,15 @@
 /**
  * G1-Pre 准入检查辅助脚本。
  *
- * 用途：把「读单子 → 计算内容指纹 → 判重 → 渲染评论」这些容易写错的机械动作固化下来，
- * 让模型只负责 F01~F07 的业务判定，不负责拼 Jira wiki 标记与哈希格式。
+ * 用途：把「读单子 → 计算内容摘要 → 渲染评论 → 判重」这些容易写错的机械动作固化下来，
+ * 让模型只负责 F01~F07 的业务判定，不负责拼 Jira Wiki 标记与哈希格式。
  *
  * 用法：
  *   node scripts/g1-pre.mjs precheck <KEY|URL> [--transition-id X] [--source-status X] [--target-status X]
  *   node scripts/g1-pre.mjs context  <KEY|URL> [--description-limit 20000] [--comments 10]
  *                                    [--transition-id X] [--source-status X] [--target-status X]
  *   node scripts/g1-pre.mjs hash     <KEY|URL> [--dir <附件目录>] [--transition-id X] [--source-status X] [--target-status X]
- *   node scripts/g1-pre.mjs history  <KEY|URL> [--hash <sha256:...>] [--version V1.0]
+ *   node scripts/g1-pre.mjs history  <KEY|URL> [--file <result.json>]
  *   node scripts/g1-pre.mjs comment  --file <result.json> [--write] [--force] [--comment-id <ID>]
  *
  * 硬边界：本脚本只读单据、写评论；不提供流转状态、修改字段、上传或删除附件的能力。
@@ -29,6 +29,7 @@ const RULE_VERSION = "V1.0";
 /** G1-Pre 适用的问题类型；未命中的类型由接入层过滤，本技能直接跳过。 */
 const SUPPORTED_ISSUE_TYPES = [
   "客户用户故事",
+  "故事",
   "项目概算评估",
   "任务",
   "项目实施阶段",
@@ -40,10 +41,17 @@ const SUPPORTED_ISSUE_TYPES = [
  */
 const TRANSITION_MAP = {
   客户用户故事: { action: "跟进需求", targetStatus: "需求澄清" },
+  故事: { action: "跟进需求", targetStatus: "需求澄清" },
   项目概算评估: { action: "开始评估", targetStatus: "处理中" },
   任务: { action: "开始进行", targetStatus: "处理中" },
   项目实施阶段: { action: "开始评估", targetStatus: "处理中" },
 };
+
+/**
+ * 客户用户故事 / 故事 进入「需求澄清」后，`需求设计 → 评审中` 属于产品设计完成后的内部流转，
+ * 不再重复执行 G1-Pre。仅在接入层显式传入目标状态时据此跳过，不做任何猜测。
+ */
+const SKIP_TARGET_STATUSES = ["评审中"];
 
 /** 阻断问题分类的中文名，必须与规则文档第 5 节完全一致。 */
 const CATEGORY_LABELS = {
@@ -69,7 +77,7 @@ const USAGE = `用法：
   node scripts/g1-pre.mjs precheck <KEY|URL> [--transition-id X] [--source-status X] [--target-status X]
   node scripts/g1-pre.mjs context  <KEY|URL> [--description-limit 20000] [--comments 10]
   node scripts/g1-pre.mjs hash     <KEY|URL> [--dir <附件目录>] [--transition-id X] [--source-status X] [--target-status X]
-  node scripts/g1-pre.mjs history  <KEY|URL> [--hash <sha256:...>] [--version V1.0]
+  node scripts/g1-pre.mjs history  <KEY|URL> [--file <result.json>]
   node scripts/g1-pre.mjs comment  --file <result.json> [--write] [--force] [--comment-id <ID>]`;
 
 
@@ -140,7 +148,7 @@ function print(payload) {
 }
 
 
-/** 类型预检：只判断问题类型是否属于 G1-Pre 的四种上游事项。 */
+/** 类型预检：判断问题类型是否属于 G1-Pre 的五种上游事项，并排除不再重复检查的流转。 */
 async function commandPrecheck(positional, options) {
   const target = positional[0];
   if (!target) throw new Error("缺少 Jira 链接或单号");
@@ -148,6 +156,14 @@ async function commandPrecheck(positional, options) {
   const issueType = String(issue.issueType || "").trim();
   const typeSupported = SUPPORTED_ISSUE_TYPES.includes(issueType);
   const transition = resolveTransition(issue, options);
+  // 只在接入层显式传入目标状态时判断：需求设计 → 评审中 不属于 G1-Pre 的受理前置检查。
+  const explicitTarget = options["target-status"] ? String(options["target-status"]).trim() : "";
+  const skipByTarget = Boolean(
+    typeSupported
+    && ["客户用户故事", "故事"].includes(issueType)
+    && SKIP_TARGET_STATUSES.includes(explicitTarget),
+  );
+  const supported = typeSupported && !skipByTarget;
   print({
     ok: true,
     key: issue.key,
@@ -155,12 +171,14 @@ async function commandPrecheck(positional, options) {
     issueType,
     expectedIssueTypes: SUPPORTED_ISSUE_TYPES,
     typeSupported,
-    supported: typeSupported,
+    supported,
     status: issue.status,
     transition,
-    skipReason: typeSupported
+    skipReason: supported
       ? ""
-      : `问题类型「${issueType || "(空)"}」不属于 G1-Pre 适用的四类上游事项，按规则跳过。`,
+      : (typeSupported
+        ? `目标状态「${explicitTarget}」属于需求设计完成后的内部流转，不再重复执行 G1-Pre，按规则跳过。`
+        : `问题类型「${issueType || "(空)"}」不属于 G1-Pre 适用的五类上游事项，按规则跳过。`),
   });
 }
 
@@ -272,43 +290,96 @@ async function commandHash(positional, options) {
 }
 
 
-/** 从评论正文里提取 G1-Pre 指纹与结论。 */
+/**
+ * 识别一条 G1-Pre 评论。
+ * 新版本使用 Jira Wiki 标题（`h3. (/) G1-Pre 准入通过` / `h3. (!) G1-Pre 准入未通过（N 项待补充）`）；
+ * 旧版本使用 `G1-Pre 结论` + 指纹，保留识别能力只为兼容历史评论，新评论不再写入指纹。
+ */
 function parseGateComment(comment) {
-  const body = String(comment.body || "");
-  const marker = body.match(/G1-Pre\s*指纹[:：]\s*(V[0-9.]+)\s*\/\s*(sha256:[0-9a-f]{64})/i);
-  if (!marker) return null;
-  const conclusion = body.match(/G1-Pre\s*结论[:：]\s*(通过|不通过)/);
+  const body = String(comment.body || "").replace(/\r\n/g, "\n");
+  const passMatch = /^h3\.\s*\(\/\)\s*G1-Pre\s*准入通过/m.test(body);
+  const failMatch = body.match(/^h3\.\s*\(!\)\s*G1-Pre\s*准入未通过[（(](\d+)\s*项待补充[）)]/m);
+  const legacyConclusion = body.match(/G1-Pre\s*结论[:：]\s*(通过|不通过)/);
+  const legacyMark = /G1-Pre\s*指纹[:：]/i.test(body);
+  if (!passMatch && !failMatch && !legacyConclusion && !legacyMark) return null;
   return {
     commentId: comment.id,
     author: comment.author,
     created: comment.created,
-    version: marker[1],
-    contentHash: marker[2].toLowerCase(),
-    conclusion: conclusion ? conclusion[1] : "",
+    conclusion: passMatch ? "通过" : (failMatch || legacyConclusion ? "不通过" : ""),
+    blockingCount: failMatch ? Number(failMatch[1]) : 0,
+    format: passMatch || failMatch ? "wiki" : "legacy",
+    body,
   };
 }
 
 
-/** 查找历史 G1-Pre 评论，判断同一内容指纹是否已处理过。 */
+/**
+ * 归一化评论正文，用于判重：
+ * 1. 统一换行符；
+ * 2. 去掉每行行尾空格；
+ * 3. 折叠连续空行。
+ */
+function normalizeBody(text) {
+  return String(text || "")
+    .replace(/\r\n?/g, "\n")
+    .split("\n")
+    .map((line) => line.replace(/[ \t]+$/, ""))
+    .join("\n")
+    .replace(/\n{3,}/g, "\n\n")
+    .trim();
+}
+
+
+/**
+ * 查找历史 G1-Pre 评论并判断本轮评论是否与最新一条完全一致。
+ *
+ * 规则文档要求评论中不得出现规则版本或内容指纹，因此幂等改为比对「最新一条 G1-Pre 评论正文」：
+ * 正文由结论、阻断项和规范建议决定，正文相同即无需重复评论。传入 --file 时按 result.json 渲染后比对。
+ */
 async function commandHistory(positional, options) {
   const target = positional[0];
   if (!target) throw new Error("缺少 Jira 链接或单号");
   const issue = await jira.getIssue(target, options);
-  const version = String(options.version || RULE_VERSION);
-  const hash = options.hash ? String(options.hash).toLowerCase() : "";
   const entries = issue.comments.map(parseGateComment).filter(Boolean);
-  const duplicate = hash
-    ? entries.find((entry) => entry.contentHash === hash && entry.version === version)
-    : null;
+  const latest = entries.length ? entries[entries.length - 1] : null;
+
+  let rendered = "";
+  if (options.file) {
+    const result = readResult(String(options.file));
+    const mention = issue.reporter && issue.reporter.name ? `[~${issue.reporter.name}]` : "";
+    rendered = renderComment(result, mention);
+  }
+  const duplicate = Boolean(
+    latest
+    && rendered
+    && latest.format === "wiki"
+    && normalizeBody(latest.body) === normalizeBody(rendered),
+  );
+
   print({
     ok: true,
     key: issue.key,
-    version,
-    contentHash: hash,
-    duplicate: Boolean(duplicate),
-    matchedCommentId: duplicate ? duplicate.commentId : "",
-    latest: entries.length ? entries[entries.length - 1] : null,
-    entries,
+    duplicate,
+    matchedCommentId: duplicate ? latest.commentId : "",
+    latest: latest
+      ? {
+        commentId: latest.commentId,
+        author: latest.author,
+        created: latest.created,
+        conclusion: latest.conclusion,
+        blockingCount: latest.blockingCount,
+        format: latest.format,
+      }
+      : null,
+    entries: entries.map((entry) => ({
+      commentId: entry.commentId,
+      author: entry.author,
+      created: entry.created,
+      conclusion: entry.conclusion,
+      blockingCount: entry.blockingCount,
+      format: entry.format,
+    })),
   });
 }
 
@@ -335,8 +406,10 @@ function readResult(file) {
   if (!["pass", "fail"].includes(conclusion)) {
     throw new Error("result.json 的 conclusion 只能是 pass 或 fail");
   }
-  if (!/^sha256:[0-9a-f]{64}$/i.test(String(payload.contentHash || ""))) {
-    throw new Error("result.json 的 contentHash 必须是完整的 sha256 值（先执行 g1-pre.mjs hash）");
+  // contentHash / ruleVersion 只供接入层幂等与审计使用，不写入评论；存在时校验格式，缺失不阻断。
+  const hash = String(payload.contentHash || "").trim();
+  if (hash && !/^sha256:[0-9a-f]{64}$/i.test(hash)) {
+    throw new Error("result.json 的 contentHash 格式非法：应为完整的 sha256:... 值（先执行 g1-pre.mjs hash）");
   }
   const checks = Array.isArray(payload.checks) ? payload.checks : [];
   const checkIds = checks.map((check) => String(check.id || "").toUpperCase());
@@ -363,41 +436,62 @@ function readResult(file) {
 }
 
 
-/** 生成符合规则文档第 8 节的 Jira 评论正文。 */
+/**
+ * 把规范建议渲染为 `* *标签：* 内容` 形式。
+ * 支持结构化对象（label/field + suggestion/text）与纯字符串：字符串没有标签时退化为 `* 内容`。
+ */
+function renderAdvisoryLines(payload) {
+  const items = [
+    ...(Array.isArray(payload.advisoryFindings) ? payload.advisoryFindings : []),
+    ...(Array.isArray(payload.fieldHints) ? payload.fieldHints : []),
+  ];
+  const lines = [];
+  for (const item of items) {
+    if (item === null || item === undefined) continue;
+    if (typeof item === "object") {
+      const label = safeText(item.label || item.field || "");
+      const text = safeText(item.suggestion || item.text || "");
+      if (!text) continue;
+      lines.push(label ? `* *${label}：* ${text}` : `* ${text}`);
+      continue;
+    }
+    const text = safeText(item);
+    if (text) lines.push(`* ${text}`);
+  }
+  return lines;
+}
+
+
+/**
+ * 生成符合规则文档第 8 节的 Jira Wiki 评论正文。
+ * 评论中不得出现 rule_version、content_hash、sha256 或「G1-Pre 指纹」。
+ */
 function renderComment(result, mention) {
   const { payload, conclusion, findings } = result;
-  const version = String(payload.ruleVersion || RULE_VERSION);
-  const hash = String(payload.contentHash || "").toLowerCase();
   const lines = [];
 
   if (conclusion === "pass") {
-    lines.push("G1-Pre 结论：通过");
+    lines.push("h3. (/) G1-Pre 准入通过");
+    lines.push("*结论：* 当前原始诉求已满足准入要求，可进入下一状态。");
   } else {
-    lines.push("G1-Pre 结论：不通过");
-    lines.push("");
+    lines.push(`h3. (!) G1-Pre 准入未通过（${findings.length} 项待补充）`);
     const prefix = mention ? `${mention} ` : "";
-    lines.push(`${prefix}请补充后重检：`);
+    lines.push(`*报告人：* ${prefix}请补充后重检。`);
     findings.forEach((finding, index) => {
-      lines.push(`${index + 1}、${CATEGORY_LABELS[finding.category]}：`);
-      lines.push(`当前问题：${safeText(finding.currentProblem)}`);
-      lines.push(`建议调整：${safeText(finding.suggestedSupplement)}`);
       lines.push("");
+      lines.push(`h4. ${index + 1}. ${CATEGORY_LABELS[finding.category]}`);
+      lines.push(`*当前问题：* ${safeText(finding.currentProblem)}`);
+      lines.push(`*建议调整：* ${safeText(finding.suggestedSupplement)}`);
     });
   }
 
-  const advisory = [
-    ...(Array.isArray(payload.advisoryFindings) ? payload.advisoryFindings : []),
-    ...(Array.isArray(payload.fieldHints) ? payload.fieldHints : []),
-  ]
-    .map((item) => safeText(item))
-    .filter(Boolean);
+  const advisory = renderAdvisoryLines(payload);
   if (advisory.length) {
-    lines.push("规范建议：");
-    for (const item of advisory) lines.push(`- ${item}`);
+    lines.push("");
+    lines.push("h4. 规范建议");
+    lines.push(...advisory);
   }
 
-  lines.push("");
-  lines.push(`G1-Pre 指纹：${version} / ${hash}`);
   return `${lines.join("\n").replace(/\n{3,}/g, "\n\n").trim()}\n`;
 }
 
@@ -424,6 +518,7 @@ async function commandComment(positional, options) {
     key: issueKey,
     conclusion: result.conclusion,
     mention,
+    mentionMissing: result.conclusion === "fail" && !mention,
     body,
     written: false,
     skipped: false,
@@ -435,16 +530,18 @@ async function commandComment(positional, options) {
     return;
   }
 
-  const version = String(result.payload.ruleVersion || RULE_VERSION);
-  const hash = String(result.payload.contentHash || "").toLowerCase();
-  const duplicate = issue.comments
-    .map(parseGateComment)
-    .filter(Boolean)
-    .find((entry) => entry.contentHash === hash && entry.version === version);
-  if (duplicate && !options.force) {
+  // 评论中不写指纹，判重改为比对最新一条 G1-Pre 评论正文：正文相同说明结论与补充要求未变化。
+  const entries = issue.comments.map(parseGateComment).filter(Boolean);
+  const latest = entries.length ? entries[entries.length - 1] : null;
+  const unchanged = Boolean(
+    latest
+    && latest.format === "wiki"
+    && normalizeBody(latest.body) === normalizeBody(body),
+  );
+  if (unchanged && !options.force) {
     output.skipped = true;
-    output.commentId = duplicate.commentId;
-    output.duplicateOf = duplicate.commentId;
+    output.commentId = latest.commentId;
+    output.duplicateOf = latest.commentId;
     print(output);
     return;
   }
