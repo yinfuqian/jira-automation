@@ -656,13 +656,6 @@ export async function updateComment(keyOrUrl, commentId, body, options = {}) {
   return await request("PUT", `/rest/api/2/issue/${encodeURIComponent(key)}/comment/${commentId}`, { ...options, body: { body: String(body) } });
 }
 
-/** 找出本单中由 AI 预检产生的历史评论（用于复审时避免重复刷屏） */
-export async function findPreviousReviews(keyOrUrl, options = {}) {
-  const issue = options.issue || await getIssue(keyOrUrl, options);
-  // 兼容旧版评论标题「需求准入 AI 预检」与新版「G1 需求准入结论」。
-  return issue.comments.filter((c) => c.body.includes("需求准入 AI 预检") || c.body.includes("G1 需求准入结论"));
-}
-
 /** 读取 skill 目录或 ~/.codex/jira/config.json，用于覆盖门禁字段名等可选配置 */
 export async function loadConfig() {
   const fs = await import("node:fs");

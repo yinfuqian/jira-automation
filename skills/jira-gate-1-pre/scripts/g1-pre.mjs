@@ -3,7 +3,7 @@
  * G1-Pre 准入检查辅助脚本。
  *
  * 用途：把「读单子 → 计算内容摘要 → 渲染评论 → 判重」这些容易写错的机械动作固化下来，
- * 让模型只负责 F01~F07 的业务判定，不负责拼 Jira Wiki 标记与哈希格式。
+ * 让模型只负责 facts / request / evidence 三项检查的业务判定，不负责拼 Jira Wiki 标记与哈希格式。
  *
  * 用法：
  *   node scripts/g1-pre.mjs precheck <KEY|URL> [--transition-id X] [--source-status X] [--target-status X]
@@ -24,7 +24,16 @@ import * as jira from "./jira.mjs";
 
 
 /** 规则版本，与 references/g1-pre-rules.md 的版本保持一致。 */
-const RULE_VERSION = "V1.0";
+const RULE_VERSION = "V1.2";
+
+/** 契约版本，对应《GENERIC_TEAM_G1_PRE_SKILLS》的 contract_version。 */
+const CONTRACT_VERSION = "1.0";
+
+/** 结构化输出契约版本，对应规则文档第 9 节的 schema_version。 */
+const SCHEMA_VERSION = "1.2";
+
+/** 门禁版本前缀；model/prompt/toolchain 由接入层附加，本脚本只提供规则侧版本。 */
+const GATE_VERSION_BASE = `V1.2+tool-v2.3.1`;
 
 /** G1-Pre 适用的问题类型；未命中的类型由接入层过滤，本技能直接跳过。 */
 const SUPPORTED_ISSUE_TYPES = [
@@ -53,7 +62,7 @@ const TRANSITION_MAP = {
  */
 const SKIP_TARGET_STATUSES = ["评审中"];
 
-/** 阻断问题分类的中文名，必须与规则文档第 5 节完全一致。 */
+/** 阻断问题分类的中文名，必须与规则文档第 7 节完全一致。 */
 const CATEGORY_LABELS = {
   background_content_mismatch: "背景与需求内容不一致",
   expectation_contradiction: "需求期望前后不一致",
@@ -61,13 +70,34 @@ const CATEGORY_LABELS = {
   material_ambiguity: "关键表述有歧义",
   scope_or_ownership_unclear: "范围或归属不清",
   unverifiable_target: "目标不可验证",
-  key_decision_unresolved: "关键决策未定",
-  evidence_inconsistent_or_missing: "描述与证据不一致或缺失",
+  key_decision_unresolved: "关键事实未定",
+  unstructured_description: "需求结构不可识别",
+  required_evidence_missing: "必需证据缺失",
   other: "其他",
 };
 
-/** F01~F07 七项必判事实。 */
-const REQUIRED_CHECKS = ["F01", "F02", "F03", "F04", "F05", "F06", "F07"];
+/** 三项必判检查：事实、诉求与期望、依据。 */
+const REQUIRED_CHECKS = ["facts", "request", "evidence"];
+
+/** 三项检查的中文名。 */
+const CHECK_LABELS = {
+  facts: "事实是否清楚",
+  request: "诉求与期望是否清楚",
+  evidence: "依据是否可信",
+};
+
+/** 需求类型枚举，对应规则文档第 5.1 节。 */
+const REQUIREMENT_KINDS = [
+  "functional_change",
+  "defect_or_effect",
+  "technical_assessment",
+  "migration_or_load_test",
+  "research_or_document",
+  "project_task",
+];
+
+/** finding 影响范围枚举，对应规则文档第 9.3 节。 */
+const IMPACT_VALUES = ["scope", "solution", "verification", "routing", "unknown"];
 
 /** 参与判定的自定义字段；内容指纹只覆盖这些字段，避免无关字段变化导致重复评论。 */
 const PARTICIPATING_FIELD_NAMES = ["客户名称", "产品归属", "问题发现产品", "发现产品", "关联问题"];
@@ -172,8 +202,16 @@ async function commandPrecheck(positional, options) {
     expectedIssueTypes: SUPPORTED_ISSUE_TYPES,
     typeSupported,
     supported,
+    // 不适用时不留内容结论，不允许写「通过」；调用方据此直接结束，不做任何 Jira 写操作。
+    applicability: supported ? "requirement" : "not_applicable",
+    conclusion: null,
+    requiredChecks: REQUIRED_CHECKS.map((id) => ({ id, name: CHECK_LABELS[id] })),
+    requirementKinds: REQUIREMENT_KINDS,
     status: issue.status,
     transition,
+    ruleVersion: RULE_VERSION,
+    contractVersion: CONTRACT_VERSION,
+    schemaVersion: SCHEMA_VERSION,
     skipReason: supported
       ? ""
       : (typeSupported
@@ -257,6 +295,8 @@ async function commandHash(positional, options) {
 
   const parts = sortKeys({
     ruleVersion: RULE_VERSION,
+    contractVersion: CONTRACT_VERSION,
+    schemaVersion: SCHEMA_VERSION,
     issueKey: issue.key,
     issueType: issue.issueType,
     summary: issue.summary,
@@ -283,6 +323,10 @@ async function commandHash(positional, options) {
     ok: true,
     key: issue.key,
     ruleVersion: RULE_VERSION,
+    contractVersion: CONTRACT_VERSION,
+    schemaVersion: SCHEMA_VERSION,
+    // 规则侧门禁版本前缀，接入层需要再拼接 model/prompt/toolchain 才能得到完整 gate_version。
+    gateVersionBase: GATE_VERSION_BASE,
     contentHash: sha256(JSON.stringify(parts)),
     attachmentMode: attachmentDir ? "sha256" : "metadata",
     parts,
@@ -291,24 +335,21 @@ async function commandHash(positional, options) {
 
 
 /**
- * 识别一条 G1-Pre 评论。
- * 新版本使用 Jira Wiki 标题（`h3. (/) G1-Pre 准入通过` / `h3. (!) G1-Pre 准入未通过（N 项待补充）`）；
- * 旧版本使用 `G1-Pre 结论` + 指纹，保留识别能力只为兼容历史评论，新评论不再写入指纹。
+ * 识别一条 V1.2 的 G1-Pre 评论。
+ * 只认 `h3. (/) G1-Pre 通过` 与 `h3. (!) G1-Pre 不通过（N项）` 两种标题，
+ * 不识别任何历史格式。
  */
 function parseGateComment(comment) {
   const body = String(comment.body || "").replace(/\r\n/g, "\n");
-  const passMatch = /^h3\.\s*\(\/\)\s*G1-Pre\s*准入通过/m.test(body);
-  const failMatch = body.match(/^h3\.\s*\(!\)\s*G1-Pre\s*准入未通过[（(](\d+)\s*项待补充[）)]/m);
-  const legacyConclusion = body.match(/G1-Pre\s*结论[:：]\s*(通过|不通过)/);
-  const legacyMark = /G1-Pre\s*指纹[:：]/i.test(body);
-  if (!passMatch && !failMatch && !legacyConclusion && !legacyMark) return null;
+  const passMatch = /^h3\.\s*\(\/\)\s*G1-Pre\s*通过\s*$/m.test(body);
+  const failMatch = body.match(/^h3\.\s*\(!\)\s*G1-Pre\s*不通过[（(]\s*(\d+)\s*项[）)]\s*$/m);
+  if (!passMatch && !failMatch) return null;
   return {
     commentId: comment.id,
     author: comment.author,
     created: comment.created,
-    conclusion: passMatch ? "通过" : (failMatch || legacyConclusion ? "不通过" : ""),
+    conclusion: passMatch ? "通过" : "不通过",
     blockingCount: failMatch ? Number(failMatch[1]) : 0,
-    format: passMatch || failMatch ? "wiki" : "legacy",
     body,
   };
 }
@@ -335,7 +376,7 @@ function normalizeBody(text) {
  * 查找历史 G1-Pre 评论并判断本轮评论是否与最新一条完全一致。
  *
  * 规则文档要求评论中不得出现规则版本或内容指纹，因此幂等改为比对「最新一条 G1-Pre 评论正文」：
- * 正文由结论、阻断项和规范建议决定，正文相同即无需重复评论。传入 --file 时按 result.json 渲染后比对。
+ * 正文由结论、需求评估摘要或阻断项决定，正文相同即无需重复评论。传入 --file 时按 result.json 渲染后比对。
  */
 async function commandHistory(positional, options) {
   const target = positional[0];
@@ -347,13 +388,15 @@ async function commandHistory(positional, options) {
   let rendered = "";
   if (options.file) {
     const result = readResult(String(options.file));
-    const mention = issue.reporter && issue.reporter.name ? `[~${issue.reporter.name}]` : "";
-    rendered = renderComment(result, mention);
+    // 不适用与执行异常都不产生内容评论，不参与正文判重。
+    if (result.applicability === "requirement" && result.executionStatus !== "execution_error") {
+      const mention = issue.reporter && issue.reporter.name ? `[~${issue.reporter.name}]` : "";
+      rendered = renderComment(result, mention);
+    }
   }
   const duplicate = Boolean(
     latest
     && rendered
-    && latest.format === "wiki"
     && normalizeBody(latest.body) === normalizeBody(rendered),
   );
 
@@ -369,7 +412,6 @@ async function commandHistory(positional, options) {
         created: latest.created,
         conclusion: latest.conclusion,
         blockingCount: latest.blockingCount,
-        format: latest.format,
       }
       : null,
     entries: entries.map((entry) => ({
@@ -378,7 +420,6 @@ async function commandHistory(positional, options) {
       created: entry.created,
       conclusion: entry.conclusion,
       blockingCount: entry.blockingCount,
-      format: entry.format,
     })),
   });
 }
@@ -399,31 +440,83 @@ function safeText(value) {
 }
 
 
-/** 读取并校验 result.json，确保结论与检查项自洽。 */
+/** 把可能是字符串或数组的字段统一成去空的字符串数组。 */
+function toStringList(value) {
+  if (value === undefined || value === null) return [];
+  return [].concat(value)
+    .map((item) => String(item === undefined || item === null ? "" : item).trim())
+    .filter(Boolean);
+}
+
+
+/**
+ * 读取并校验 result.json，确保结论、三项检查、findings 与需求评估摘要自洽。
+ * 字段名统一使用驼峰，不兼容其它写法。
+ */
 function readResult(file) {
   const payload = JSON.parse(readFileSync(file, "utf8"));
+  const applicability = String(payload.applicability || "requirement").trim();
+  if (!["requirement", "not_applicable"].includes(applicability)) {
+    throw new Error("result.json 的 applicability 只能是 requirement 或 not_applicable");
+  }
+  const executionStatus = String(payload.executionStatus || "success").trim();
+  if (executionStatus === "execution_error") {
+    // 执行异常不产生内容结论，也不写通过/不通过评论；由调用方按异常重试。
+    return { payload, applicability, executionStatus, conclusion: "", findings: [], assessment: null };
+  }
+  if (applicability === "not_applicable") {
+    return { payload, applicability, executionStatus, conclusion: "", findings: [], assessment: null };
+  }
+
   const conclusion = String(payload.conclusion || "").trim().toLowerCase();
   if (!["pass", "fail"].includes(conclusion)) {
     throw new Error("result.json 的 conclusion 只能是 pass 或 fail");
   }
+
+  const requirementKind = String(payload.requirementKind || "").trim();
+  if (!REQUIREMENT_KINDS.includes(requirementKind)) {
+    throw new Error(
+      `result.json 的 requirementKind 非法：${requirementKind || "(空)"}；只能是 ${REQUIREMENT_KINDS.join(" / ")}`,
+    );
+  }
+
   // contentHash / ruleVersion 只供接入层幂等与审计使用，不写入评论；存在时校验格式，缺失不阻断。
   const hash = String(payload.contentHash || "").trim();
   if (hash && !/^sha256:[0-9a-f]{64}$/i.test(hash)) {
     throw new Error("result.json 的 contentHash 格式非法：应为完整的 sha256:... 值（先执行 g1-pre.mjs hash）");
   }
+
   const checks = Array.isArray(payload.checks) ? payload.checks : [];
-  const checkIds = checks.map((check) => String(check.id || "").toUpperCase());
+  const checkIds = checks.map((check) => String(check.id || "").trim().toLowerCase());
   const missing = REQUIRED_CHECKS.filter((id) => !checkIds.includes(id));
   if (missing.length) {
-    throw new Error(`checks 必须覆盖 F01~F07，缺少：${missing.join("、")}`);
+    throw new Error(`checks 必须覆盖 facts / request / evidence，缺少：${missing.join("、")}`);
   }
+  for (const check of checks) {
+    // 三项主检查必须存在；规则允许按条件场景追加检查项，因此未知 id 只校验状态，不拒绝。
+    const status = String(check.status || "").trim().toLowerCase();
+    if (!["pass", "fail"].includes(status)) {
+      throw new Error(`checks[].status 非法：${check.status}；只能是 pass 或 fail`);
+    }
+  }
+
   const findings = Array.isArray(payload.findings) ? payload.findings : [];
   for (const finding of findings) {
     if (!CATEGORY_LABELS[finding.category]) {
       throw new Error(`findings[].category 非法：${finding.category}`);
     }
-    if (!String(finding.currentProblem || "").trim() || !String(finding.suggestedSupplement || "").trim()) {
-      throw new Error("每条 finding 都必须包含 currentProblem 与 suggestedSupplement");
+    const checkId = String(finding.checkId || "").trim().toLowerCase();
+    if (!REQUIRED_CHECKS.includes(checkId)) {
+      throw new Error(`findings[].checkId 非法：${checkId || "(空)"}；只能是 facts / request / evidence`);
+    }
+    const impact = String(finding.impact || "").trim();
+    if (impact && !IMPACT_VALUES.includes(impact)) {
+      throw new Error(`findings[].impact 非法：${impact}；只能是 ${IMPACT_VALUES.join(" / ")}`);
+    }
+    const currentProblem = String(finding.currentProblem || "").trim();
+    const minimalAction = String(finding.minimalAction || "").trim();
+    if (!currentProblem || !minimalAction) {
+      throw new Error("每条 finding 都必须包含 currentProblem 与 minimalAction");
     }
   }
   if (conclusion === "pass" && findings.length) {
@@ -432,64 +525,114 @@ function readResult(file) {
   if (conclusion === "fail" && !findings.length) {
     throw new Error("conclusion 为 fail 时 findings 不能为空");
   }
-  return { payload, conclusion, findings };
-}
 
-
-/**
- * 把规范建议渲染为 `* *标签：* 内容` 形式。
- * 支持结构化对象（label/field + suggestion/text）与纯字符串：字符串没有标签时退化为 `* 内容`。
- */
-function renderAdvisoryLines(payload) {
-  const items = [
-    ...(Array.isArray(payload.advisoryFindings) ? payload.advisoryFindings : []),
-    ...(Array.isArray(payload.fieldHints) ? payload.fieldHints : []),
-  ];
-  const lines = [];
-  for (const item of items) {
-    if (item === null || item === undefined) continue;
-    if (typeof item === "object") {
-      const label = safeText(item.label || item.field || "");
-      const text = safeText(item.suggestion || item.text || "");
-      if (!text) continue;
-      lines.push(label ? `* *${label}：* ${text}` : `* ${text}`);
-      continue;
+  // 需求评估摘要只在 pass 时生成；fail 时必须为空。
+  const rawSummary = payload.assessmentSummary;
+  let assessment = null;
+  if (conclusion === "pass") {
+    if (!rawSummary || typeof rawSummary !== "object") {
+      throw new Error("conclusion 为 pass 时必须提供 assessmentSummary（需求评估摘要）");
     }
-    const text = safeText(item);
-    if (text) lines.push(`* ${text}`);
+    const background = String(rawSummary.background || "").trim();
+    const goals = toStringList(rawSummary.goals);
+    const points = toStringList(rawSummary.points);
+    if (!background || !goals.length || !points.length) {
+      throw new Error("assessmentSummary 至少要包含 background、非空的 goals 与 points");
+    }
+    const clarifications = (Array.isArray(rawSummary.clarifications) ? rawSummary.clarifications : [])
+      .map((item) => {
+        if (item === null || item === undefined) return null;
+        if (typeof item === "string") {
+          const question = item.trim();
+          return question ? { question, reason: "", impact: "" } : null;
+        }
+        const question = String(item.question || item.text || "").trim();
+        if (!question) return null;
+        return {
+          question,
+          reason: String(item.reason || "").trim(),
+          impact: String(item.impact || "").trim(),
+        };
+      })
+      .filter(Boolean);
+    assessment = {
+      background,
+      goals,
+      points,
+      clarifications,
+      evidenceRefs: toStringList(rawSummary.evidenceRefs),
+    };
+  } else if (rawSummary) {
+    throw new Error("conclusion 为 fail 时 assessmentSummary 必须为 null");
   }
-  return lines;
+
+  return { payload, applicability, executionStatus, conclusion, requirementKind, findings, assessment };
+}
+
+
+/** 通过评论末尾的固定免责声明。 */
+const PASS_DISCLAIMER = "_由 G1-Pre 基于本次原始材料生成，用于需求接手前快速理解，不构成产品、技术或验收方案。_";
+
+
+/** 把字符串数组渲染为 Jira wiki 无序列表；为空时返回「无」。 */
+function renderBulletBlock(items) {
+  const values = toStringList(items);
+  if (!values.length) return ["无"];
+  return values.map((item) => `* ${safeText(item)}`);
 }
 
 
 /**
- * 生成符合规则文档第 8 节的 Jira Wiki 评论正文。
- * 评论中不得出现 rule_version、content_hash、sha256 或「G1-Pre 指纹」。
+ * 生成符合规则文档第 10 节的 Jira Wiki 评论正文。
+ * 评论中不得出现 ruleVersion、contentHash、sha256 或「G1-Pre 指纹」。
  */
 function renderComment(result, mention) {
-  const { payload, conclusion, findings } = result;
+  const { payload, conclusion, findings, assessment } = result;
   const lines = [];
 
   if (conclusion === "pass") {
-    lines.push("h3. (/) G1-Pre 准入通过");
-    lines.push("*结论：* 当前原始诉求已满足准入要求，可进入下一状态。");
+    lines.push("h3. (/) G1-Pre 通过");
+    lines.push("=====需求评估摘要（by G1-PRE agent）=====");
+    lines.push("");
+    lines.push("h4. 1. 需求背景");
+    lines.push(safeText(assessment.background) || "无");
+    lines.push("");
+    lines.push("h4. 2. 需求目标");
+    lines.push(...renderBulletBlock(assessment.goals));
+    lines.push("");
+    lines.push("h4. 3. 需求要点");
+    lines.push(...renderBulletBlock(assessment.points));
+    lines.push("");
+    lines.push("h4. 4. 建议澄清方向");
+    if (!assessment.clarifications.length) {
+      lines.push("无");
+    } else {
+      for (const item of assessment.clarifications) {
+        lines.push(`* 需要确认：${safeText(item.question)}`);
+        if (item.reason) lines.push(`  原因：${safeText(item.reason)}`);
+      }
+    }
+    lines.push("");
+    lines.push(PASS_DISCLAIMER);
   } else {
-    lines.push(`h3. (!) G1-Pre 准入未通过（${findings.length} 项待补充）`);
-    const prefix = mention ? `${mention} ` : "";
-    lines.push(`*报告人：* ${prefix}请补充后重检。`);
+    lines.push(`h3. (!) G1-Pre 不通过（${findings.length}项）`);
+    lines.push(`*报告人：* ${mention || "（未获取到报告人，无法 @）"}`);
+    lines.push("*本次阻断项：*");
+    findings.forEach((finding) => {
+      const title = String(finding.title || "").trim() || CATEGORY_LABELS[finding.category];
+      lines.push(`# ${safeText(title)}`);
+    });
     findings.forEach((finding, index) => {
       lines.push("");
       lines.push(`h4. ${index + 1}. ${CATEGORY_LABELS[finding.category]}`);
-      lines.push(`*当前问题：* ${safeText(finding.currentProblem)}`);
-      lines.push(`*建议调整：* ${safeText(finding.suggestedSupplement)}`);
+      const currentProblem = String(finding.currentProblem || "").trim();
+      const minimalAction = String(finding.minimalAction || "").trim();
+      const refs = toStringList(finding.evidenceRefs);
+      const basis = refs.length ? refs.join("、") : String(finding.basis || "").trim() || "见当前问题所引用的原文";
+      lines.push(`*当前问题：* ${safeText(currentProblem)}`);
+      lines.push(`*依据：* ${safeText(basis)}`);
+      lines.push(`*最小补充动作：* ${safeText(minimalAction)}`);
     });
-  }
-
-  const advisory = renderAdvisoryLines(payload);
-  if (advisory.length) {
-    lines.push("");
-    lines.push("h4. 规范建议");
-    lines.push(...advisory);
   }
 
   return `${lines.join("\n").replace(/\n{3,}/g, "\n\n").trim()}\n`;
@@ -504,13 +647,55 @@ async function commandComment(positional, options) {
   const issueKey = String(result.payload.issueKey || "").trim();
   if (!issueKey) throw new Error("result.json 缺少 issueKey");
 
+  // 不适用：只返回分流理由，不写门禁评论。
+  if (result.applicability === "not_applicable") {
+    print({
+      ok: true,
+      key: issueKey,
+      applicability: "not_applicable",
+      conclusion: null,
+      body: "",
+      written: false,
+      skipped: true,
+      skippedReason: "not_applicable",
+      commentId: "",
+    });
+    return;
+  }
+
+  // 执行异常：不生成通过/不通过内容评论，由平台记录并重试。
+  if (result.executionStatus === "execution_error") {
+    const error = result.payload.executionError || {};
+    const stage = String(error.stage || result.payload.executionStage || "unknown");
+    const sourceId = String(error.sourceId || "").trim();
+    const message = String(error.message || "核心材料不可读").trim();
+    print({
+      ok: true,
+      key: issueKey,
+      applicability: result.applicability,
+      conclusion: null,
+      executionStatus: "execution_error",
+      body: `G1-Pre 执行异常：${message}\nerrorStage: ${stage}${sourceId ? `\nsourceId: ${sourceId}` : ""}`,
+      written: false,
+      skipped: true,
+      skippedReason: "execution_error",
+      commentId: "",
+    });
+    return;
+  }
+
   // 写评论时才需要读单子做判重；只预览时尽量少发请求。
   const issue = options.write ? await jira.getIssue(issueKey, options) : null;
   let mention = String(options.mention || result.payload.reporterMention || "");
   // 只有不通过评论才需要 @报告人；通过评论不必为了补 mention 再读一次单子。
   if (!mention && result.conclusion === "fail") {
-    const source = issue || await jira.getIssue(issueKey, options);
-    mention = source.reporter && source.reporter.name ? `[~${source.reporter.name}]` : "";
+    try {
+      const source = issue || await jira.getIssue(issueKey, options);
+      mention = source.reporter && source.reporter.name ? `[~${source.reporter.name}]` : "";
+    } catch (error) {
+      // 只预览且无法读取单据时，退化为占位提示，不阻断渲染；写入路径仍会在下面暴露真实错误。
+      if (options.write) throw error;
+    }
   }
   const body = renderComment(result, mention);
   const output = {
@@ -535,7 +720,6 @@ async function commandComment(positional, options) {
   const latest = entries.length ? entries[entries.length - 1] : null;
   const unchanged = Boolean(
     latest
-    && latest.format === "wiki"
     && normalizeBody(latest.body) === normalizeBody(body),
   );
   if (unchanged && !options.force) {
