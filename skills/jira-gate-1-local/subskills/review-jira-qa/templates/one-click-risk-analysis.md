@@ -29,7 +29,7 @@
    `scans` 逐条回应候选，`failures` 带原文 `facts[].quote` 与 `criteria`。
 5. `render-gate.mjs` 生成 HTML 与评论。
 6. `validate-gate.mjs --coverage-required --candidates --source` 机械校验。
-7. `jira-upload.mjs` 上传 HTML，`jira-comment.mjs` 同步 QA 评论，`result.mjs` 输出结果。
+7. `jira-upload.mjs --dry-run` 与 `jira-comment.mjs --dry-run` 只做本地运行态记录（禁止真实上传/评论），`result.mjs` 输出结果。
 
 ## 验收清单
 

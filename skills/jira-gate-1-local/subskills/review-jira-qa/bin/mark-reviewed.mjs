@@ -8,7 +8,7 @@ import path from 'node:path';
 import { existsSync } from 'node:fs';
 import { readFile } from 'node:fs/promises';
 
-import { EXIT, QaError, boolArg, checkNode, loadCredentials, parseArgs, parseIssueKey, resolveWorkspace } from './lib/env.mjs';
+import { EXIT, QaError, boolArg, checkNode, isLocalGateMode, loadCredentials, parseArgs, parseIssueKey, resolveWorkspace } from './lib/env.mjs';
 import { readJson, readText, sha256, writeJson } from './lib/fs-safe.mjs';
 import { timestamp } from './lib/env.mjs';
 import { JiraClient } from './lib/jira.mjs';
@@ -55,7 +55,9 @@ async function main() {
   await writeJson(markerPath, marker);
   process.stdout.write(`REVIEW_MARKER=${markerPath}\n`);
 
-  if (boolArg(args, 'jira')) {
+  if (boolArg(args, 'jira') && isLocalGateMode()) {
+    process.stderr.write('[mark-reviewed][INFO] 本地预检模式：复核标记只写本地，不写 Jira 复核评论。\n');
+  } else if (boolArg(args, 'jira')) {
     const version = planVersion(plan);
     if (!version) throw new QaError('方案文件名缺少 -测试方案-v<版本>.md，无法写 Jira 复核评论。', EXIT.USAGE);
     const client = new JiraClient(loadCredentials());

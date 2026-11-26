@@ -10,9 +10,20 @@
  * 安全约束：脚本只读本地文件并写 outputs，不发起网络请求，不触碰 Jira。
  */
 
-import { copyFileSync, existsSync, mkdirSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
-import { basename, extname, join, resolve } from "node:path";
+import { existsSync, mkdirSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { basename, dirname, extname, join, relative, resolve } from "node:path";
+import { fileURLToPath } from "node:url";
 import { deflateRawSync } from "node:zlib";
+
+/** 技能包根目录；预检包不允许写进这里，避免交付物混进技能安装目录。 */
+const SKILL_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "..");
+
+/** 判断 target 是否位于 root 之内（跨平台比较相对路径）。 */
+function isInside(target, root) {
+  const normalize = (value) => (process.platform === "win32" ? value.toLowerCase() : value);
+  const rel = normalize(relative(resolve(root), resolve(target)));
+  return rel === "" || (!rel.startsWith("..") && !/^[A-Za-z]:/.test(rel));
+}
 
 /** 打包失败错误，reason 供调用方定位参数或文件问题。 */
 class PackError extends Error {
@@ -144,7 +155,8 @@ function removePreviousPackages(outDir, key, keepPath) {
 function checkComment(text, warnings) {
   if (!text.includes("（本地预检）")) warnings.push("评论草稿缺少「（本地预检）」标题标识");
   if (!/\(\/\)|\(x\)/.test(text)) warnings.push("评论草稿缺少 (/) 或 (x) 检查项标记");
-  if (/\*\*[^*]+\*\*|^#{1,6}\s+/m.test(text)) warnings.push("评论草稿疑似包含 Markdown 语法");
+  // Jira 有序列表也使用行首 `# `，所以只把 `##` 及以上标题和 Markdown 粗体视为疑似 Markdown。
+  if (/\*\*[^*]+\*\*|^#{2,6}\s+/m.test(text)) warnings.push("评论草稿疑似包含 Markdown 标题或粗体语法");
 }
 
 /** 校验报告以「宋立志」结尾且不是 HTML 占位。 */
@@ -196,6 +208,13 @@ function pack(options) {
   if (qa) checkHtml(basename(entries.at(-1).name), qa.data, warnings);
 
   const outDir = resolve(String(options.out || "outputs"));
+  // 防呆：输出目录必须在技能包之外；否则用户复制技能包时会把历史预检结果一起带走。
+  if (isInside(outDir, SKILL_ROOT)) {
+    throw new PackError(
+      `输出目录不能位于技能包内：${outDir}。请用 --out 指向工作目录，或在技能包外执行。`,
+      "out-inside-skill",
+    );
+  }
   mkdirSync(outDir, { recursive: true });
   const zipName = String(options["zip-name"] || "").trim() || `${key}-G1本地预检包-${timestampOf(new Date())}.zip`;
   const zipPath = join(outDir, zipName);

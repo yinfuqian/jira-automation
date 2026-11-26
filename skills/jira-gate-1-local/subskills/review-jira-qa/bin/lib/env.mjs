@@ -6,7 +6,7 @@
  * - 产物只能落在调用者工作区，不能落进技能安装目录。
  */
 
-import { existsSync } from 'node:fs';
+import { existsSync, readFileSync } from 'node:fs';
 import { mkdir } from 'node:fs/promises';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -124,15 +124,41 @@ export function skillDir() {
   return path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..');
 }
 
+/** 本地预检标记文件名；包内存在该文件时无条件禁止所有 Jira 写操作。 */
+const LOCAL_PREVIEW_MARKER = '.local-preview';
+
 /**
  * 判断当前是否处于整合包的本地预检模式。
- * 命中标记后，包内 Jira 客户端必须拒绝所有非只读请求。
+ *
+ * 本包默认只读，满足任一条件即开启：
+ * 1. 环境变量 JIRA_GATE_LOCAL_MODE=1；
+ * 2. 子技能目录或整合包根目录存在 .local-preview 标记；
+ * 3. 子技能或整合包的 SKILL.md 声明 local-preview: true / name: jira-gate-1-local。
+ *
+ * 第 3 条是 fail-safe，保证用户把目录拿到本机后，漏复制隐藏标记也能保持只读。
+ * 不能再用“当前目录是否位于技能目录内”判断：真实预检要求工作区在技能目录之外，
+ * 该条件会导致写保护恒为关闭。
  */
 export function isLocalGateMode() {
-  const current = path.resolve(process.cwd());
-  const skillRoot = skillDir();
-  const relative = path.relative(skillRoot, current);
-  return relative === '' || (!relative.startsWith('..') && !path.isAbsolute(relative));
+  if (String(process.env.JIRA_GATE_LOCAL_MODE || '').trim() === '1') return true;
+  try {
+    const root = skillDir();
+    const packageRoot = path.resolve(root, '..', '..');
+    const markers = [
+      path.join(root, LOCAL_PREVIEW_MARKER),
+      path.join(packageRoot, LOCAL_PREVIEW_MARKER),
+    ];
+    if (markers.some((file) => existsSync(file))) return true;
+
+    const declaresLocal = (file) => {
+      if (!existsSync(file)) return false;
+      const text = readFileSync(file, 'utf8');
+      return /^\s*local-preview:\s*true\s*$/m.test(text) || /^name:\s*jira-gate-1-local\s*$/m.test(text);
+    };
+    return declaresLocal(path.join(root, 'SKILL.md')) || declaresLocal(path.join(packageRoot, 'SKILL.md'));
+  } catch {
+    return false;
+  }
 }
 
 function normalizeWindowsPath(value) {

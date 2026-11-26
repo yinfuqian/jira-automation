@@ -7,7 +7,7 @@
 import { open, readFile, stat, unlink } from 'node:fs/promises';
 import path from 'node:path';
 
-import { EXIT, QaError, boolArg, checkNode, loadCredentials, log, parseArgs, parseIssueKey, resolveWorkspace } from './lib/env.mjs';
+import { EXIT, QaError, boolArg, checkNode, isLocalGateMode, loadCredentials, log, parseArgs, parseIssueKey, resolveWorkspace } from './lib/env.mjs';
 import { JiraClient, attachmentList } from './lib/jira.mjs';
 import { ensureDir, readText, writeJson } from './lib/fs-safe.mjs';
 import { syncComment } from './lib/comment-sync.mjs';
@@ -96,7 +96,12 @@ async function main() {
     process.stderr.write('[jira-upload][ERR] 缺少 --file <交付物路径>。\n');
     throw new QaError('参数或配置错误', EXIT.USAGE);
   }
-  const dryRun = boolArg(args, 'dry-run');
+  // 本地预检包内无条件降级为 dry-run，避免漏写 --dry-run 时真实上传附件。
+  const localMode = isLocalGateMode();
+  const dryRun = boolArg(args, 'dry-run') || localMode;
+  if (localMode && !boolArg(args, 'dry-run')) {
+    process.stderr.write('[jira-upload][INFO] 本地预检模式：已强制使用 --dry-run，不向 Jira 上传附件。\n');
+  }
   const forceUpload = boolArg(args, 'force-upload');
   const release = dryRun ? async () => {} : await acquireLock(workspace, key);
 

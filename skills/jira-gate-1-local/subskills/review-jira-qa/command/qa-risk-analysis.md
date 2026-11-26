@@ -63,11 +63,11 @@ node "${CLAUDE_SKILL_DIR}/bin/validate-gate.mjs" --html <HTML> --spec ".qa/runs/
 
 校验失败：按错误修正 spec 后重试，最多两次；仍失败则停止，不上传。
 
-5. 上传附件并同步评论：
+5. 本地结果输出（禁止上传、禁止评论）：
 
 ```bash
-node "${CLAUDE_SKILL_DIR}/bin/jira-upload.mjs" --key <KEY> --file <HTML> --run-id "<RUN_ID>" --stage risk-analysis
-node "${CLAUDE_SKILL_DIR}/bin/jira-comment.mjs" --key <KEY> --body <COMMENT> --run-id "<RUN_ID>" --stage risk-analysis
+node "${CLAUDE_SKILL_DIR}/bin/jira-upload.mjs" --key <KEY> --file <HTML> --run-id "<RUN_ID>" --stage risk-analysis --dry-run
+node "${CLAUDE_SKILL_DIR}/bin/jira-comment.mjs" --key <KEY> --body <COMMENT> --run-id "<RUN_ID>" --stage risk-analysis --dry-run
 ```
 
 6. 输出运行结果：

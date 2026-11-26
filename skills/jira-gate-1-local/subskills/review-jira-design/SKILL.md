@@ -13,10 +13,10 @@ metadata:
 
 ## 运行环境适配（本仓库部署补充说明，先读这一节）
 
-本技能随仓库 `skills/` 目录一起只读挂载进 Codex 容器，**技能目录固定为 `/data/skills/review-jira-design`**（桌面端为 `<仓库>/skills/review-jira-design`）；下文所有 `scripts/...`、`references/...` 都按这个绝对目录展开。
+本技能位于整合包 `jira-gate-1-local/subskills/review-jira-design`，**不依赖项目仓库或 `/data/skills`**；下文所有 `scripts/...`、`references/...` 都相对本子技能目录 `<技能目录>/subskills/review-jira-design` 展开。
 
-- **对 Jira 只读**：本技能不访问 Jira、不发任何网络写请求，输入只有本地的 PRD 与原型文件；需求单里的附件由调用方（如 `jira-gate-1`、`jira-gate-1-mock`）先下载到工作目录，再以文件路径传入。
-- **产物落在调用方的工作目录**：报告 HTML 的落盘位置由调用方用 `--out` 指定（`jira-gate-1` 与 `jira-gate-1-mock` 用 `<工作目录>/work/jira-gate/<KEY>/design/`）；不要写进只读的技能目录。
+- **对 Jira 只读**：本技能不访问 Jira、不发任何网络写请求，输入只有本地的 PRD 与原型文件；需求单里的附件由调用方 `jira-gate-1-local` 先准备到工作目录，再以文件路径传入。
+- **产物落在调用方的工作目录**：报告 HTML 的落盘位置由调用方用 `--out` 指定（`jira-gate-1-local` 用 `<工作目录>/work/jira-gate/<KEY>/design/`）；不要写进技能目录。
 - **不采集截图**：本版本只依据 PRD 原文、原型源码与页面结构核对，不依赖运行截图；未实际运行或无法判断的内容标记为「未验证」，不伪造截图或运行证据，也不要自行安装浏览器。
 - **报告只由脚本生成**：`scripts/build-report.mjs` 只用 Node 内置模块（`node:fs`、`node:path`、`node:url`），**不需要 `npm install`**；按 [内容示例](references/content-example.json) 填内容 JSON 后合成 HTML，不要手写 HTML，也不要改模板的 `<style>`、`<script>`。
 

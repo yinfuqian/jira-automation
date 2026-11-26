@@ -87,15 +87,15 @@ node "${CLAUDE_SKILL_DIR}/bin/validate-gate.mjs" --html <HTML> \
 
 校验失败：按错误修正 spec 后重试，最多两次；仍失败则停止，不上传。
 
-### 5. 上传附件、同步评论并输出结果
+### 5. 本地结果输出（禁止上传、禁止评论）
 
 `render-gate.mjs` 会输出 `HTML=` 与 `COMMENT=`，直接使用：
 
 ```bash
 node "${CLAUDE_SKILL_DIR}/bin/jira-upload.mjs" --key <KEY> --file <HTML> \
-  --run-id "<RUN_ID>" --stage risk-analysis
+  --run-id "<RUN_ID>" --stage risk-analysis --dry-run
 node "${CLAUDE_SKILL_DIR}/bin/jira-comment.mjs" --key <KEY> --body <COMMENT> \
-  --run-id "<RUN_ID>" --stage risk-analysis
+  --run-id "<RUN_ID>" --stage risk-analysis --dry-run
 node "${CLAUDE_SKILL_DIR}/bin/result.mjs" --stage risk-analysis --key <KEY> \
   --run-id "<RUN_ID>" --spec ".qa/runs/<RUN_ID>/gate.spec.json"
 ```

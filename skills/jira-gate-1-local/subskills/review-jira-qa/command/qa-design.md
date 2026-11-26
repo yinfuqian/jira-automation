@@ -4,6 +4,9 @@ argument-hint: <Jira需求Key或URL>
 allowed-tools: Read, Write, Edit, Bash(node:*), Glob, Grep
 ---
 
+> **整合包本地预检禁止执行本文件。** 本文件仅随安装包保留；如被误读，所有
+> `jira-upload.mjs` / `jira-comment.mjs` 调用必须追加 `--dry-run`，且不得写 Jira 评论、上传附件或流转状态。
+
 执行 QA 阶段二。技能目录用 `${CLAUDE_SKILL_DIR}`，工作区用 `${QA_WORKSPACE}`（缺省当前目录）。
 
 执行前把 `${CLAUDE_SKILL_DIR}` 替换为技能目录绝对路径；`${QA_WORKSPACE:-$PWD}` 由 shell 展开。
@@ -71,14 +74,14 @@ node "${CLAUDE_SKILL_DIR}/bin/render-design-comment.mjs" --spec ".qa/runs/<RUN_I
 
 ```bash
 node "${CLAUDE_SKILL_DIR}/bin/jira-upload.mjs" --key <KEY> --file <方案.md> --file <XMind> \
-  --comment-file ".qa/runs/<RUN_ID>/comment.md" --run-id "<RUN_ID>" --stage design
+  --comment-file ".qa/runs/<RUN_ID>/comment.md" --run-id "<RUN_ID>" --stage design --dry-run
 ```
 
 - `not-satisfied`：
 
 ```bash
 node "${CLAUDE_SKILL_DIR}/bin/jira-comment.mjs" --key <KEY> \
-  --body ".qa/runs/<RUN_ID>/comment.md" --run-id "<RUN_ID>"
+  --body ".qa/runs/<RUN_ID>/comment.md" --run-id "<RUN_ID>" --dry-run
 ```
 
 5. 汇总本次结果：

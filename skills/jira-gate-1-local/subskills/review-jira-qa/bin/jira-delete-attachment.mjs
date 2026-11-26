@@ -5,7 +5,7 @@
  * 其他附件必须显式 --force。
  */
 
-import { EXIT, QaError, boolArg, checkNode, loadCredentials, log, parseArgs, parseIssueKey } from './lib/env.mjs';
+import { EXIT, QaError, boolArg, checkNode, isLocalGateMode, loadCredentials, log, parseArgs, parseIssueKey } from './lib/env.mjs';
 import { JiraClient, attachmentList } from './lib/jira.mjs';
 import { handleFatal } from './lib/fatal.mjs';
 
@@ -20,7 +20,8 @@ async function main() {
     process.stderr.write('[jira-delete][ERR] 缺少 --id <附件ID>。\n');
     throw new QaError('参数或配置错误', EXIT.USAGE);
   }
-  const dryRun = boolArg(args, 'dry-run');
+  // 本地预检包内禁止删除 Jira 附件，未显式 dry-run 时也强制降级。
+  const dryRun = boolArg(args, 'dry-run') || isLocalGateMode();
   const client = new JiraClient(loadCredentials(process.env, { required: !dryRun }));
   let target = null;
   if (process.env.JIRA_BASE_URL) {

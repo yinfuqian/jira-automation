@@ -1,5 +1,8 @@
 # Jira 规则对接说明（阶段一）
 
+> **本地预检只读声明**：本整合包禁止写 Jira 评论、上传/删除附件、回写字段或流转状态。
+> 文中涉及 `jira-upload.mjs` / `jira-comment.mjs` 的步骤仅用于理解线上流程，本地预检一律跳过或使用 `--dry-run`。
+
 本技能在仓库中的注册名是 `review-jira-qa`，**只执行阶段一需求准入门禁**。
 本包不实现 HTTP 服务；Jira 自动化规则由技能平台接收，平台按 `skill_id=review-jira-qa`
 启动 Codex Agent 并传入 Jira 链接。

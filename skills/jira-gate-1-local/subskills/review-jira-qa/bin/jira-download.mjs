@@ -11,6 +11,7 @@
  */
 
 import path from 'node:path';
+import { existsSync, readdirSync, statSync } from 'node:fs';
 import { readFile } from 'node:fs/promises';
 
 import {
@@ -18,6 +19,7 @@ import {
   QaError,
   checkNode,
   loadCredentials,
+  isLocalGateMode,
   log,
   normalizeScope,
   parseArgs,
@@ -69,6 +71,34 @@ function stageFromArgv(argv) {
   if (raw === '2') return 'design';
   if (raw === '3') return 'cases';
   return raw || 'risk-analysis';
+}
+
+/**
+ * 收集本地附件目录中的全部文件，构造与 Jira 附件列表兼容的结构。
+ * 本地预检优先使用这些文件，避免再次从 Jira 下载。
+ */
+function listLocalAttachments(dir) {
+  const files = [];
+  const walk = (current) => {
+    for (const entry of readdirSync(current, { withFileTypes: true })) {
+      const full = path.join(current, entry.name);
+      if (entry.isDirectory()) {
+        walk(full);
+        continue;
+      }
+      if (!entry.isFile()) continue;
+      const info = statSync(full);
+      files.push({
+        id: `local-${files.length + 1}`,
+        filename: entry.name,
+        size: info.size,
+        created: info.mtime.toISOString(),
+        localPath: full,
+      });
+    }
+  };
+  walk(dir);
+  return files;
 }
 
 function suggestName(summary) {
@@ -333,7 +363,8 @@ async function main() {
   const workspace = resolveWorkspace(args.workspace);
   const runId = args['run-id'];
   // 试跑模式：跳过时不在 Jira 写评论，只落本地 result
-  skipWithComment = !(args['no-comment'] === true || args['no-comment'] === 'true' || args['dry-run'] === true || args['dry-run'] === 'true');
+  // 本地预检模式禁止写“输入不适用”评论，只落本地 result。
+  skipWithComment = !(args['no-comment'] === true || args['no-comment'] === 'true' || args['dry-run'] === true || args['dry-run'] === 'true' || isLocalGateMode());
   if (!runId) {
     process.stderr.write('[jira-download][ERR] 缺少 --run-id；请先运行 jira-read.mjs。\n');
     throw new QaError('参数或配置错误', EXIT.USAGE);
@@ -343,7 +374,14 @@ async function main() {
 
   const client = new JiraClient(loadCredentials());
   const issue = await client.getIssue(key, { comments: false });
-  const attachments = attachmentList(issue);
+  // 附件来源：本地目录优先；本地目录不存在或为空时只读下载 Jira 附件。
+  const localAttachmentDir = String(args['local-dir'] || process.env.QA_LOCAL_ATTACHMENTS || '').trim();
+  const localAttachments = localAttachmentDir && existsSync(localAttachmentDir)
+    ? listLocalAttachments(localAttachmentDir)
+    : [];
+  const fromLocal = localAttachments.length > 0;
+  const attachments = fromLocal ? localAttachments : attachmentList(issue);
+  if (fromLocal) process.stderr.write(`[jira-download][INFO] 使用本地附件 ${attachments.length} 个：${localAttachmentDir}\n`);
   const rawDescription = issue?.fields?.description;
   const description =
     typeof rawDescription === 'string'
@@ -423,7 +461,12 @@ async function main() {
     const maxMb = isArchive
       ? Math.max(Number(process.env.QA_MAX_ARCHIVE_MB || 100), Number(args['max-mb'] || 0) || 0)
       : Number(args['max-mb'] || 0) || Number(process.env.QA_MAX_ATTACHMENT_MB || 50);
-    await client.downloadAttachment(id, localFile, { maxMb });
+    if (att.localPath) {
+      // 本地附件直接复制到工作区，保持后续解析路径与 Jira 下载模式一致。
+      await writeBinaryAtomic(localFile, await readFile(att.localPath));
+    } else {
+      await client.downloadAttachment(id, localFile, { maxMb });
+    }
     const buffer = await readFile(localFile);
 
     if (isArchive) {

@@ -1,23 +1,28 @@
 ---
 name: review-jira-qa
-description: 只执行阶段一的 QA 需求准入门禁技能。读取 Jira 最新需求材料，按 B1-B7 / C1-C6 逐项判定，覆盖全部 AC 并回应结构扫描候选，生成需求准入门禁清单 HTML、上传附件并同步 QA 评论。阶段二/三文件仅为安装包完整性保留，默认不启用。
+description: 只执行阶段一的 QA 需求准入门禁技能（本地预检版）。读取本地或 Jira 最新需求材料，按 B1-B7 / C1-C6 逐项判定，覆盖全部 AC 并回应结构扫描候选，生成需求准入门禁清单 HTML 和本地评论草稿。禁止上传附件、禁止写 Jira 评论；阶段二/三文件仅为安装包完整性保留，默认不启用。
+metadata:
+  local-preview: true
 ---
 
 # 需求准入门禁（review-jira-qa 阶段一）
 
-本技能在仓库中的固定目录名是 `skills/review-jira-qa`，容器内固定挂载为
-`/data/skills/review-jira-qa`。脚本、提示词和模板都在技能目录内，**不依赖使用者所在的仓库**；
-产物落在调用者工作区（`QA_WORKSPACE`，缺省为当前目录），不写技能目录。
+> **本地预检硬边界**：本技能在整合包内只允许读取 Jira，禁止写评论、上传或删除附件、回写字段、流转状态。
+> 包内存在 `.local-preview` 标记，`jira-upload.mjs` / `jira-comment.mjs` / `jira-delete-attachment.mjs`
+> 会自动降级为 dry-run；传输层也会拒绝所有非 GET 请求。任何文档里的“同步评论/上传附件”都不得执行。
+
+本技能位于整合包 `jira-gate-1-local/subskills/review-jira-qa`，**不依赖项目仓库或 `/data/skills`**。
+脚本、提示词和模板都在子技能目录内；产物落在调用者工作区（`QA_WORKSPACE`，缺省为当前目录），不写技能目录。
 
 ## 技能边界
 
 - **只执行阶段一：需求准入门禁。** 阶段二（测试方案 / XMind）与阶段三（Excel / Xray CSV）不启用。
-- 被 `jira-gate-1` 调用时只执行阶段一，结论交还父技能合并；**不得自动进入阶段二或阶段三**。
-- QA 不修改 Jira 状态、不修改需求描述、不删除产品材料，只写自己的清单附件与 QA 评论。
+- 被 `jira-gate-1-local` 调用时只执行阶段一，结论交还父技能合并；**不得自动进入阶段二或阶段三**。
+- QA 不修改 Jira 状态、不修改需求描述、不删除产品材料；本地预检只生成清单 HTML 与评论草稿，不写 Jira 附件或评论。
 - 无论结论是「通过」还是「暂不通过」，都必须在阶段一结束时把控制权交还调用方；
   **运营性失败也不能阻塞父流程继续执行**。
 - 仅当本技能是平台顶层技能（`skill_id=review-jira-qa`）时，才在任务根目录写
-  `.skill-result.json` 供调用统计；被 `jira-gate-1` 或其它父技能调用时禁止写该文件。
+  `.skill-result.json` 供调用统计；被 `jira-gate-1-local` 或其它父技能调用时禁止写该文件。
 - 技能包内的阶段二/三脚本与提示词只用于 `preflight.mjs` 的安装包完整性校验，
   **不得调用**，也不得生成测试方案、XMind、Excel、Xray CSV 或测试代码。
 
@@ -36,9 +41,9 @@ description: 只执行阶段一的 QA 需求准入门禁技能。读取 Jira 最
    - `failures`：每条带材料原文 `facts[].quote` 与 `criteria`；
    - `scans`：逐条回应 `candidates.json`；
    - `materials`：与 `materials.json` 的附件 ID、文件名、上传时间一致。
-5. `render-gate.mjs` 生成自包含 HTML 和 Jira wiki 评论。
-6. `validate-gate.mjs` 机械校验覆盖率、判据、原文引用与扫描闭环；不通过不得上传。
-7. `jira-upload.mjs` 上传清单 HTML，`jira-comment.mjs` 同步 QA 评论，
+5. `render-gate.mjs` 生成自包含 HTML 和本地 Jira wiki 评论草稿。
+6. `validate-gate.mjs` 机械校验覆盖率、判据、原文引用与扫描闭环；不通过不得进入交付。
+7. `jira-upload.mjs --dry-run` 与 `jira-comment.mjs --dry-run` 只写本地运行态记录（禁止真实上传/评论），
    `result.mjs` 写运行结果并输出 `QA_RESULT_JSON`。
 
 ## 固定执行流程
@@ -46,7 +51,7 @@ description: 只执行阶段一的 QA 需求准入门禁技能。读取 Jira 最
 先设置环境变量：
 
 ```bash
-export CLAUDE_SKILL_DIR="${CLAUDE_SKILL_DIR:-/data/skills/review-jira-qa}"
+export CLAUDE_SKILL_DIR="${CLAUDE_SKILL_DIR:-<技能目录>/subskills/review-jira-qa}"
 export JIRA_PAT="${JIRA_PAT:-$JIRA_TOKEN}"
 ```
 
@@ -124,15 +129,15 @@ node "$CLAUDE_SKILL_DIR/bin/validate-gate.mjs" \
 校验失败时按错误修正 spec 后重试，最多两次；仍失败则停止，不上传附件、不写评论，
 按 `status=ERROR` 把原因交还调用方。不得直接手写 HTML，也不得跳过 `validate-gate`。
 
-### 5. 上传附件、同步评论并输出结果
+### 5. 生成本地结果（不上传、不评论）
 
 `render-gate.mjs` 会同时输出 `HTML=` 与 `COMMENT=`，直接使用它生成的评论文件：
 
 ```bash
 node "$CLAUDE_SKILL_DIR/bin/jira-upload.mjs" \
-  --key <KEY> --file <HTML> --run-id "<runId>" --stage risk-analysis --workspace "$QA_WORKSPACE"
+  --key <KEY> --file <HTML> --run-id "<runId>" --stage risk-analysis --workspace "$QA_WORKSPACE" --dry-run
 node "$CLAUDE_SKILL_DIR/bin/jira-comment.mjs" \
-  --key <KEY> --body <COMMENT> --run-id "<runId>" --stage risk-analysis --workspace "$QA_WORKSPACE"
+  --key <KEY> --body <COMMENT> --run-id "<runId>" --stage risk-analysis --workspace "$QA_WORKSPACE" --dry-run
 node "$CLAUDE_SKILL_DIR/bin/result.mjs" \
   --stage risk-analysis --key <KEY> --run-id "<runId>" \
   --spec ".qa/runs/<runId>/gate.spec.json" --workspace "$QA_WORKSPACE"

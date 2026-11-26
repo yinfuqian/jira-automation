@@ -181,6 +181,8 @@ async function main() {
     return;
   }
 
+  // CLI 入口显式开启本地预检模式，保证即使写命令被绕过也会在传输层拦截。
+  process.env.JIRA_GATE_LOCAL_MODE = "1";
   const callOptions = buildOptions(options);
   if (DISABLED_COMMANDS.has(command)) {
     throw new Error(`本地预检技能禁止执行 Jira 写命令：${command}`);

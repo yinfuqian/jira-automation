@@ -2,7 +2,7 @@
 
 本目录基于 `qa-gate 0.1.18` 适配到 Jira 自动化仓库，**只启用阶段一**：
 读取 Jira 最新需求材料，按 B1-B7 / C1-C6 判定，覆盖全部 AC、回应结构扫描候选，
-生成需求准入门禁清单 HTML，上传 Jira 附件并同步 QA 评论。
+生成需求准入门禁清单 HTML 与本地评论草稿；本地预检版禁止上传 Jira 附件、禁止写 QA 评论。
 
 阶段二（测试方案 / XMind）与阶段三（Excel / Xray CSV）**不启用**。
 
@@ -15,7 +15,7 @@
 ## 目录
 
 ```text
-skills/review-jira-qa/
+subskills/review-jira-qa/
 ├── SKILL.md                     # 阶段一执行契约（唯一入口说明）
 ├── runtime.json                 # 平台调用提示词（只跑阶段一）
 ├── agents/openai.yaml           # 代理展示信息
@@ -25,8 +25,8 @@ skills/review-jira-qa/
 ├── bin/scan.mjs                 # 结构扫描候选
 ├── bin/render-gate.mjs          # gate.spec.json → HTML + 评论
 ├── bin/validate-gate.mjs        # 机械校验
-├── bin/jira-upload.mjs          # 上传清单 HTML
-├── bin/jira-comment.mjs         # 同步 QA 评论
+├── bin/jira-upload.mjs          # 本地 dry-run 记录清单（不上传）
+├── bin/jira-comment.mjs         # 本地 dry-run 记录评论（不写入）
 ├── bin/result.mjs               # 写 result.json + QA_RESULT_JSON
 └── rules/scan-rules.json        # 通用扫描规则
 ```
@@ -50,7 +50,7 @@ scan.mjs --source <全部需求侧材料> --out candidates.json
         ↓
 模型写 gate.spec.json（checks / coverage / scans / failures / materials）
         ↓
-render-gate.mjs → HTML + Jira wiki 评论
+render-gate.mjs → HTML + 本地 Jira wiki 评论草稿
         ↓
 validate-gate.mjs --coverage-required --candidates --source
         ↓

@@ -3,11 +3,35 @@ name: jira-gate-1-local
 description: 对 Jira 需求单做 G1 需求准入检查的本地预检版。当用户要求"本地预检 / 预演 / 先不要写入 Jira / 检查 PRD 准入但不要评论或上传附件"时使用。以 jira-gate-1 的 Checklist 和三个子评审流程为准，只读取 Jira 单据与附件；评论、门禁字段、需求评审报告、设计准入报告和 QA 清单只生成本地预检包，禁止写评论、回写字段、上传或删除附件、流转状态。只处理类型为「故事」且产品归属为 Bot / Call / See / Pal / Learn / Aiforce 之一的单子。
 metadata:
   short-description: Jira G1 需求准入检查（PRD 准入）
+  local-preview: true
 ---
 
 # Jira G1 需求准入检查（本地预检）
 
 用户给一个 Jira 需求链接，只读取单据、描述、附件、依赖、子任务和历史评论，按 PRD 需求准入 Checklist 逐项判定，给出**通过 / 退回补充**结论；所有结论只落本地预检包，不向 Jira 做任何写操作。
+
+## 本地安装与自检
+
+本目录是**自包含技能包**，不依赖本仓库、Node 项目或其他 skill；只用 Node.js >= 20 和包内脚本。
+
+```bash
+# Windows PowerShell
+Copy-Item -Recurse skills/jira-gate-1-local "$env:USERPROFILE\.codex\skills\jira-gate-1-local"
+
+# macOS / Linux
+cp -R skills/jira-gate-1-local ~/.codex/skills/jira-gate-1-local
+```
+
+- 包根与 `subskills/review-jira-qa/` 各有一个 `.local-preview` 标记，两个 `SKILL.md` 也声明了 `local-preview: true`。任一条件存在即强制只读；**不要删除**。
+- 即使漏复制隐藏标记、忘记设置 `JIRA_GATE_LOCAL_MODE=1`，只要运行的是本包，Jira 评论、附件、字段与流转写入都会在传输层被拒绝。
+- 调用时可提供本地附件文件或目录（`--local`，可重复）；没有本地附件时才只读下载 Jira 单当前附件。
+- 安装后自检（不访问网络、不需要令牌）：
+
+```bash
+node ~/.codex/skills/jira-gate-1-local/scripts/self-check.mjs
+```
+
+期望最后一行输出 `SELF_CHECK_OK`；若失败，脚本会列出具体失败项并返回非零退出码。
 
 ## 交付物
 
@@ -56,14 +80,17 @@ metadata:
 - **服务器容器 / `codex exec`（没有 `node_repl`）**：用 shell 直接执行技能自带命令行入口 `scripts/jira-cli.mjs`（能力与 `node_repl` 通道一致）：
 
   ```bash
+  # 强制本地预检模式：所有 Jira 写入（评论/附件/字段/流转）都会在传输层被拒绝
+  export JIRA_GATE_LOCAL_MODE=1
   # 令牌与连通性自检；令牌来自 --token、JIRA_TOKEN 环境变量或技能目录下的 .jira-token
   node <技能目录>/scripts/jira-cli.mjs selftest
   # 强制预检：类型为「故事」且产品归属在 Bot/Call/See/Pal/Learn/Aiforce 内才继续（见 §1）
   node <技能目录>/scripts/jira-cli.mjs precheck <KEY|URL>
   # 读取需求单并输出紧凑 Markdown 摘要（判定依据）
   node <技能目录>/scripts/jira-cli.mjs get <KEY|URL>
-  # 下载附件到工作目录
-  node <技能目录>/scripts/jira-cli.mjs attachments <KEY|URL> work/jira-gate/<KEY>/attachments
+  # 准备附件：优先使用本地文件/目录；没有本地输入时只读下载 Jira 附件
+  node <技能目录>/scripts/prepare-attachments.mjs --key <KEY> --workspace <工作目录> \
+    [--local <本地附件文件或目录> ...]
   # 判定单子是否上传了原型材料，决定要不要执行 review-jira-design（见 §3.1）
   node <技能目录>/scripts/detect-prototype.mjs --dir work/jira-gate/<KEY>/attachments --json
 
@@ -94,7 +121,7 @@ metadata:
 1. 类型（`issuetype`）为「故事」；
 2. 产品归属（`产品归属`，旧单兼容 `问题发现产品` / `发现产品`）属于 `Bot`、`Call`、`See`、`Pal`、`Learn`、`Aiforce` 之一（大小写不敏感，多值字段只要命中一个即可）。
 
-在读取附件、调用任何其他技能、写评论、回写字段或流转之前，先执行：
+在读取附件、调用任何其他技能之前，先执行：
 
 ```bash
 node <技能目录>/scripts/jira-cli.mjs precheck <KEY|URL>
@@ -130,6 +157,25 @@ node <技能目录>/scripts/jira-cli.mjs precheck <KEY|URL>
 `parseIssueKey()` 支持 `/browse/KEY`、`?selectedIssue=KEY`、jql 链接、纯 `KEY` 四种输入。
 
 ### 3. 取数：通道 A —— Jira REST（首选）
+
+**附件来源优先级（硬约束）**：
+
+1. 用户在调用时提供了本地附件文件或目录 → 直接使用本地文件，不再下载 Jira 附件；
+2. 未提供本地附件 → 只读下载 Jira 单当前附件；
+3. 本地与 Jira 都有同名附件时，以本地文件为准，并在草稿证据中注明「本地附件」。
+
+本地附件可以写在用户消息里，也可以由平台作为附件输入提供；把用户给出的每个文件或目录都原样传给
+`--local`（可重复），不要自己猜路径、不要先把本地文件上传到 Jira。
+
+统一用下面的脚本落到本次工作目录，后续解析、原型判定和三段评审都使用同一个目录：
+
+```bash
+node <技能目录>/scripts/prepare-attachments.mjs --key <KEY> --workspace <工作目录> \
+  [--local <本地附件文件或目录> ...]
+```
+
+脚本输出 JSON：`source=local|jira`、`dir`、`files`。本地目录会递归收集文件并原样复制到
+`<工作目录>/work/jira-gate/<KEY>/attachments/`；本地输入不存在或为空时直接失败，不静默回退到 Jira。
 
 在 `node_repl` 工具里执行下面的代码。**注意本机沙箱限制**：PowerShell 无法建立 TLS 连接，`node_repl` 是唯一能访问 Jira 的通道；`node_repl` 内没有 `process`、不支持静态 import，所以脚本必须用 `await import()` 动态加载，且**不要在 node_repl 顶层引用 `process`**。
 
@@ -201,9 +247,9 @@ node <技能目录>/scripts/detect-prototype.mjs --dir work/jira-gate/<KEY>/atta
 1. `cua.createBrowserTab("iab", issueUrl)` 打开单子。
 2. 用 `tab.playwright.evaluate(() => document.body.innerText)` 取正文，可拿到概要与描述、附件列表、问题链接、子任务、评论；**同时确认页面上的「类型」字段是「故事」、「产品归属」属于 Bot/Call/See/Pal/Learn/Aiforce 之一**，任一项不满足就立即停止。
 3. 附件：点击附件链接触发下载，再对下载目录跑 `extract.py`（压缩包会自动解压，见上一节）；随后用 `detect-prototype.mjs --dir <附件目录>` 判定是否上传了原型，决定要不要执行 §11.1。
-4. 结论评论：在页面评论区输入并提交。
+4. 结论评论：只写入本地评论草稿，**禁止在页面评论区输入或提交任何内容**。
 
-注意：Jira 的 `/rest/...` 地址在浏览器里会被拦截（`ERR_BLOCKED_BY_CLIENT`），**不要在浏览器里访问 REST 地址**；浏览器只用于读页面和写评论。通道 B 的结论必须注明"基于页面内容检查"。
+注意：Jira 的 `/rest/...` 地址在浏览器里会被拦截（`ERR_BLOCKED_BY_CLIENT`），**不要在浏览器里访问 REST 地址**；浏览器只用于读取页面内容，禁止提交评论。通道 B 的结论必须注明"基于页面内容检查"。
 
 ### 5. 逐项判定
 
@@ -238,11 +284,11 @@ node <技能目录>/scripts/detect-prototype.mjs --dir work/jira-gate/<KEY>/atta
 
 **本技能调用的所有子技能都不得中断 G1 本地预检流程。** 无论是非零退出、超时、脚本异常、结果文件缺失、结果 JSON 非法，还是未产出报告，都按以下方式收口，然后继续执行后续子技能与本地打包动作：
 
-- **`review-jira-req`**：五步流水线任一步失败、报告未生成或 `report-conclusion.mjs` 提取失败时，需求评审结论记为「未完成（阶段/原因）」，报告附件写「未生成（原因）」；继续执行 `review-jira-design`、`review-jira-qa`、G1 评论、门禁字段、可上传附件与必要流转。
+- **`review-jira-req`**：五步流水线任一步失败、报告未生成或 `report-conclusion.mjs` 提取失败时，需求评审结论记为「未完成（阶段/原因）」，报告附件写「未生成（原因）」；继续执行 `review-jira-design`、`review-jira-qa`、本地评论草稿、门禁预演与本地打包。
 - **`review-jira-design`**：只有「确有原型」但因 PRD 缺失/不可读、原型材料不可读、对象无法唯一定位或证据不足导致的 `审核未完成` 属于**业务结论**，仍会使最终结论为「退回补充」；**原型本身未上传时走 §3.1 的「不适用」分支，不属于审核未完成**。脚本非零退出、`content.json` 缺失/非法、报告未生成属于**运营性失败**，记为「未完成（原因）」，不改变 G1 自身结论，也不阻止后续交付。
 - **`review-jira-qa`**：`status=SKIPPED` 记为「不适用」，`status=ERROR` / `ok=false` / `result.json` 与 `QA_RESULT_JSON` 均缺失记为「未完成（原因）」，都不属于业务阻断，也不阻止后续交付；`conclusion=暂不通过` 属于业务结论，仍使最终结论为「退回补充」。
-- 子技能失败**不等于** G1 交付失败：不得因此停止后续子技能、停止写评论、跳过门禁字段或跳过附件上传；已完成的 Jira 写操作不回滚，不等待人工确认。
-- 只有 G1 自身的评论、门禁字段、附件上传或状态流转动作在重试后仍无法完成时，才按对应章节记录实际结果并保留现场；这也不改变已经得出的 G1 业务结论。
+- 子技能失败**不等于** G1 交付失败：不得因此停止后续子技能、停止生成本地评论草稿或跳过本地打包；本地预检没有任何 Jira 写操作需要回滚。
+- 只有 G1 自身的本地草稿、门禁预演或打包动作在重试后仍无法完成时，才按对应章节记录实际结果并保留现场；这也不改变已经得出的 G1 业务结论。
 
 ### 7. 组织评论内容
 
@@ -309,7 +355,7 @@ nodeRepl.write(JSON.stringify(gate));
 
 G1 评论只给门禁结论；需求质量的细读结论由同仓库的 `review-jira-req` 技能产出。**它的产物是 Markdown 报告，必须作为附件上传到需求单**——只留在本地不算完成。
 
-**技能位置**：本整合包内固定为 `<技能目录>/subskills/review-jira-req`。读取该子技能的判定标准、提示词与五步流水线时，**把它文档中的默认技能目录替换为本包路径**，不要访问 `/data/skills/review-jira-req`。**它自身对 Jira 只读**（`bin/` 里没有任何写请求），报告由本技能收进本地预检包，不要改动它的脚本。
+**技能位置**：本整合包内固定为 `<技能目录>/subskills/review-jira-req`。读取该子技能的判定标准、提示词与五步流水线时，**把它文档中的默认技能目录替换为本包路径**，不要访问包外的同名技能目录。**它自身对 Jira 只读**（`bin/` 里没有任何写请求），报告由本技能收进本地预检包，不要改动它的脚本。
 
 **附件分工**：`review-jira-req` 的 fetch 步骤会自行下载附件到 `reports/.work/<run-id>/attachments/<KEY>/`，并抽取文本或保留图片供 normalize/semantic 使用；本技能此前为 G1 判定下载到 `work/jira-gate/<KEY>/attachments/` 的副本仍保留。两边目录用途不同，不要用 `--no-attachments` 关闭它的附件读取，否则报告会缺少附件证据和检查总览。
 
@@ -359,7 +405,7 @@ node <技能目录>/scripts/report-conclusion.mjs "reports/review-report-<时间
 
 **前置判定（强制）**：先按 §3.1 运行 `detect-prototype.mjs`。只有 `hasPrototype=true`（或确认 `ambiguous` 里的文件确实是原型）时，才在需求质量评审（§11）跑完后、QA 阶段一（§11.2）之前调用整合包内的 `review-jira-design`：对照定稿 PRD 审核产品原型初稿，检查需求完整性、PRD—原型一致性、流程与状态覆盖。它**对 Jira 只读**，不发起任何网络写请求，输入只有本地 PRD 与原型文件。**单子未上传原型时本节整体跳过**：不调用该技能、不生成设计报告，本地草稿记「不适用（本单未上传原型）」，继续 §11.2 与后续交付。
 
-**技能位置**：本整合包内固定为 `<技能目录>/subskills/review-jira-design`。读取该子技能的检查项与报告流程时，**把它文档中的默认技能目录替换为本包路径**，不要访问 `/data/skills/review-jira-design`。严格按它的步骤、检查项与结论口径执行；不要改动它的脚本与报告模板。
+**技能位置**：本整合包内固定为 `<技能目录>/subskills/review-jira-design`。读取该子技能的检查项与报告流程时，**把它文档中的默认技能目录替换为本包路径**，不要访问包外的同名技能目录。严格按它的步骤、检查项与结论口径执行；不要改动它的脚本与报告模板。
 
 **输入取自本单附件**：
 
@@ -398,16 +444,19 @@ node "$DESIGN_SKILL_DIR/scripts/build-report.mjs" --prd "<PRD绝对路径>" \
 
 G1 还要调用整合包内的 `review-jira-qa` 技能执行 **阶段一 QA 需求准入门禁**。它按 B1–B7 / C1–C6 独立判定，产出需求准入门禁清单 HTML 并输出机器可读 result。**只执行阶段一**，禁止进入测试方案、XMind、Excel、Xray CSV 等阶段二/三。
 
-**技能位置**：本整合包内固定为 `<技能目录>/subskills/review-jira-qa`。读取该子技能的规则与流程时，**把它文档中的默认技能目录替换为本包路径**，不要访问 `/data/skills/review-jira-qa`。严格按其中阶段一流程执行，不要改动它的判定标准。该副本的传输层已启用本地预检硬边界：Jira 只允许 GET；任何评论、附件写入或删除请求都会被拒绝，即使命令漏写 `--dry-run` 也不会提交。
+**技能位置**：本整合包内固定为 `<技能目录>/subskills/review-jira-qa`。读取该子技能的规则与流程时，**把它文档中的默认技能目录替换为本包路径**，不要访问包外的同名技能目录。严格按其中阶段一流程执行，不要改动它的判定标准。该副本的传输层已启用本地预检硬边界：Jira 只允许 GET；任何评论、附件写入或删除请求都会被拒绝，即使命令漏写 `--dry-run` 也不会提交。
 
 **环境与工作区**：QA 工作区必须放在 G1 本次任务目录内，这样 §12 的清理能一并收尾；不得指向技能安装目录：
 
 ```bash
+export JIRA_GATE_LOCAL_MODE=1
 export SKILL_DIR="<技能目录>/subskills/review-jira-qa"
 export CLAUDE_SKILL_DIR="$SKILL_DIR"
 export JIRA_PAT="${JIRA_PAT:-$JIRA_TOKEN}"
 export JIRA_BASE_URL="${JIRA_BASE_URL:-https://jira.in.wezhuiyi.com}"
 export QA_WORKSPACE="$PWD/work/jira-gate/<KEY>/review-jira-qa"
+# 如果用户提供了本地附件，指向统一下载/收集目录；未提供时留空，QA 只读下载 Jira 附件。
+export QA_LOCAL_ATTACHMENTS="<工作目录>/work/jira-gate/<KEY>/attachments"
 ```
 
 **固定执行顺序**（0.1.18 起用 `prepare.mjs --stage 1` 一次完成准备步骤；`<runId>`、`<digest>`、`<coverageRequired>` 取 `prepare` 输出；`<gate.spec.json>`、`<HTML>`、`<COMMENT>` 按脚本实际输出路径替换）：
@@ -497,7 +546,8 @@ node <技能目录>/scripts/pack-local-deliverables.mjs --key <KEY> \
 ```
 
 - 包内文件固定为 `<KEY>-G1预检评论.txt`、`<KEY>-需求评审报告-宋立志.md`、可选 `<KEY>-原型设计准入报告.html` 与可选 `<KEY>-<需求名称>-需求准入门禁清单-v<版本>.html`。
-- 输出默认在 `<工作目录>/outputs/<KEY>-G1本地预检包-<时间戳>.zip`；读回 JSON 的 `ok=true`、`zipBytes>0` 和 `entries` 后才能宣布完成。
+- **以下命令必须在 `<工作目录>` 下执行**；输出默认在 `<工作目录>/outputs/<KEY>-G1本地预检包-<时间戳>.zip`，读回 JSON 的 `ok=true`、`zipBytes>0` 和 `entries` 后才能宣布完成。
+- 打包脚本会拒绝把 `--out` 指向技能包内部（`out-inside-skill`），避免预检包混进技能安装目录；同理，`prepare-attachments.mjs` 也拒绝把工作区指向技能包内部。
 - 缺少评审报告时改用 `--no-report`，草稿必须如实记录「未生成（原因）」；QA 清单和设计报告本来就可选，不要传占位文件。
 
 ```bash
@@ -582,7 +632,7 @@ h4. SHOULD（不阻断 G1，记录取舍）
 「报告附件 + 评审结论」是**评论末尾固定的一行，达标与不达标都要有**，位置在检查项清单之后（末尾），用来让人从评论直接定位到报告、并一眼看到质量结论：
 
 - 附件名按 §11 的规则可提前确定；`评审结论`取三档之一——**不合格 / 需修改 / 合格**，只能来自报告 md，不能自己判；报告未生成或提取失败时写 **未完成（原因）**，仍继续交付。
-- 因为末尾要写这个结论，**五步流水线必须在写评论之前跑到第 5 步**（§11），拿到 md 再用 `report-conclusion.mjs` 提取；不许先猜一个值写进评论。报告未生成或提取失败时写「未完成（原因）」，并继续完成 G1 评论，不得因此中断。
+- 因为末尾要写这个结论，**五步流水线必须在写本地评论草稿之前跑到第 5 步**（§11），拿到 md 再用 `report-conclusion.mjs` 提取；不许先猜一个值写进评论。报告未生成或提取失败时写「未完成（原因）」，并继续完成本地草稿，不得因此中断。
 - 报告生成失败时写「未生成（原因）」；生成成功时必须进入预检包，并把括号写成「已在预检包」。
 
 **退回补充时的业务待决策事项**（最多 5 项，按「目标范围、核心链路、规则状态、异常恢复、验收」归并；不得出现 Java 类、接口设计、数据库类型、SQL、缓存 Key、Topic、线程池、部署参数、组件选型、模型 Schema 或环境配置）：
@@ -716,5 +766,6 @@ h4. CONDITIONAL（命中场景逐条判定，未命中记 N/A）
 - 不把单据字段缺失、测试数据未准备、纯技术细节当作不达标理由。
 - 不留下未完成的草稿评论；评论草稿只落 `work/jira-gate/<KEY>/comment.txt`。
 - **禁止调用 `comment`、`comment-update`、`attach`、`attach-prune`、`transition` 等写命令**；只读取单据、附件、历史评论、门禁字段与流转元数据。包内 QA 子技能的 Jira 传输层同样只允许 GET，所有 POST / PUT / DELETE 写请求都会被硬拦截。
+- **不要删除包内的 `.local-preview` 标记**（技能根目录与 `subskills/review-jira-qa/` 各一份）。它用于在任意工作目录下强制开启只读模式；删除后只能依赖 `JIRA_GATE_LOCAL_MODE=1`。
 - 同一需求只保留最新一个预检包：打包成功后清理 `outputs/<KEY>-G1本地预检包-*.zip` 旧包，但不得触碰 Jira 附件和历史评论。
 - 交付全部完成后先写任务根目录 `.skill-result.json`（见「写机器可读结果」），再按 §12 清理本次任务的工作区中间产物（只删 `work/jira-gate/<KEY>/`）。子技能失败但本地预检包已完成时仍要写结果并清理；只有打包动作异常中断时才保留现场。

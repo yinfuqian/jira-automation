@@ -5,19 +5,19 @@ description: 从 JIRA Server/DC 拉取需求，按 OpenSpec 好需求标准评�
 
 # 需求评审（JIRA → OpenSpec 好需求标准）
 
-## 运行环境适配（Codex 容器部署，先读这一节）
+## 运行环境适配（本地预检包，先读这一节）
 
-本技能随仓库 `skills/` 目录一起只读挂载进 Codex 容器，**技能目录固定为 `/data/skills/review-jira-req`**。在这一环境下，下文的三处写法按下面的映射理解：
+本技能位于整合包 `jira-gate-1-local/subskills/review-jira-req`，**不依赖项目仓库或 `/data/skills`**。下文三处写法按下面的映射理解：
 
-| 下文写法 | 容器内的实际写法 | 说明 |
+| 下文写法 | 本包内的实际写法 | 说明 |
 |---|---|---|
-| `${CLAUDE_SKILL_DIR}` | `/data/skills/review-jira-req` | Codex **不会**替换这个变量，必须写成绝对路径；先 `export SKILL_DIR=/data/skills/review-jira-req`，再把命令里的 `${CLAUDE_SKILL_DIR}` 换成 `${SKILL_DIR}` |
-| `$JIRA_PAT` | `$JIRA_TOKEN` | 容器内后端注入 `JIRA_TOKEN` 与 `JIRA_BASE_URL` 并带上 `SKILLRUN_ENV_LOCKED=1`，脚本会直接读取这两项；桌面端未锁定时仍需 `export JIRA_PAT="$JIRA_TOKEN"` 与 `export JIRA_BASE_URL="${JIRA_BASE_URL:-https://jira.in.wezhuiyi.com}"` |
-| `<cwd>/reports/` | `/data/skill-workspace/reports/` | 工作目录是技能工作区，产物不写进技能目录（技能目录是只读挂载） |
+| `${CLAUDE_SKILL_DIR}` | `<技能目录>/subskills/review-jira-req` | Codex **不会**替换这个变量；先 `export SKILL_DIR="<技能目录>/subskills/review-jira-req"`，再把命令里的 `${CLAUDE_SKILL_DIR}` 换成 `${SKILL_DIR}` |
+| `$JIRA_PAT` | `$JIRA_PAT`（或 `$JIRA_TOKEN`） | 本地凭据由环境变量提供；桌面端通常 `export JIRA_PAT=...` 与 `export JIRA_BASE_URL=...` |
+| `<cwd>/reports/` | `<工作目录>/reports/` | 产物落在调用方工作目录，不写进技能目录 |
 
-**只读边界不变**：本技能自身对 JIRA 只读，`bin/` 里没有任何写请求。报告 md 上传成 JIRA 附件是**调用方 `jira-gate-1` 的职责**（用它自己的 `scripts/jira-cli.mjs attach`），不在本技能的范围内。附件下载同样只发 GET，且只允许同源地址、不跟随重定向。
+**只读边界不变**：本技能自身对 JIRA 只读，`bin/` 里没有任何写请求。报告 md 由调用方 `jira-gate-1-local` 打进本地预检包，**不上传成 JIRA 附件**。附件下载同样只发 GET，且只允许同源地址、不跟随重定向。
 
-`install.sh` 与 `command/` 是 Claude Code 专属的分发物（装到 `~/.claude/`），容器里**不要执行**，仓库只是原样保留它们。
+`install.sh` 与 `command/` 是上游分发物，本整合包**不执行**；所需脚本都在 `bin/` 与 `prompts/` 内。
 
 ## 何时触发
 
@@ -249,17 +249,13 @@ node "${CLAUDE_SKILL_DIR}/bin/mock-jira.mjs" --print-env
 
 ## 分享给其他人
 
-把技能目录整个拷走即可，无第三方依赖：
+本子技能已整合在 `jira-gate-1-local` 内，随父包一起复制即可，无第三方依赖：
 
 ```bash
-# 拷到自己的用户级技能目录，任何项目都能用
-cp -R "<本技能目录>" ~/.claude/skills/
+# 复制整个父包（推荐）
+cp -R "<父包目录>/jira-gate-1-local" ~/.codex/skills/jira-gate-1-local
 ```
 
-如果想同时装上 `/review-jira-req` 快捷命令，用技能目录里的 `install.sh`：
-
-```bash
-bash "${CLAUDE_SKILL_DIR}/install.sh"
-```
+不需要单独安装本子技能，也不需要执行 `install.sh` 或安装 `/review-jira-req` 快捷命令。
 
 细节见 `${CLAUDE_SKILL_DIR}/README.md`。

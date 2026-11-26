@@ -24,6 +24,35 @@ export function envLocked() {
   return readEnv(ENV_LOCK_FLAG) === "1";
 }
 
+/**
+ * 是否处于本地预检模式。
+ *
+ * 本包是专门供本地预检使用的分发目录，默认只读；满足任一条件即开启：
+ * 1. 环境变量 JIRA_GATE_LOCAL_MODE=1；
+ * 2. 包根存在 .local-preview 标记；
+ * 3. 包根 SKILL.md 声明 name: jira-gate-1-local 或 local-preview: true。
+ *
+ * 第 3 条是 fail-safe：用户把目录拿到本机后，即使漏复制隐藏标记、漏设环境变量，
+ * 写保护也不会失效。开启后传输层只允许 GET，直接 import 调用写函数也会被拦截。
+ */
+export async function isLocalGateMode() {
+  if (readEnv("JIRA_GATE_LOCAL_MODE") === "1") return true;
+  try {
+    // 在 node_repl 中不能使用静态 import，这里统一动态导入；失败时按非本地模式处理。
+    const fs = await import("node:fs");
+    const path = await import("node:path");
+    const url = await import("node:url");
+    const skillRoot = path.resolve(path.dirname(url.fileURLToPath(import.meta.url)), "..");
+    if (fs.existsSync(path.join(skillRoot, ".local-preview"))) return true;
+    const skillMd = path.join(skillRoot, "SKILL.md");
+    if (!fs.existsSync(skillMd)) return false;
+    const text = fs.readFileSync(skillMd, "utf8");
+    return /^name:\s*jira-gate-1-local\s*$/m.test(text) || /^\s*local-preview:\s*true\s*$/m.test(text);
+  } catch {
+    return false;
+  }
+}
+
 /** 去掉末尾斜杠并转小写，用于判断两个地址是否同一个站点 */
 function normalizeUrlForCompare(value) {
   return String(value || "").trim().replace(/\/+$/, "").toLowerCase();
@@ -295,6 +324,10 @@ export function buildAuthHeader(cred) {
 
 /** 统一发起 REST 请求 */
 export async function request(method, apiPath, options = {}) {
+  // 本地预检硬边界：只允许 GET，评论、附件、字段和状态写入一律拒绝。
+  if (String(method).toUpperCase() !== "GET" && (await isLocalGateMode())) {
+    throw new Error("本地预检技能禁止向 Jira 写入；评论、附件、字段和状态只保留本地。");
+  }
   const cred = await resolveToken(options.token || null);
   const locked = envLocked();
   let baseUrl;

@@ -10,6 +10,8 @@
 
 ## 安装
 
+> 本子技能已整合在 `jira-gate-1-local` 内，**无需单独安装**；以下命令仅用于上游独立分发场景。
+
 ```bash
 bash install.sh              # 装到 ~/.claude/skills/ 与 ~/.claude/commands/
 bash install.sh --dry-run    # 先看会做什么

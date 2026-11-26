@@ -1,4 +1,8 @@
-# Jira 取数与写评论细节
+# Jira 取数细节（本地预检只读版）
+
+> **本地预检硬约束**：本文件中的写接口（评论、附件、字段、流转）仅用于理解 Jira 行为，
+> **禁止调用**。本技能只允许 GET；包内客户端会在传输层拒绝 POST / PUT / DELETE。
+> 文末出现的“写评论 → 门禁字段 → 附件 → 流转”是线上版流程，本地预检一律不执行。
 
 面向 `jira-gate-1` skill 的实现说明。站点为 Jira 10.3.9 Server / Data Center（生产站点名"Jira-追一研发管理系统"）。
 
@@ -80,7 +84,7 @@ Jira 错误响应形如 `{"errorMessages":["..."],"errors":{...}}`，`jira.mjs` 
 1. `cua.createBrowserTab("iab", "<baseUrl>/browse/KEY", { visible: false })` 打开单子；`<baseUrl>` 取上述解析结果（容器内即 `JIRA_BASE_URL`），**不要写死生产域名**。
 2. `await tab.playwright.evaluate(() => document.body.innerText)` 取正文——描述、详情字段、附件列表、问题链接、子任务、评论区都在其中。
 3. 附件下载：定位附件链接后触发下载，再到下载目录跑 `extract.py`（压缩包会自动解压，见 §6.6）。
-4. 写评论：在评论区输入文本并提交（这是对外发布内容，写入前必须让用户确认）。
+4. 本地预检**禁止**在评论区输入或提交任何内容；结论只写本地草稿。
 5. 浏览器里访问 `/rest/...` 会被拦截（`net::ERR_BLOCKED_BY_CLIENT`），只能读页面。
 
 ## 6. 实测踩过的坑（已修复，改脚本时不要回退）
@@ -97,7 +101,9 @@ Jira 错误响应形如 `{"errorMessages":["..."],"errors":{...}}`，`jira.mjs` 
    解压失败时输出 `[压缩包解压失败]` 并列出尝试过的命令与报错，**此时必须记为"附件无法解析"，不能当成"附件没有内容"，也不要臆测包内内容**。
    同一目录内的 `__unpacked` 在遍历时会被跳过，不会重复解析；同名解压结果自动加 `-2` 后缀，不覆盖上一次结果。
 
-## 7. 写评论前的权限预检
+## 7. 写评论前的权限预检（本地预检跳过）
+
+> 本地预检不写评论，本节仅用于理解线上流程，**禁止调用**。
 
 写评论是有副作用的外部动作，落笔前先用一次只读接口确认权限：
 
@@ -112,7 +118,9 @@ nodeRepl.write(["ADD_COMMENTS", "EDIT_ISSUES", "TRANSITION_ISSUES"].map(n => `${
 
 `CREATE_ATTACHMENTS` 是「上传需求评审报告、原型设计准入报告（仅单子已上传原型时生成）与 QA 准入门禁清单」所需的权限（见 §10、§10.1、§10.2）。为 `false` 时跳过上传，并在对话里如实说明缺权限。
 
-## 8. 评论写入实操
+## 8. 评论写入实操（本地预检不执行）
+
+> 本地预检只生成 `work/jira-gate/<KEY>/comment.txt`，**禁止调用评论写入接口**。
 
 - 评论模板与 Jira wiki 标记对照见 `SKILL.md`「输出模板」节；**评论正文用 Jira wiki 标记，不要提交 Markdown 表格**，否则会显示成原始符号。
 - 评论只列检查点：结论摘要 + 检查项清单；每项行首必须有标记——通过写 `(/)`（绿勾），不通过写 `(x)`（红叉）。不通过项每条一行、80 字以内；判定过程留在对话回复里。
@@ -133,7 +141,9 @@ nodeRepl.write(last.id + " | " + last.author + " | " + last.body.slice(0, 120));
 - 评论正文中避免出现未转义的花括号组合（`{color}` 之类会被当作宏）。
 - 结论只以评论留痕；本地仅保留附件与解析中间文件，交付例外是 §10 的评审报告 md、§10.1 的设计报告 HTML（仅单子已上传原型时生成）与 §10.2 的 QA 清单 HTML。
 
-## 9. 交付顺序与「仅退回补充时流转并 @ 流转人」
+## 9. 交付顺序与「仅退回补充时流转并 @ 流转人」（本地预检只预演）
+
+> 本地预检不流转、不真实 @；只写「建议流转」和「建议处理人」文本。
 
 交付顺序对所有结论都适用：`review-jira-req` → `review-jira-design`（仅单子已上传原型时；无原型记「不适用」）→ `review-jira-qa` → G1 评论（含 @）→ 门禁字段 → 附件 → 流转。**状态流转只在综合结论为「退回补充」时执行**：
 
@@ -147,77 +157,66 @@ node scripts/jira-cli.mjs precheck <KEY|URL>
 # {"ok":true,"key":"...","issueType":"故事","typeSupported":true,"product":"Call","productSupported":true,"supported":true,"status":"需求设计"}
 ```
 
-1. **流转人从哪来**：本站在 `/rest/api/2/field` 里没有名为「流转人」的字段（实测名字含「流转」的字段为 0 个），因此本技能已确认的口径是**取经办人 `assignee`**；仅在经办人为空时才按 `assignee → reporter → creator` 回退，回退取到时对话摘要里要写明实际来源（`resolveFlowOwner()` 返回的 `source` 字段会标明）。需要长期换口径时在技能目录的 `jira-config.json`（即仓库 `skills/jira-gate-1/jira-config.json`，随技能目录挂载进容器）里用 `flowOwnerField` 指定人员字段名，**不要改脚本**。
+1. **流转人从哪来**：本站在 `/rest/api/2/field` 里没有名为「流转人」的字段（实测名字含「流转」的字段为 0 个），因此本技能已确认的口径是**取经办人 `assignee`**；仅在经办人为空时才按 `assignee → reporter → creator` 回退，回退取到时对话摘要里要写明实际来源（`resolveFlowOwner()` 返回的 `source` 字段会标明）。需要长期换口径时在技能目录的 `jira-config.json`（本包根目录）里用 `flowOwnerField` 指定人员字段名，**不要改脚本**。
 2. **@ 写法**：Jira Server / DC 按登录名引用，`[~liu.huan]` 渲染为「刘欢」。`resolveFlowOwner()` 直接返回拼好的 `mention`；实测 `flow-owner ZYSQ-95` → `{"name":"liu.huan","displayName":"刘欢","mention":"[~liu.huan]","field":"assignee"}`。
 3. **退回补充的目标状态固定为「需求设计」**；结论为通过时不得调用流转接口。**不要写死流转 id**：不同项目工作流的流转 id 与流转名都可能不同，`transitionToStatus()` 按目标状态名匹配（先比 `to`，再比 `name`）。
 
 ```bash
 node scripts/jira-cli.mjs transitions <KEY|URL>             # 只读：看当前可用流转
 node scripts/jira-cli.mjs flow-owner <KEY|URL>              # 只读：看流转人与 @ 写法
-node scripts/jira-cli.mjs transition <KEY|URL> --to 需求设计       # 仅退回补充
+# 本地预检禁止执行 transition；只写「建议流转：需求设计（预演未执行）」。
 ```
 
 4. **匹配不到流转时不抛错**：返回 `{ok:false, reason:"no-transition", status, target, available}`，`available` 是当前可用流转列表。若当前状态没有通向目标状态的流转，按 `SKILL.md` §9 记「未流转（该单当前状态无目标状态流转）」，并在对话里列出 `available` 交人工处理，不要改用其他状态。
 5. 已在目标状态时返回 `{ok:true, skipped:true, reason:"already-in-target"}`，不重复发起流转。
-6. 写评论、回写门禁字段、上传附件、流转的顺序固定为：**评论（含 @）→ 门禁字段 → 附件 → 流转**，流转放最后（见 §10）。前三步对所有结论都执行；流转只在退回补充时执行，目标为「需求设计」，通过不流转。
-7. 因为是评论先写、流转后做，评论里的「流转：」先按预期结果写；流转跑完必须核对返回值，任一非成功分支都用 `comment-update` 改成实际措辞（措辞见 `SKILL.md` §9 的表）。
+6. 本地预检不写评论、不回写门禁字段、不上传附件、不流转；草稿里只写门禁预演与「建议流转」文本。
+7. 不调用 `transitionToStatus()` / `comment-update`；`flow-owner` 只用于生成「建议处理人」纯文本。
 
-## 10. 评审报告附件上传
+## 10. 评审报告附件上传（本地预检不执行）
 
-需求质量的细读结论由同仓库技能 `review-jira-req` 产出（对 Jira 只读），本技能负责把它的 Markdown 报告上传成需求单附件。
+> 本地预检不上传任何附件。报告只由 `pack-local-deliverables.mjs` 打进本地 ZIP，禁止 `attach` / `attach-prune`。
 
-1. **技能位置**：容器内 `/data/skills/review-jira-req`（随 `skills/` 只读挂载）；桌面端为 `<仓库>/skills/review-jira-req`。执行它的流水线前先做凭据桥接——桌面端它读 `JIRA_PAT`，容器锁定模式下直接读 `JIRA_TOKEN`：
+需求质量的细读结论由包内子技能 `subskills/review-jira-req` 产出（对 Jira 只读），本技能只把它的 Markdown 报告收进本地预检包。
+
+1. **技能位置**：`<技能目录>/subskills/review-jira-req`。执行它的流水线前先做凭据桥接——本地预检通常使用 `JIRA_PAT`，服务器环境可直接使用 `JIRA_TOKEN`：
 
 ```bash
-export SKILL_DIR=/data/skills/review-jira-req
-export JIRA_PAT="$JIRA_TOKEN"
-export JIRA_BASE_URL="${JIRA_BASE_URL:-https://jira.in.wezhuiyi.com}"
+export SKILL_DIR="<技能目录>/subskills/review-jira-req"
+export JIRA_PAT="${JIRA_PAT:-$JIRA_TOKEN}"
+export JIRA_BASE_URL="<你的 Jira 地址>"
 ```
 
 2. **流水线**：`bin/jira-fetch.mjs`（拉取，只读 GET）→ 归一化草稿 → `bin/rulecheck.mjs`（12 条规则）→ 语义评审 + `bin/verify-semantic-quotes.mjs`（引用逐字自检）→ `bin/report.mjs`（输出 `reports/review-report-<时间戳>.md`）。产物落在技能工作区，不写进只读的技能目录。
-3. **附件命名**：`<KEY>-需求评审报告-宋立志.md`，**必须以「宋立志」结尾**。报告脚本自带时间戳文件名，上传时用 `--name` 改成规范名。
-4. **上传**：`jira.mjs` 的 `uploadAttachment()` 用 `multipart/form-data` 提交，字段名固定为 `file`；**不要手工设置 `Content-Type`**，边界由 `fetch` 生成（`request()` 已对 `FormData` 特判）。Node 20 起 `FormData` / `Blob` 是全局对象，容器内可用。
-
-```bash
-node scripts/jira-cli.mjs attach <KEY|URL> "<报告路径>" --name "<KEY>-需求评审报告-宋立志.md"
-node scripts/jira-cli.mjs attach-prune <KEY|URL> --contains 需求评审报告 --suffix .md --keep <新附件ID>
-node scripts/jira-cli.mjs attach-list <KEY|URL>   # 读回确认：列表里出现目标文件名才算上传成功
-```
-
-5. **成功判定看返回体不看退出码**：`attach` 成功返回 `{ok:true, id, filename, size}`；失败返回 `{ok:false, reason}` 并**置退出码 1** 且在 stderr 打 `[附件上传失败] ...`。上传完后**必须**用 `attach-list` 读回，确认 `fields.attachment` 里出现目标文件名——`ok:true` 只说明站点接受了这次 POST，读回才是"附件真的挂在该单上"的证据。注意附件的 `author` 是令牌账号，不是写评论的人，这一点不是异常。**读回确认拿到新附件 ID 后，用 `attach-prune` 删除同族旧报告，该族只保留最新一份；历史评论一律保留。上传失败时不要清理。**
-6. **降级**：本地文件缺失、403（缺 `CREATE_ATTACHMENTS`）、404（该单未启用附件）、网络错误都返回 `{ok:false, reason}` 而不抛错：**跳过上传并如实说明，不要重试、不要改文件名绕开**。
-7. **顺序与失败收口**：`review-jira-req` 流水线 → `review-jira-design`（仅单子已上传原型时）→ `review-jira-qa` 阶段一 → 评论 → 门禁字段 → 上传需求评审报告与已生成的设计准入报告 → 流转状态（仅退回补充，见 §9）。流转放最后，前序步骤的留痕不因流转失败而回滚。`review-jira-req` 五步中任一步失败、报告未生成或结论提取失败时，需求评审记为「未完成（阶段/原因）」并继续后续步骤，不得中断 G1。
-8. **评论末尾固定带附件行 + 评审结论**：评论里写 `* 报告附件：<KEY>-需求评审报告-宋立志.md（已上传 / 未上传（原因））｜评审结论：<不合格/需修改/合格/未完成（原因）>`。
+3. **附件命名**：包内统一命名为 `<KEY>-需求评审报告-宋立志.md`，由 `pack-local-deliverables.mjs` 写入 ZIP。
+4. **本地交付（禁止上传）**：报告只进入本地预检包；禁止调用 `attach` / `attach-prune` / `attach-list`。
+5. **顺序与失败收口**：`review-jira-req` 流水线 → `review-jira-design`（仅单子已上传原型时）→ `review-jira-qa` 阶段一 → 本地评论草稿 → 门禁预演 → 打包。任一子步骤失败只记「未完成（原因）」，继续后续本地交付。
+6. **评论末尾固定带报告行 + 评审结论**：本地草稿写 `* 报告附件：<KEY>-需求评审报告-宋立志.md（已在预检包）｜评审结论：<不合格/需修改/合格/未完成（原因）>`。
    - 附件名按第 3 条规则可提前确定；`评审结论`用本技能的 `scripts/report-conclusion.mjs` 从刚生成的报告 md 里提取（`node scripts/report-conclusion.mjs "<报告路径>" <KEY>`），**它是唯一来源，不许自己判**。取值只有三个，脚本遇到非法取值或找不到该 KEY 会以退出码 1 报错，此时如实记为「未完成（原因）」并继续 G1，不要猜。
-   - 为了让结论可提取，**五步流水线必须在写评论之前跑到第 5 步**；`review-jira-design`（有原型时）与 `review-jira-qa` 也必须在写 G1 评论之前跑完；报告附件上传仍是写 G1 评论之后的事。
-   - 上传失败时用 `comment-update` 把括号里改成「未上传（原因）」，`评审结论`保留提取到的真实取值——附件没传上不代表没有结论。
+   - 为了让结论可提取，**五步流水线必须在写本地评论草稿之前跑到第 5 步**；`review-jira-design`（有原型时）与 `review-jira-qa` 也必须在草稿完成前跑完。
+   - 本地预检不上传报告，括号统一写「已在预检包」；`评审结论`保留提取到的真实取值。
 
 ## 10.1 原型设计准入报告（review-jira-design）
 
-需求质量评审报告生成后、QA 阶段一之前，先用 `node scripts/detect-prototype.mjs --dir work/jira-gate/<KEY>/attachments --json` 判定单子是否上传了原型材料；**只有 `hasPrototype=true`（或人工确认 `ambiguous` 中是原型）才调用 `/data/skills/review-jira-design`**。判定脚本会先排除 `*原型设计准入*.html`（含旧命名「原型设计准入审核」）、`*需求评审报告*`、`*QA需求准入门禁清单*` 等带本流程专属标记的历史产物（输出在 `ignored`），它们即使文件名或正文含「原型」也不是业务原型；历史报告不能反过来触发生成新报告。「测试用例」「测试方案」「评审报告」「PDCA」等业务主题词不作为排除依据，真实原型可能以这些词为主题，这类 HTML 会进 `ambiguous` 由调用方打开确认。未上传原型时整节跳过：不调用技能、不生成也不上传设计报告，评论记「不适用（本单未上传原型）」，继续 QA 阶段一。该技能**对 Jira 只读**，输入只有本单已下载的 PRD 与产品原型文件；本技能负责把生成的 HTML 上传成需求单附件。
+需求质量评审报告生成后、QA 阶段一之前，先用 `node scripts/detect-prototype.mjs --dir work/jira-gate/<KEY>/attachments --json` 判定单子是否上传了原型材料；**只有 `hasPrototype=true`（或人工确认 `ambiguous` 中是原型）才调用 `<技能目录>/subskills/review-jira-design`**。判定脚本会先排除 `*原型设计准入*.html`（含旧命名「原型设计准入审核」）、`*需求评审报告*`、`*QA需求准入门禁清单*` 等带本流程专属标记的历史产物（输出在 `ignored`），它们即使文件名或正文含「原型」也不是业务原型；历史报告不能反过来触发生成新报告。「测试用例」「测试方案」「评审报告」「PDCA」等业务主题词不作为排除依据，真实原型可能以这些词为主题，这类 HTML 会进 `ambiguous` 由调用方打开确认。未上传原型时整节跳过：不调用技能、不生成也不上传设计报告，评论记「不适用（本单未上传原型）」，继续 QA 阶段一。该技能**对 Jira 只读**，输入只有本单已下载的 PRD 与产品原型文件；本技能只把生成的 HTML 收进本地预检包。
 
 1. **输入**：§3 下载到 `work/jira-gate/<KEY>/attachments/` 的定稿 PRD 与原型 HTML（压缩包解压后在 `__unpacked/` 下）。多个候选时按需求单描述锁定唯一对象，不要按文件名相似度猜。
 2. **执行**：按它的 `SKILL.md` 建 PRD 编号索引、写 `work/jira-gate/<KEY>/design/content.json`，再由 `build-report.mjs` 生成 `work/jira-gate/<KEY>/design/<KEY>-原型设计准入报告.html`；不要手写 HTML，也不要改模板。
 3. **结论**：只读 `content.json` 的 `结论.审核结论.值`，取值 `通过 / 有条件通过 / 退回补齐 / 审核未完成`。`退回补齐` 与 `审核未完成` 使 G1 最终结论为「退回补充」；`有条件通过` 不阻断但要在评论里注明待补齐项数量。
-4. **上传与读回**：
+4. **本地交付（禁止上传）**：设计报告 HTML 只由 `pack-local-deliverables.mjs --design` 打进本地预检包；禁止调用 `attach` / `attach-prune` / `attach-list`。
 
-```bash
-node scripts/jira-cli.mjs attach <KEY|URL> "work/jira-gate/<KEY>/design/<KEY>-原型设计准入报告.html"   --name "<KEY>-原型设计准入报告.html"
-node scripts/jira-cli.mjs attach-prune <KEY|URL> --contains 原型设计准入报告 --suffix .html --keep <新附件ID>
-node scripts/jira-cli.mjs attach-list <KEY|URL>   # 与需求评审报告一起读回确认
-```
-
-5. **降级**：已判定有原型时，PRD 缺失/无法读取、原型不可读、对象无法唯一定位，设计结论写「审核未完成」（业务结论，仍使 G1 最终为「退回补充」），不得自造「通过」；**复核后发现命中的只是历史报告或非业务页面，说明本单实际没有业务原型，必须回到「不适用」分支，不得把「找不到业务原型」写成「审核未完成」**。连 `build-report.mjs --prd` 都无法执行时跳过设计附件并在评论里写明原因。权限不足或附件上传失败时，用 `comment-update` 把评论里的「设计报告附件」行改成「未上传（原因）」，不改变设计结论。脚本非零退出、内容 JSON 非法/缺失、报告未生成属于运营性失败，设计记为「未完成（原因）」，不改变 G1 自身结论，也不中断 G1 后续交付。
+5. **降级**：已判定有原型时，PRD 缺失/无法读取、原型不可读、对象无法唯一定位，设计结论写「审核未完成」（业务结论，仍使 G1 最终为「退回补充」），不得自造「通过」；**复核后发现命中的只是历史报告或非业务页面，说明本单实际没有业务原型，必须回到「不适用」分支，不得把「找不到业务原型」写成「审核未完成」**。连 `build-report.mjs --prd` 都无法执行时跳过设计附件并在评论里写明原因。本地预检不写评论，设计报告只在本地草稿里标注是否已进入预检包。脚本非零退出、内容 JSON 非法/缺失、报告未生成属于运营性失败，设计记为「未完成（原因）」，不改变 G1 自身结论，也不中断 G1 后续交付。
 
 ## 10.2 QA 需求准入门禁（review-jira-qa）
 
-G1 在写完 `review-jira-req` 报告、完成 `review-jira-design`（有原型时；无原型则记为「不适用」）、尚未写 G1 评论时，必须执行 `/data/skills/review-jira-qa` 的**阶段一**，禁止进入阶段二/三：
+G1 在写完 `review-jira-req` 报告、完成 `review-jira-design`（有原型时；无原型则记为「不适用」）、尚未写 G1 本地草稿时，必须执行 `<技能目录>/subskills/review-jira-qa` 的**阶段一**，禁止进入阶段二/三：
 
 ```bash
-export SKILL_DIR=/data/skills/review-jira-qa
+export JIRA_GATE_LOCAL_MODE=1
+export SKILL_DIR="<技能目录>/subskills/review-jira-qa"
 export CLAUDE_SKILL_DIR="$SKILL_DIR"
 export JIRA_PAT="${JIRA_PAT:-$JIRA_TOKEN}"
 export QA_WORKSPACE="$PWD/work/jira-gate/<KEY>/review-jira-qa"
+export QA_LOCAL_ATTACHMENTS="$PWD/work/jira-gate/<KEY>/attachments"
 node "$SKILL_DIR/bin/preflight.mjs" --key <KEY> --stage 1
 node "$SKILL_DIR/bin/jira-read.mjs" --key <KEY> --comments 10
 node "$SKILL_DIR/bin/jira-download.mjs" --key <KEY> --run-id <RUN_ID>
@@ -227,8 +226,8 @@ node "$SKILL_DIR/bin/coverage.mjs" --materials ".qa/runs/<RUN_ID>/materials.json
 # 按 coverage-required.json 覆盖全部 AC 并写 .qa/runs/<RUN_ID>/gate.spec.json 后：
 node "$SKILL_DIR/bin/render-gate.mjs" --spec <gate.spec.json>
 node "$SKILL_DIR/bin/validate-gate.mjs" --html <HTML> --spec <gate.spec.json> --coverage-required ".qa/runs/<RUN_ID>/coverage-required.json"
-node "$SKILL_DIR/bin/jira-upload.mjs" --key <KEY> --file <HTML> --run-id <RUN_ID>
-node "$SKILL_DIR/bin/jira-comment.mjs" --key <KEY> --body <COMMENT> --run-id <RUN_ID>
+node "$SKILL_DIR/bin/jira-upload.mjs" --key <KEY> --file <HTML> --run-id <RUN_ID> --dry-run
+node "$SKILL_DIR/bin/jira-comment.mjs" --key <KEY> --body <COMMENT> --run-id <RUN_ID> --dry-run
 node "$SKILL_DIR/bin/result.mjs" --stage risk-analysis --key <KEY> --run-id <RUN_ID> --spec <gate.spec.json>
 ```
 
@@ -237,7 +236,7 @@ node "$SKILL_DIR/bin/result.mjs" --stage risk-analysis --key <KEY> --run-id <RUN
 - `QA_RESULT_JSON.ok=true` + `conclusion=通过`：QA 不阻断，G1 用自己的结论。
 - `QA_RESULT_JSON.ok=true` + `conclusion=暂不通过`：G1 最终结论强制为「退回补充」。
 - `ok=false`、脚本非零退出、结果缺失或结果 JSON 非法：运营性失败，QA 记为「未完成（原因）」；不得宣称 QA 通过，也不得中断 G1 后续交付。
-- QA 自行写 `QA-需求准入门禁结果` 评论并上传 HTML；G1 不再重复上传 QA HTML、不改 Jira 状态。
+- QA 只生成本地 HTML 与评论草稿；禁止写 `QA-需求准入门禁结果` 评论、禁止上传 HTML、禁止改 Jira 状态。
 
 ## 11. 故障排查
 
@@ -272,7 +271,7 @@ node "$SKILL_DIR/bin/result.mjs" --stage risk-analysis --key <KEY> --run-id <RUN
 
 工作流校验器/条件必须是**同步、确定性、亚秒级**的；AI 预检是异步、非确定性的，还要读附件。因此正确架构是两段式：
 
-1. **AI 预检**（本 skill）：读需求单 → 判定 → 写评论 → 用 `setGateResult()` 把结论回写到 Jira 字段。
+1. **AI 预检**（本 skill）：读需求单 → 判定 → 写本地评论草稿；本地预检**不写**评论、不用 `setGateResult()` 回写字段。
 2. **工作流门禁**（Jira 配置）：流转校验只读那个字段，不调用 AI。
 
 ### 12.2 需要 Jira 管理员做的事

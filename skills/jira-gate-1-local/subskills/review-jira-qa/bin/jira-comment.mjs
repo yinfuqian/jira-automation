@@ -4,7 +4,7 @@
  * 阶段一/阶段二共用；标题不同，互不覆盖。
  */
 
-import { EXIT, QaError, boolArg, checkNode, loadCredentials, log, parseArgs, parseIssueKey, resolveWorkspace } from './lib/env.mjs';
+import { EXIT, QaError, boolArg, checkNode, isLocalGateMode, loadCredentials, log, parseArgs, parseIssueKey, resolveWorkspace } from './lib/env.mjs';
 import { JiraClient } from './lib/jira.mjs';
 import { readText } from './lib/fs-safe.mjs';
 import { findExistingComment, parseCommentBody, syncComment } from './lib/comment-sync.mjs';
@@ -22,7 +22,12 @@ async function main() {
   }
   const body = await readText(bodyFile);
   const mode = args.mode || 'auto';
-  const dryRun = boolArg(args, 'dry-run') || boolArg(args, 'no-comment');
+  // 本地预检包内无条件降级为 dry-run，避免漏写 --dry-run 时真实写评论。
+  const localMode = isLocalGateMode();
+  const dryRun = boolArg(args, 'dry-run') || boolArg(args, 'no-comment') || localMode;
+  if (localMode && !boolArg(args, 'dry-run') && !boolArg(args, 'no-comment')) {
+    process.stderr.write('[jira-comment][INFO] 本地预检模式：已强制使用 --dry-run，不向 Jira 写评论。\n');
+  }
   const runId = args['run-id'] || 'manual';
   const creds = loadCredentials(process.env, { required: !dryRun });
 
